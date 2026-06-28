@@ -1,922 +1,1029 @@
-/* =========================================================================
-   PescaCorral — Vistas (Views global)
-   Cada pantalla es una función que devuelve { html, mount? }.
-   `html` es el contenido a inyectar; `mount(root)` engancha eventos.
-   El router (app.js) elige el "chrome" (topbar/tabbar o sidebar).
-   ========================================================================= */
-(function (global) {
-  'use strict';
-  const { icon, esc, toast, modal, confirm, barChart, donut, barcode, qr } = UI;
-  const S = () => global.Store;
-  const nav = h => { location.hash = h; };
+/* ============================================================================
+ *  PescaCorral · js/views.js
+ *  Render de todas las pantallas de la PWA. Cada vista arma su HTML, lo monta
+ *  con U.mount() y conecta sus eventos. Reciben un `ctx` con:
+ *    { session, go(path), rerender(), params }
+ * ========================================================================== */
+import * as D from "./data.js";
+import * as U from "./ui.js";
+import { barChart, donutChart, progressBar, CHART_COLORS } from "./charts.js";
 
-  /* ---------- helpers compartidos ---------- */
-  function estadoChip(estado) {
-    const map = {
-      vigente: ['chip-green', 'Vigente'], vencido: ['chip-gray', 'Vencido'],
-      confirmada: ['chip-green', 'Confirmada'], pendiente_pago: ['chip-amber', 'Pendiente de pago'],
-      aprobado: ['chip-green', 'Aprobado'], cancelada: ['chip-red', 'Cancelada'],
-    };
-    const [c, l] = map[estado] || ['chip-gray', estado];
-    return '<span class="chip ' + c + '">' + esc(l) + '</span>';
-  }
-  function roleChip(rol) {
-    const r = S().ROLES[rol] || { short: rol };
-    const ic = { pescador: 'user', dueno: 'ship', municipio: 'building', admin: 'shield' }[rol] || 'user';
-    return '<span class="chip chip-navy">' + icon(ic) + esc(r.short) + '</span>';
-  }
-  function field(label, inner, hintOrErr) {
-    return '<div class="field"><label>' + esc(label) + '</label>' + inner + (hintOrErr || '') + '</div>';
-  }
+const CFG = window.PESCACORRAL_CONFIG || {};
+const isAdmin = (rol) => rol === "admin_municipal" || rol === "admin_sistema";
 
-  /* =======================================================================
-     AUTH — Login
-     ======================================================================= */
-  function login() {
-    const demos = [
-      ['carlos@pescacorral.com', 'Pescador'],
-      ['dueno@pescacorral.com', 'Dueño'],
-      ['municipio@pescacorral.com', 'Municipio'],
-      ['admin@pescacorral.com', 'Sistema'],
+/* --------------------------- QR (offline) -------------------------------- */
+function qrSvg(text) {
+  try {
+    const qr = window.qrcode(0, "M");
+    qr.addData(text || "PCC");
+    qr.make();
+    return qr.createSvgTag({ cellSize: 4, margin: 1, scalable: true });
+  } catch (e) {
+    return '<div class="muted">QR no disponible</div>';
+  }
+}
+
+/* ====================== Piezas de “chrome” compartidas ==================== */
+function topbar({ title, back = false, bell = true, plain = false, unread = 0 }) {
+  return `<header class="topbar${plain ? " topbar--plain" : ""}">
+    ${back
+      ? `<button class="topbar__btn" data-back aria-label="Volver">${U.icon("chevron-left", { size: 22 })}</button>`
+      : `<span class="topbar__logo">${U.logoMark(34)}</span>`}
+    <span class="topbar__title">${U.esc(title)}</span>
+    <span class="topbar__spacer"></span>
+    ${bell
+      ? `<button class="topbar__btn bell" data-bell aria-label="Notificaciones">
+           ${U.icon("bell", { size: 22 })}
+           ${unread ? `<span class="bell__dot">${unread > 9 ? "9+" : unread}</span>` : ""}
+         </button>`
+      : ""}
+  </header>`;
+}
+
+function bottomNav(active, rol) {
+  let items;
+  if (rol === "dueno") {
+    items = [
+      ["home", "Inicio", "home", "#/home"],
+      ["catamaranes", "Catamaranes", "boat", "#/catamaranes"],
+      ["gestion", "Gestión", "grid", "#/gestion"],
+      ["perfil", "Perfil", "user", "#/perfil"],
     ];
-    const html =
-      '<div class="auth">' +
-      '<div class="auth-top">' +
-      '<div class="auth-logo"><img src="icons/icon-192.png" alt="PescaCorral"></div>' +
-      '<h1>PescaCorral</h1><p>Pesca embarcada en Dique Cabra Corral</p>' +
-      '</div>' +
-      '<div class="auth-body">' +
-      '<div class="auth-card">' +
-      '<h2>Iniciar sesión</h2><p class="sub">Ingresá con tu cuenta para reservar y gestionar permisos.</p>' +
-      '<form id="f-login" novalidate>' +
-      field('Correo electrónico',
-        '<input class="input" type="email" name="email" autocomplete="username" placeholder="tucorreo@ejemplo.com" required>') +
-      field('Contraseña',
-        '<div class="input-group"><input class="input" type="password" name="pass" autocomplete="current-password" placeholder="••••••••" required>' +
-        '<button class="toggle" type="button" data-toggle aria-label="Mostrar">' + icon('eye') + '</button></div>') +
-      '<div class="err" id="login-err" style="display:none"></div>' +
-      '<button class="btn btn-blue btn-block btn-lg" type="submit">' + icon('log-in') + 'Ingresar</button>' +
-      '</form>' +
-      '<div class="auth-switch">¿No tenés cuenta? <a href="#/registro">Crear cuenta</a></div>' +
-      '<div class="info-box mt-2">' + icon('info') + '<div><b>Cuentas de prueba</b> — tocá una para autocompletar. Clave única: <span class="mono">Pesca2026!</span><div class="seg mt-1" id="demo-chips" style="grid-template-columns:1fr 1fr">' +
-      demos.map(d => '<button type="button" class="btn btn-ghost btn-sm" data-demo="' + d[0] + '">' + esc(d[1]) + '</button>').join('') +
-      '</div></div></div>' +
-      '</div></div></div>';
-
-    function mount(root) {
-      const f = root.querySelector('#f-login');
-      const errBox = root.querySelector('#login-err');
-      root.querySelector('[data-toggle]').addEventListener('click', e => togglePw(e.currentTarget));
-      root.querySelectorAll('[data-demo]').forEach(b => b.addEventListener('click', () => {
-        f.email.value = b.getAttribute('data-demo'); f.pass.value = 'Pesca2026!'; f.email.focus();
-      }));
-      f.addEventListener('submit', e => {
-        e.preventDefault();
-        errBox.style.display = 'none';
-        const r = S().login(f.email.value.trim().toLowerCase(), f.pass.value);
-        if (!r.ok) { errBox.textContent = r.error; errBox.style.display = 'block'; return; }
-        S().setSession(r.user.id);
-        toast('¡Hola de nuevo, ' + r.user.nombre.split(' ')[0] + '!', 'ok');
-        nav(S().ROLES[r.user.rol].kind === 'admin' ? '#/admin' : '#/home');
-      });
-    }
-    return { html, mount, chrome: 'none' };
-  }
-
-  /* =======================================================================
-     AUTH — Registro
-     ======================================================================= */
-  function registro() {
-    const html =
-      '<div class="auth">' +
-      '<div class="auth-top" style="padding-top:34px">' +
-      '<div class="auth-logo"><img src="icons/icon-192.png" alt=""></div>' +
-      '<h1>Crear cuenta</h1><p>Sumate a la comunidad de pesca de Cabra Corral</p>' +
-      '</div>' +
-      '<div class="auth-body">' +
-      '<div class="auth-card">' +
-      '<form id="f-reg" novalidate>' +
-      field('Nombre y apellido', '<input class="input" name="nombre" placeholder="Carlos Romero" required>') +
-      field('Correo electrónico', '<input class="input" type="email" name="email" placeholder="tucorreo@ejemplo.com" required>') +
-      field('Teléfono', '<input class="input" name="tel" placeholder="+54 387 ..." inputmode="tel">') +
-      '<div class="field"><label>¿Cómo vas a usar la app?</label><div class="seg" id="role-seg">' +
-      '<label><input type="radio" name="rol" value="pescador" checked><span class="opt">' + icon('user') + '<b>Pescador</b><small>Reservar y pescar</small></span></label>' +
-      '<label><input type="radio" name="rol" value="dueno"><span class="opt">' + icon('ship') + '<b>Dueño</b><small>Ofrecer catamarán</small></span></label>' +
-      '</div></div>' +
-      field('Contraseña',
-        '<div class="input-group"><input class="input" type="password" name="pass" autocomplete="new-password" placeholder="Creá una contraseña segura" required>' +
-        '<button class="toggle" type="button" data-toggle aria-label="Mostrar">' + icon('eye') + '</button></div>' +
-        '<div class="pw-bar"><i id="pw-bar-i"></i></div>' +
-        '<div class="pw-rules" id="pw-rules">' +
-        ['8+ caracteres', 'Una mayúscula', 'Una minúscula', 'Un número', 'Un símbolo']
-          .map((t, i) => '<div class="pw-rule" data-k="' + i + '">' + icon('circle') + '<span>' + t + '</span></div>').join('') +
-        '</div>') +
-      '<div class="err" id="reg-err" style="display:none"></div>' +
-      '<button class="btn btn-primary btn-block btn-lg mt-1" type="submit">' + icon('user-plus') + 'Registrarme</button>' +
-      '</form>' +
-      '<div class="info-box mt-2">' + icon('shield') + '<span>Tus datos se usan solo para gestionar reservas y permisos. La contraseña debe cumplir la política de seguridad municipal.</span></div>' +
-      '<div class="auth-switch">¿Ya tenés cuenta? <a href="#/login">Iniciar sesión</a></div>' +
-      '</div></div></div>';
-
-    function mount(root) {
-      const f = root.querySelector('#f-reg');
-      const bar = root.querySelector('#pw-bar-i');
-      const rules = root.querySelectorAll('#pw-rules .pw-rule');
-      const errBox = root.querySelector('#reg-err');
-      root.querySelector('[data-toggle]').addEventListener('click', e => togglePw(e.currentTarget));
-      const colors = ['var(--red-500)', 'var(--red-500)', 'var(--amber-500)', 'var(--amber-500)', 'var(--teal-500)', 'var(--green-500)'];
-      f.pass.addEventListener('input', () => {
-        const p = S().passwordPolicy(f.pass.value);
-        const flags = [p.len, p.upper, p.lower, p.number, p.special];
-        rules.forEach((el, i) => {
-          el.classList.toggle('ok', flags[i]);
-          el.querySelector('svg').outerHTML = icon(flags[i] ? 'check-circle' : 'circle');
-        });
-        // re-query svg after replace
-        bar.style.width = (p.score / 5 * 100) + '%';
-        bar.style.background = colors[p.score];
-      });
-      f.addEventListener('submit', e => {
-        e.preventDefault();
-        errBox.style.display = 'none';
-        const data = { nombre: f.nombre.value.trim(), email: f.email.value.trim().toLowerCase(), tel: f.tel.value.trim(), rol: f.rol.value, pass: f.pass.value };
-        const r = S().register(data);
-        if (!r.ok) { errBox.textContent = r.error; errBox.style.display = 'block'; return; }
-        S().setSession(r.user.id);
-        toast('Cuenta creada. ¡Bienvenido!', 'ok');
-        nav('#/home');
-      });
-    }
-    return { html, mount, chrome: 'none' };
-  }
-
-  function togglePw(btn) {
-    const inp = btn.parentNode.querySelector('input');
-    const show = inp.type === 'password';
-    inp.type = show ? 'text' : 'password';
-    btn.innerHTML = icon(show ? 'eye-off' : 'eye');
-  }
-
-  /* =======================================================================
-     PESCADOR — Home
-     ======================================================================= */
-  function home(ctx) {
-    const u = ctx.user;
-    const cats = S().catamaranes();
-    const próxima = S().reservasDe(u.id).filter(r => r.fecha >= S().todayISO()).sort((a, b) => a.fecha.localeCompare(b.fecha))[0];
-    const permisoActivo = S().permisosDe(u.id).find(p => p.estado === 'vigente');
-
-    let proxCard = '';
-    if (próxima) {
-      const cat = S().catamaran(próxima.catamaranId);
-      proxCard =
-        '<div class="section-title"><h3>Tu próxima salida</h3></div>' +
-        '<div class="card card-pad" style="background:var(--grad-brand);color:#fff;border:0">' +
-        '<div class="flex justify-between items-center"><div>' +
-        '<div class="micro" style="color:#CFF3ED;letter-spacing:.1em">' + esc(S().fmtDateLong(próxima.fecha)).toUpperCase() + '</div>' +
-        '<b style="font-size:1.1rem;font-family:var(--f-display)">' + esc(cat.nombre) + '</b>' +
-        '<div style="font-size:.82rem;color:#D9F4EF;margin-top:2px">' + icon('clock') + ' ' + esc(próxima.horario) + ' · ' + icon('users') + ' ' + próxima.lugares.length + ' lugar' + (próxima.lugares.length > 1 ? 'es' : '') + '</div>' +
-        '</div>' + (permisoActivo ? '<a class="btn btn-translucent btn-sm" href="#/permiso/' + permisoActivo.id + '">Ver permiso</a>' : '') +
-        '</div></div>';
-    }
-
-    const html =
-      '<div class="hero">' +
-      '<span class="place">' + icon('map-pin') + 'Dique Cabra Corral · Salta</span>' +
-      '<h1>Viví la mejor experiencia de pesca embarcada</h1>' +
-      '<p>Reservá tu lugar, pagá online y llevá tu permiso digital siempre con vos.</p>' +
-      '<div class="hero-actions">' +
-      '<a class="btn btn-translucent" href="#/catamaranes">' + icon('ship') + 'Reservar ahora</a>' +
-      '<a class="btn btn-soft" href="#/historial/permisos">' + icon('ticket') + 'Mis permisos</a>' +
-      '</div></div>' +
-
-      (proxCard) +
-
-      '<div class="section-title"><h3>Accesos rápidos</h3></div>' +
-      '<div class="qa-grid">' +
-      '<a class="qa qa-teal" href="#/catamaranes"><div class="ico">' + icon('ship') + '</div><strong>Catamaranes</strong><span>Ver disponibilidad</span></a>' +
-      '<a class="qa qa-amber" href="#/historial/permisos"><div class="ico">' + icon('ticket') + '</div><strong>Permisos</strong><span>Tu permiso digital</span></a>' +
-      '<a class="qa qa-red" href="#/historial"><div class="ico">' + icon('calendar') + '</div><strong>Reservas</strong><span>Historial y estado</span></a>' +
-      '<a class="qa qa-blue" href="#/perfil"><div class="ico">' + icon('user') + '</div><strong>Perfil</strong><span>Tus datos</span></a>' +
-      '</div>' +
-
-      '<div class="section-title"><h3>Catamaranes disponibles</h3><a class="link" href="#/catamaranes">Ver todos</a></div>' +
-      cats.slice(0, 3).map(c => boatCard(c, S().todayISO())).join('');
-
-    return { html, chrome: 'mobile', tab: 'home' };
-  }
-
-  function boatCard(c, fecha) {
-    const disp = S().disponibles(c.id, fecha, c.horario);
-    const full = disp <= 0;
-    return '<a class="boat' + (full ? ' full' : '') + '" href="#/reserva/' + c.id + '">' +
-      '<div class="thumb">' + icon('ship') + '</div>' +
-      '<div class="info"><b>' + esc(c.nombre) + '</b>' +
-      '<div class="meta">' +
-      '<span>' + icon('users') + esc(c.capacidad) + ' lugares</span>' +
-      '<span>' + icon('clock') + esc(c.horario) + '</span>' +
-      '<span>' + icon('map-pin') + esc(c.zona) + '</span>' +
-      '</div>' +
-      '<div class="meta mt-0" style="margin-top:5px">' + (full
-        ? '<span class="chip chip-red">' + icon('x') + 'Completo</span>'
-        : '<span class="chip chip-green">' + icon('check') + disp + ' disponibles</span>') + '</div>' +
-      '</div>' +
-      '<div class="right"><div class="price">' + S().fmtMoney(c.precio) + '<small>por lugar</small></div>' +
-      '<span class="btn btn-soft btn-sm">Ver' + icon('chevron-right') + '</span></div>' +
-      '</a>';
-  }
-
-  /* =======================================================================
-     PESCADOR — Catamaranes (lista + filtros)
-     ======================================================================= */
-  function catamaranes(ctx) {
-    const hoy = S().todayISO();
-    const html =
-      '<div class="page-head" style="margin-bottom:12px"><div class="pt"><h1 style="font-size:1.4rem">Catamaranes</h1><p>Elegí fecha y horario para ver lugares disponibles.</p></div></div>' +
-      '<div class="filter-bar">' +
-      '<div class="fld">' + icon('calendar') + '<input type="date" id="f-fecha" value="' + hoy + '" min="' + hoy + '"></div>' +
-      '<div class="fld">' + icon('map-pin') + '<select id="f-zona"><option value="">Todas las zonas</option>' +
-      S().ZONAS.map(z => '<option>' + esc(z) + '</option>').join('') + '</select></div>' +
-      '</div>' +
-      '<div id="boat-list" class="list"></div>';
-
-    function mount(root) {
-      const fecha = root.querySelector('#f-fecha');
-      const zona = root.querySelector('#f-zona');
-      const list = root.querySelector('#boat-list');
-      function paint() {
-        let cats = S().catamaranes();
-        if (zona.value) cats = cats.filter(c => c.zona === zona.value);
-        list.innerHTML = cats.length ? cats.map(c => boatCard(c, fecha.value || hoy)).join('')
-          : emptyState('search', 'Sin resultados', 'No hay catamaranes en esa zona. Probá con otra.');
-      }
-      fecha.addEventListener('change', paint);
-      zona.addEventListener('change', paint);
-      paint();
-    }
-    return { html, mount, chrome: 'mobile', tab: 'catamaranes' };
-  }
-
-  function emptyState(ic, title, msg) {
-    return '<div class="empty"><div class="ico">' + icon(ic) + '</div><h3>' + esc(title) + '</h3><p>' + esc(msg) + '</p></div>';
-  }
-
-  /* =======================================================================
-     PESCADOR — Reserva (mapa de lugares)
-     ======================================================================= */
-  function reserva(ctx) {
-    const cat = S().catamaran(ctx.params.catId);
-    if (!cat) return notFound('Catamarán no encontrado');
-    const fecha = ctx.query.fecha || S().todayISO();
-    const horario = cat.horario;
-    const ocupados = S().asientosOcupados(cat.id, fecha, horario);
-
-    let grid = '';
-    for (let i = 1; i <= cat.capacidad; i++) {
-      const taken = ocupados.has(i);
-      grid += '<button class="seat ' + (taken ? 'taken' : 'free') + '" data-seat="' + i + '"' + (taken ? ' disabled' : '') + '>' + i + '</button>';
-    }
-
-    const html =
-      '<a class="btn btn-ghost btn-sm mb-2" href="#/catamaranes">' + icon('arrow-left') + 'Volver</a>' +
-      '<div class="reserva-head">' +
-      '<div><div class="b">' + esc(cat.nombre) + '</div>' +
-      '<div class="s">' + esc(S().fmtDateLong(fecha)) + ' · ' + esc(horario) + ' hs · ' + esc(cat.zona) + '</div></div>' +
-      '<div class="price" style="font-family:var(--f-display);font-weight:700;color:var(--navy-700)">' + S().fmtMoney(cat.precio) + '<small style="display:block;font-size:.6rem;color:var(--ink-400);text-align:right">por lugar</small></div>' +
-      '</div>' +
-      '<div class="deck">' +
-      '<div class="bow">' + icon('anchor') + ' Proa</div>' +
-      '<div class="seat-grid">' + grid + '</div>' +
-      '<div class="legend"><span><i class="li-free"></i>Disponible</span><span><i class="li-taken"></i>Ocupado</span><span><i class="li-sel"></i>Seleccionado</span></div>' +
-      '</div>' +
-      '<div class="summary" id="sumbox" hidden>' +
-      '<div class="row"><span>Lugares seleccionados</span><span class="sel-list" id="sel-list">—</span></div>' +
-      '<div class="row total"><span>Total</span><b id="sel-total">' + S().fmtMoney(0) + '</b></div>' +
-      '<button class="btn btn-primary btn-block btn-lg" id="btn-confirm">' + icon('check') + 'Confirmar reserva</button>' +
-      '</div>';
-
-    function mount(root) {
-      const sel = new Set();
-      const sumbox = root.querySelector('#sumbox');
-      const selList = root.querySelector('#sel-list');
-      const selTotal = root.querySelector('#sel-total');
-      root.querySelectorAll('.seat.free').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const n = +btn.getAttribute('data-seat');
-          if (sel.has(n)) { sel.delete(n); btn.classList.remove('sel'); btn.classList.add('free'); }
-          else { sel.add(n); btn.classList.add('sel'); btn.classList.remove('free'); }
-          const arr = [...sel].sort((a, b) => a - b);
-          sumbox.hidden = arr.length === 0;
-          selList.textContent = arr.length ? arr.join(', ') : '—';
-          selTotal.textContent = S().fmtMoney(cat.precio * arr.length);
-        });
-      });
-      root.querySelector('#btn-confirm').addEventListener('click', () => {
-        const lugares = [...sel].sort((a, b) => a - b);
-        if (!lugares.length) return;
-        const r = S().crearReserva({ usuarioId: ctx.user.id, catamaranId: cat.id, fecha, horario, lugares });
-        nav('#/pago/' + r.id);
-      });
-    }
-    return { html, mount, chrome: 'mobile', tab: 'catamaranes' };
-  }
-
-  /* =======================================================================
-     PESCADOR — Pago (simulado) → emite permiso
-     ======================================================================= */
-  function pago(ctx) {
-    const r = S().reserva(ctx.params.reservaId);
-    if (!r) return notFound('Reserva no encontrada');
-    const cat = S().catamaran(r.catamaranId);
-
-    const html =
-      '<div class="page-head" style="margin-bottom:10px"><div class="pt"><h1 style="font-size:1.4rem">Pago</h1><p>Confirmá tu reserva en ' + esc(cat.nombre) + '.</p></div></div>' +
-      '<div class="pay-card">' +
-      '<div class="pc-top"><span class="pc-brand">PescaCorral</span><span class="pc-chip"></span></div>' +
-      '<div class="pc-num" id="pc-num">•••• •••• •••• ••••</div>' +
-      '<div class="pc-row"><div><div class="lbl">Titular</div><span id="pc-name">' + esc(ctx.user.nombre.toUpperCase()) + '</span></div>' +
-      '<div><div class="lbl">Vence</div><span id="pc-exp">MM/AA</span></div></div>' +
-      '</div>' +
-      '<div class="amount-due"><div class="l">Total a pagar</div><div class="v">' + S().fmtMoney(r.total) + '</div>' +
-      '<div class="micro">' + r.lugares.length + ' lugar' + (r.lugares.length > 1 ? 'es' : '') + ' · ' + esc(S().fmtDate(r.fecha)) + ' · ' + esc(r.horario) + ' hs</div></div>' +
-      '<div class="card card-pad">' +
-      '<form id="f-pay" novalidate>' +
-      field('Número de tarjeta', '<input class="input mono" name="num" inputmode="numeric" maxlength="19" placeholder="4509 9535 6623 3704" required>') +
-      '<div class="flex gap-1">' +
-      '<div style="flex:1">' + field('Vencimiento', '<input class="input mono" name="exp" inputmode="numeric" maxlength="5" placeholder="08/27" required>') + '</div>' +
-      '<div style="flex:1">' + field('CVV', '<input class="input mono" name="cvv" inputmode="numeric" maxlength="4" placeholder="123" required>') + '</div>' +
-      '</div>' +
-      field('Nombre del titular', '<input class="input" name="name" placeholder="Como figura en la tarjeta" value="' + esc(ctx.user.nombre) + '" required>') +
-      '<button class="btn btn-blue btn-block btn-lg mt-1" type="submit">' + icon('lock') + 'Pagar ' + S().fmtMoney(r.total) + '</button>' +
-      '<div class="permit-note mt-1">' + icon('shield') + 'Pago de demostración — no se procesan cobros reales.</div>' +
-      '</form></div>';
-
-    function mount(root) {
-      const f = root.querySelector('#f-pay');
-      const pcNum = root.querySelector('#pc-num'), pcExp = root.querySelector('#pc-exp'), pcName = root.querySelector('#pc-name');
-      f.num.addEventListener('input', () => {
-        let v = f.num.value.replace(/\D/g, '').slice(0, 16);
-        f.num.value = v.replace(/(.{4})/g, '$1 ').trim();
-        pcNum.textContent = (f.num.value || '•••• •••• •••• ••••').padEnd(19, '•').replace(/(.{4})/g, '$1 ').trim();
-      });
-      f.exp.addEventListener('input', () => {
-        let v = f.exp.value.replace(/\D/g, '').slice(0, 4);
-        if (v.length >= 3) v = v.slice(0, 2) + '/' + v.slice(2);
-        f.exp.value = v; pcExp.textContent = v || 'MM/AA';
-      });
-      f.cvv.addEventListener('input', () => { f.cvv.value = f.cvv.value.replace(/\D/g, ''); });
-      f.name.addEventListener('input', () => { pcName.textContent = (f.name.value || ctx.user.nombre).toUpperCase(); });
-      f.addEventListener('submit', e => {
-        e.preventDefault();
-        if (f.num.value.replace(/\s/g, '').length < 13 || !f.exp.value || f.cvv.value.length < 3) {
-          toast('Revisá los datos de la tarjeta.', 'err'); return;
-        }
-        const btn = f.querySelector('button[type=submit]');
-        btn.disabled = true; btn.innerHTML = icon('clock') + 'Procesando...';
-        setTimeout(() => {
-          const res = S().pagarReserva(r.id, 'tarjeta');
-          showSuccess(res.permiso);
-        }, 850);
-      });
-    }
-
-    function showSuccess(permiso) {
-      const m = modal(
-        '<div class="success-wrap"><div class="success-circle">' + icon('check') + '</div>' +
-        '<h3 style="text-align:center">¡Pago aprobado!</h3>' +
-        '<p class="mdesc" style="text-align:center">Tu permiso digital <b class="mono">' + esc(permiso.codigo) + '</b> ya está disponible.</p></div>' +
-        '<button class="btn btn-primary btn-block btn-lg" data-go>' + icon('ticket') + 'Ver mi permiso</button>',
-        { dismissible: false });
-      m.el.querySelector('[data-go]').addEventListener('click', () => { m.close(); nav('#/permiso/' + permiso.id); });
-    }
-    return { html, mount, chrome: 'mobile', tab: 'catamaranes' };
-  }
-
-  /* =======================================================================
-     PESCADOR — Permiso digital
-     ======================================================================= */
-  function permiso(ctx) {
-    const p = S().permiso(ctx.params.permisoId);
-    if (!p) return notFound('Permiso no encontrado');
-    const u = S().usuario(p.usuarioId);
-    const cat = S().catamaran(p.catamaranId);
-    const vigente = p.estado === 'vigente';
-    const payload = ['PescaCorral', p.codigo, u ? u.nombre : '', cat ? cat.nombre : '', p.fechaEmision, p.vencimiento, p.estado].join('|');
-
-    const rows = [
-      ['Nº de permiso', p.codigo, true],
-      ['Titular', u ? u.nombre : '—', false],
-      ['DNI', u ? u.dni : '—', true],
-      ['Catamarán', cat ? cat.nombre : '—', false],
-      ['Especie habilitada', p.especie, false],
-      ['Zona', p.zona, false],
-      ['Emisión', S().fmtDate(p.fechaEmision), true],
-      ['Vencimiento', S().fmtDate(p.vencimiento), true],
+  } else {
+    items = [
+      ["home", "Inicio", "home", "#/home"],
+      ["catamaranes", "Reservar", "boat", "#/catamaranes"],
+      ["historial", "Historial", "calendar", "#/historial"],
+      ["perfil", "Perfil", "user", "#/perfil"],
     ];
+  }
+  return `<nav class="bottomnav">${items.map(([key, label, ic, href]) =>
+    `<a href="${href}" class="${active === key ? "active" : ""}">${U.icon(ic, { size: 22 })}<span>${label}</span></a>`
+  ).join("")}</nav>`;
+}
 
-    const html =
-      '<a class="btn btn-ghost btn-sm mb-2" href="#/historial/permisos">' + icon('arrow-left') + 'Volver</a>' +
-      '<div class="permit">' +
-      '<div class="permit-active' + (vigente ? '' : ' exp') + '">' + icon(vigente ? 'shield-check' : 'clock') + (vigente ? 'Permiso activo' : 'Permiso vencido') + '</div>' +
-      '<div class="permit-body">' +
-      '<div class="permit-codes">' + barcode(p.codigo) +
-      '<div class="qr-wrap">' + qr(payload) + '</div></div>' +
-      '<div class="permit-rows">' +
-      rows.map(([k, v, mono]) => '<div class="pr"><span class="k">' + esc(k) + '</span><span class="v' + (mono ? ' mono' : '') + '">' + esc(v) + '</span></div>').join('') +
-      '<div class="pr"><span class="k">Estado</span><span class="v">' + estadoChip(p.estado) + '</span></div>' +
-      '</div>' +
-      '<div class="permit-note">' + icon('info') + 'Presentá este permiso ante cualquier control municipal o de Prefectura.</div>' +
-      '</div>' +
-      '<div class="permit-foot"><button class="btn btn-primary btn-block btn-lg" id="btn-pdf">' + icon('download') + 'Descargar / Imprimir PDF</button></div>' +
-      '</div>';
+function appShell({ active = null, rol = "pescador", topbarHtml = "", bodyHtml = "" }) {
+  const showNav = active !== null && !isAdmin(rol);
+  return `<div class="app"><div class="shell">
+    ${topbarHtml}
+    <div class="shell__body${showNav ? "" : " no-nav"}">${bodyHtml}</div>
+    ${showNav ? bottomNav(active, rol) : ""}
+  </div></div>`;
+}
 
-    function mount(root) {
-      root.querySelector('#btn-pdf').addEventListener('click', () => window.print());
+function wireChrome(ctx) {
+  U.$("[data-back]")?.addEventListener("click", () => history.length > 1 ? history.back() : ctx.go("/home"));
+  U.$("[data-bell]")?.addEventListener("click", () => openNotificaciones(ctx));
+}
+
+/* Layout de escritorio para perfiles administrativos. */
+function adminLayout({ active, title, subtitle = "", actions = "", body = "" }, ctx) {
+  const p = ctx.session.profile;
+  const nav = [
+    ["panel", "Panel", "grid", "#/admin"],
+    ["reportes", "Reportes", "bar-chart", "#/reportes"],
+    ["usuarios", "Usuarios", "users", "#/usuarios"],
+    ["gestion", "Catamaranes", "boat", "#/gestion"],
+  ];
+  const links = nav.map(([key, label, ic, href]) =>
+    `<a href="${href}" class="${active === key ? "active" : ""}">${U.icon(ic, { size: 19 })}<span>${label}</span></a>`
+  ).join("");
+
+  return `<div class="admin">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar__brand">${U.logoMark(34)}<b>PescaCorral</b></div>
+      ${links}
+      <div class="sidebar__spacer"></div>
+      <div class="sidebar__user">
+        <b>${U.esc(p.nombre)} ${U.esc(p.apellido || "")}</b>
+        ${U.rolLabel(p.rol)}
+        <button class="nav" data-logout style="margin-top:10px">${U.icon("logout", { size: 19 })}<span>Cerrar sesión</span></button>
+      </div>
+    </aside>
+    <main class="admin__main">
+      <div class="admin__mobilebar">
+        ${U.logoMark(30)}<b>PescaCorral</b>
+        <button class="menu-btn" data-toggle-sidebar aria-label="Menú">${U.icon("menu", { size: 22 })}</button>
+      </div>
+      <div class="admin__topbar">
+        <div><h1>${U.esc(title)}</h1>${subtitle ? `<p>${U.esc(subtitle)}</p>` : ""}</div>
+        <div class="flex gap-8 items-center">${actions}</div>
+      </div>
+      ${body}
+    </main>
+  </div>`;
+}
+
+function wireAdmin(ctx) {
+  const admin = U.$(".admin");
+  const toggle = () => admin?.classList.toggle("drawer-open");
+  U.$("[data-toggle-sidebar]")?.addEventListener("click", () => {
+    toggle();
+    if (admin.classList.contains("drawer-open")) {
+      const scrim = document.createElement("div");
+      scrim.className = "scrim";
+      scrim.addEventListener("click", () => { admin.classList.remove("drawer-open"); scrim.remove(); });
+      admin.appendChild(scrim);
+    } else {
+      U.$(".scrim", admin)?.remove();
     }
-    return { html, mount, chrome: 'mobile', tab: 'permisos' };
-  }
+  });
+  // Cierra el drawer al navegar
+  U.$$("#sidebar a").forEach((a) => a.addEventListener("click", () => admin.classList.remove("drawer-open")));
+  U.$("[data-logout]")?.addEventListener("click", async () => { await D.signOut(); ctx.go("/login"); });
+}
 
-  /* =======================================================================
-     PESCADOR — Historial (reservas / permisos)
-     ======================================================================= */
-  function historial(ctx) {
-    const tab0 = ctx.params.tab === 'permisos' ? 'permisos' : 'reservas';
-    const html =
-      '<div class="page-head" style="margin-bottom:12px"><div class="pt"><h1 style="font-size:1.4rem">Mi actividad</h1><p>Tus reservas y permisos en un solo lugar.</p></div></div>' +
-      '<div class="tabs" id="hist-tabs">' +
-      '<button data-t="reservas"' + (tab0 === 'reservas' ? ' class="active"' : '') + '>Reservas</button>' +
-      '<button data-t="permisos"' + (tab0 === 'permisos' ? ' class="active"' : '') + '>Permisos</button>' +
-      '</div><div id="hist-body"></div>';
+/* ============================================================================
+ *  AUTENTICACIÓN
+ * ========================================================================== */
+export async function viewLogin(ctx) {
+  const demo = D.MODE === "demo";
+  U.mount(`<div class="auth">
+    <div class="auth__head">
+      <span class="logo">${U.logoMark(52)}</span>
+      <h1>PescaCorral</h1>
+      <p>Reservas y permisos de pesca · ${U.esc(CFG.LUGAR || "Dique Cabra Corral")}</p>
+    </div>
+    <div class="auth__card-wrap">
+      <div class="auth__card">
+        <h2>Iniciar sesión</h2>
+        <p class="sub">Ingresá con tu cuenta para reservar y gestionar tus permisos.</p>
+        <form id="f-login" novalidate>
+          <div class="field">
+            <label for="email">Email</label>
+            <input class="input" id="email" type="email" autocomplete="email" placeholder="tu@email.com" required />
+          </div>
+          <div class="field">
+            <label for="pwd">Contraseña</label>
+            <div class="input-group">
+              <input class="input" id="pwd" type="password" autocomplete="current-password" placeholder="Tu contraseña" required />
+              <button type="button" class="input-group__btn" data-toggle-pwd aria-label="Mostrar">${U.icon("eye", { size: 20 })}</button>
+            </div>
+          </div>
+          <div class="field__error hide" id="login-err"></div>
+          <button class="btn btn--primary btn--block btn--lg" type="submit" id="login-btn">Ingresar</button>
+        </form>
+      </div>
+      ${demo ? `<div class="auth__demo">
+        <b>Modo demo.</b> Probá con cuentas de ejemplo (contraseña <b>Demo1234!</b>):<br>
+        pescador@demo.com · dueno@demo.com · municipio@demo.com · admin@demo.com
+      </div>` : ""}
+    </div>
+    <div class="auth__foot">¿No tenés cuenta? <a href="#/registro">Registrate</a></div>
+  </div>`);
 
-    function paint(root, t) {
-      const body = root.querySelector('#hist-body');
-      if (t === 'reservas') {
-        const rs = S().reservasDe(ctx.user.id);
-        body.innerHTML = rs.length ? '<div class="list">' + rs.map(r => {
-          const cat = S().catamaran(r.catamaranId);
-          const perm = S().permisoDeReserva(r.id);
-          const future = r.fecha >= S().todayISO();
-          return '<div class="row-card"' + (perm ? ' data-go="#/permiso/' + perm.id + '"' : '') + '>' +
-            '<div class="lead lead-' + (future ? 'teal' : 'blue') + '">' + icon('ship') + '</div>' +
-            '<div class="body"><b>' + esc(cat ? cat.nombre : '—') + '</b>' +
-            '<div class="sub">' + esc(S().fmtDate(r.fecha)) + ' · ' + esc(r.horario) + ' hs · lugares ' + esc(r.lugares.join(', ')) + '</div></div>' +
-            '<div class="trail"><span class="amt">' + S().fmtMoney(r.total) + '</span>' + estadoChip(r.estado) + '</div></div>';
-        }).join('') + '</div>'
-          : emptyState('calendar', 'Sin reservas todavía', 'Cuando reserves una salida vas a verla acá.') +
-          '<a class="btn btn-primary btn-block mt-1" href="#/catamaranes">' + icon('ship') + 'Reservar una salida</a>';
-      } else {
-        const ps = S().permisosDe(ctx.user.id);
-        body.innerHTML = ps.length ? '<div class="list">' + ps.map(p => {
-          const cat = S().catamaran(p.catamaranId);
-          return '<div class="row-card" data-go="#/permiso/' + p.id + '">' +
-            '<div class="lead lead-' + (p.estado === 'vigente' ? 'green' : 'amber') + '">' + icon('ticket') + '</div>' +
-            '<div class="body"><b class="mono">' + esc(p.codigo) + '</b>' +
-            '<div class="sub">' + esc(cat ? cat.nombre : '—') + ' · ' + esc(p.especie) + ' · vence ' + esc(S().fmtDate(p.vencimiento)) + '</div></div>' +
-            '<div class="trail">' + estadoChip(p.estado) + icon('chevron-right') + '</div></div>';
-        }).join('') + '</div>'
-          : emptyState('ticket', 'Sin permisos', 'Tus permisos digitales aparecen acá luego de reservar y pagar.');
-      }
-      body.querySelectorAll('[data-go]').forEach(el => el.addEventListener('click', () => nav(el.getAttribute('data-go'))));
+  togglePwd();
+  if (demo) U.$("#email").value = "pescador@demo.com";
+
+  U.$("#f-login").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = U.$("#email").value.trim();
+    const pwd = U.$("#pwd").value;
+    const errBox = U.$("#login-err");
+    errBox.classList.add("hide");
+    if (!email || !pwd) { showErr(errBox, "Completá email y contraseña."); return; }
+    const btn = U.$("#login-btn"); btn.disabled = true; btn.textContent = "Ingresando…";
+    try {
+      await D.signIn(email, pwd);
+      const s = await D.getSession();
+      ctx.go(isAdmin(s?.profile?.rol) ? "/admin" : "/home");
+    } catch (err) {
+      showErr(errBox, err.message);
+      btn.disabled = false; btn.textContent = "Ingresar";
     }
+  });
+}
 
-    function mount(root) {
-      const tabs = root.querySelector('#hist-tabs');
-      tabs.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
-        tabs.querySelectorAll('button').forEach(x => x.classList.remove('active'));
-        b.classList.add('active'); paint(root, b.getAttribute('data-t'));
-      }));
-      paint(root, tab0);
-    }
-    return { html, mount, chrome: 'mobile', tab: 'permisos' };
-  }
+export async function viewRegistro(ctx) {
+  const especies = []; // no necesario aquí
+  U.mount(`<div class="auth">
+    <div class="auth__head" style="clip-path:polygon(0 0,100% 0,100% 86%,0 100%);padding-bottom:54px">
+      <span class="logo">${U.logoMark(48)}</span>
+      <h1>Crear cuenta</h1>
+      <p>Sumate a PescaCorral en pocos pasos.</p>
+    </div>
+    <div class="auth__card-wrap">
+      <div class="auth__card">
+        <h2>Datos personales</h2>
+        <p class="sub">Tus datos quedan protegidos y se usan sólo para tus reservas y permisos.</p>
+        <form id="f-reg" novalidate>
+          <div class="flex gap-12">
+            <div class="field grow"><label>Nombre</label><input class="input" id="r-nombre" required placeholder="Carlos"/></div>
+            <div class="field grow"><label>Apellido</label><input class="input" id="r-apellido" placeholder="Romero"/></div>
+          </div>
+          <div class="field"><label>Email</label><input class="input" id="r-email" type="email" autocomplete="email" required placeholder="tu@email.com"/></div>
+          <div class="flex gap-12">
+            <div class="field grow"><label>Teléfono</label><input class="input" id="r-tel" placeholder="+54 387 …"/></div>
+            <div class="field grow"><label>DNI</label><input class="input" id="r-dni" placeholder="24.356.789"/></div>
+          </div>
+          <div class="field">
+            <label>Tipo de cuenta</label>
+            <select class="select" id="r-rol">
+              <option value="pescador">Pescador / Turista</option>
+              <option value="dueno">Dueño de catamarán</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Contraseña</label>
+            <div class="input-group">
+              <input class="input" id="r-pwd" type="password" autocomplete="new-password" required placeholder="Creá una contraseña segura"/>
+              <button type="button" class="input-group__btn" data-toggle-pwd aria-label="Mostrar">${U.icon("eye", { size: 20 })}</button>
+            </div>
+            <div class="pwd-meter" id="pwd-meter">${"<span></span>".repeat(5)}</div>
+            <ul class="pwd-rules" id="pwd-rules"></ul>
+          </div>
+          <div class="field">
+            <label>Repetir contraseña</label>
+            <input class="input" id="r-pwd2" type="password" autocomplete="new-password" required placeholder="Repetí la contraseña"/>
+            <div class="field__error hide" id="pwd2-err">Las contraseñas no coinciden.</div>
+          </div>
+          <div class="field__error hide" id="reg-err"></div>
+          <button class="btn btn--primary btn--block btn--lg" type="submit" id="reg-btn">Crear cuenta</button>
+        </form>
+      </div>
+    </div>
+    <div class="auth__foot">¿Ya tenés cuenta? <a href="#/login">Iniciá sesión</a></div>
+  </div>`);
 
-  /* =======================================================================
-     PESCADOR / general — Notificaciones
-     ======================================================================= */
-  function notificaciones(ctx) {
-    const ns = S().notificacionesDe(ctx.user.id);
-    const icoFor = t => ({ reserva: 'calendar-check', permiso: 'ticket', recordatorio: 'clock', pago: 'credit-card' }[t] || 'bell');
-    const leadFor = t => ({ reserva: 'lead-teal', permiso: 'lead-amber', recordatorio: 'lead-blue', pago: 'lead-green' }[t] || 'lead-blue');
-    const html =
-      '<div class="page-head" style="margin-bottom:12px"><div class="pt"><h1 style="font-size:1.4rem">Notificaciones</h1><p>Avisos sobre tus reservas y permisos.</p></div></div>' +
-      (ns.length ? '<div class="list">' + ns.map(n =>
-        '<div class="row-card" style="' + (n.leida ? 'opacity:.7' : '') + '">' +
-        '<div class="lead ' + leadFor(n.tipo) + '">' + icon(icoFor(n.tipo)) + '</div>' +
-        '<div class="body"><b>' + esc(n.titulo) + (n.leida ? '' : ' <span class="chip chip-teal" style="padding:1px 7px">nuevo</span>') + '</b>' +
-        '<div class="sub">' + esc(n.mensaje) + '</div></div></div>').join('') + '</div>'
-        : emptyState('bell', 'Todo al día', 'No tenés notificaciones por ahora.'));
-
-    function mount() { setTimeout(() => { S().marcarLeidas(ctx.user.id); if (global.App) global.App.refreshBadges(); }, 600); }
-    return { html, mount, chrome: 'mobile', tab: 'home' };
-  }
-
-  /* =======================================================================
-     PESCADOR / general — Perfil
-     ======================================================================= */
-  function perfil(ctx) {
-    const u = ctx.user;
-    const r = S().ROLES[u.rol];
-    const nRes = S().reservasDe(u.id).length;
-    const nPerm = S().permisosDe(u.id).length;
-    const html =
-      '<div class="profile-head">' +
-      '<div class="pa">' + esc(S().initials(u.nombre)) + '</div>' +
-      '<h2>' + esc(u.nombre) + '</h2>' +
-      '<span class="role">' + icon('shield') + esc(r.label) + '</span>' +
-      '</div>' +
-      '<div class="stat-row mt-2">' +
-      '<div class="stat"><div class="v">' + nRes + '</div><div class="l">Reservas</div></div>' +
-      '<div class="stat"><div class="v">' + nPerm + '</div><div class="l">Permisos</div></div>' +
-      '<div class="stat"><div class="v">' + esc(S().fmtDate(u.creado).slice(3)) + '</div><div class="l">Miembro desde</div></div>' +
-      '</div>' +
-      '<div class="menu-list">' +
-      '<button id="m-edit"><span class="mi">' + icon('pencil') + '</span>Editar mis datos<span class="chev">' + icon('chevron-right') + '</span></button>' +
-      '<a href="#/historial"><span class="mi">' + icon('calendar') + '</span>Mis reservas<span class="chev">' + icon('chevron-right') + '</span></a>' +
-      '<a href="#/historial/permisos"><span class="mi">' + icon('ticket') + '</span>Mis permisos<span class="chev">' + icon('chevron-right') + '</span></a>' +
-      '<a href="#/notificaciones"><span class="mi">' + icon('bell') + '</span>Notificaciones<span class="chev">' + icon('chevron-right') + '</span></a>' +
-      '</div>' +
-      '<div class="menu-list mt-2">' +
-      '<button id="m-reset"><span class="mi">' + icon('refresh') + '</span>Restablecer datos de demo<span class="chev">' + icon('chevron-right') + '</span></button>' +
-      '<button id="m-logout" class="danger"><span class="mi">' + icon('log-out') + '</span>Cerrar sesión<span class="chev">' + icon('chevron-right') + '</span></button>' +
-      '</div>' +
-      '<p class="micro center mt-2">PescaCorral · Prototipo TFG · v1.0</p>';
-
-    function mount(root) {
-      root.querySelector('#m-logout').addEventListener('click', async () => {
-        if (await confirm({ title: 'Cerrar sesión', message: '¿Querés salir de tu cuenta?', ok: 'Cerrar sesión', danger: true })) {
-          S().logout(); toast('Sesión cerrada', 'info'); nav('#/login');
-        }
-      });
-      root.querySelector('#m-reset').addEventListener('click', async () => {
-        if (await confirm({ title: 'Restablecer demo', message: 'Se borrarán las reservas/permisos creados y se recargarán los datos de ejemplo.', ok: 'Restablecer', danger: true })) {
-          S().reset(); toast('Datos restablecidos', 'ok'); location.hash = '#/login'; setTimeout(() => location.reload(), 200);
-        }
-      });
-      root.querySelector('#m-edit').addEventListener('click', () => editProfile(u));
-    }
-    return { html, mount, chrome: 'mobile', tab: 'perfil' };
-  }
-
-  function editProfile(u) {
-    const m = modal(
-      '<h3>Editar mis datos</h3><p class="mdesc">Actualizá tu información de contacto.</p>' +
-      '<form id="f-edit">' +
-      field('Nombre y apellido', '<input class="input" name="nombre" value="' + esc(u.nombre) + '" required>') +
-      field('Teléfono', '<input class="input" name="tel" value="' + esc(u.tel || '') + '">') +
-      field('DNI', '<input class="input mono" name="dni" value="' + esc(u.dni || '') + '" placeholder="00.000.000">') +
-      '<div class="actions"><button type="button" class="btn btn-ghost" data-close>Cancelar</button><button type="submit" class="btn btn-primary">Guardar</button></div>' +
-      '</form>');
-    m.el.querySelector('[data-close]').addEventListener('click', m.close);
-    m.el.querySelector('#f-edit').addEventListener('submit', e => {
-      e.preventDefault();
-      const f = e.target;
-      S().updateUser(u.id, { nombre: f.nombre.value.trim(), tel: f.tel.value.trim(), dni: f.dni.value.trim() });
-      m.close(); toast('Datos actualizados', 'ok');
-      if (global.App) global.App.render();
-    });
-  }
-
-  /* =======================================================================
-     DUEÑO — Home (resumen de flota)
-     ======================================================================= */
-  function duenoHome(ctx) {
-    const mis = S().catamaranesDe(ctx.user.id);
-    const hoy = S().todayISO();
-    let lugaresHoy = 0, capHoy = 0;
-    mis.forEach(c => { capHoy += c.capacidad; lugaresHoy += S().asientosOcupados(c.id, hoy, c.horario).size; });
-    const reservasFlota = S().raw.reservas.filter(r => mis.some(c => c.id === r.catamaranId));
-    const ingresos = S().raw.pagos.filter(p => reservasFlota.some(r => r.id === p.reservaId) && p.estado === 'aprobado').reduce((a, p) => a + p.monto, 0);
-
-    const html =
-      '<div class="hero">' +
-      '<span class="place">' + icon('ship') + 'Panel del dueño</span>' +
-      '<h1>Hola, ' + esc(ctx.user.nombre.split(' ')[0]) + '</h1>' +
-      '<p>Gestioná tus catamaranes y seguí la ocupación de tus salidas.</p>' +
-      '<div class="hero-actions"><a class="btn btn-translucent" href="#/mis-catamaranes">' + icon('settings') + 'Mi flota</a>' +
-      '<a class="btn btn-soft" href="#/reservas-dueno">' + icon('calendar') + 'Reservas</a></div></div>' +
-      '<div class="stat-row mt-2">' +
-      '<div class="stat"><div class="v">' + mis.length + '</div><div class="l">Catamaranes</div></div>' +
-      '<div class="stat"><div class="v">' + lugaresHoy + '/' + capHoy + '</div><div class="l">Ocupación hoy</div></div>' +
-      '<div class="stat"><div class="v" style="font-size:1rem">' + S().fmtMoney(ingresos) + '</div><div class="l">Ingresos totales</div></div>' +
-      '</div>' +
-      '<div class="section-title"><h3>Mis catamaranes</h3><a class="link" href="#/mis-catamaranes">Gestionar</a></div>' +
-      (mis.length ? mis.map(c => boatCard(c, hoy)).join('') : emptyState('ship', 'Sin catamaranes', 'Agregá tu primer catamarán desde "Mi flota".'));
-    return { html, chrome: 'mobile', tab: 'home' };
-  }
-
-  /* =======================================================================
-     DUEÑO — Mis catamaranes (CRUD)
-     ======================================================================= */
-  function misCatamaranes(ctx) {
-    const html =
-      '<div class="page-head" style="margin-bottom:12px"><div class="pt"><h1 style="font-size:1.4rem">Mi flota</h1><p>Administrá tus catamaranes, cupos y precios.</p></div>' +
-      '<button class="btn btn-primary btn-sm" id="add-cat">' + icon('plus') + 'Agregar</button></div>' +
-      '<div id="cat-list" class="list"></div>';
-
-    function paint(root) {
-      const list = root.querySelector('#cat-list');
-      const mis = S().catamaranesDe(ctx.user.id);
-      list.innerHTML = mis.length ? mis.map(c =>
-        '<div class="boat">' +
-        '<div class="thumb">' + icon('ship') + '</div>' +
-        '<div class="info"><b>' + esc(c.nombre) + '</b>' +
-        '<div class="meta"><span>' + icon('users') + c.capacidad + '</span><span>' + icon('clock') + esc(c.horario) + '</span><span>' + icon('map-pin') + esc(c.zona) + '</span></div>' +
-        '<div class="meta" style="margin-top:5px"><span class="price" style="font-family:var(--f-display);color:var(--navy-700);font-weight:700">' + S().fmtMoney(c.precio) + '</span></div></div>' +
-        '<div class="right"><button class="iconbtn" style="background:var(--surface-2);color:var(--teal-700)" data-edit="' + c.id + '">' + icon('pencil') + '</button>' +
-        '<button class="iconbtn" style="background:var(--surface-2);color:var(--red-600)" data-del="' + c.id + '">' + icon('trash') + '</button></div>' +
-        '</div>').join('')
-        : emptyState('ship', 'Sin catamaranes', 'Tocá "Agregar" para registrar tu primer catamarán.');
-      list.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => catForm(ctx, root, S().catamaran(b.getAttribute('data-edit')))));
-      list.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
-        const c = S().catamaran(b.getAttribute('data-del'));
-        if (await confirm({ title: 'Quitar catamarán', message: '¿Dar de baja "' + c.nombre + '"? Dejará de ofrecerse.', ok: 'Quitar', danger: true })) {
-          S().removeCatamaran(c.id); toast('Catamarán dado de baja', 'info'); paint(root);
-        }
-      }));
-    }
-
-    function mount(root) {
-      root.querySelector('#add-cat').addEventListener('click', () => catForm(ctx, root, null));
-      paint(root);
-    }
-    misCatamaranes._paint = paint;
-    return { html, mount, chrome: 'mobile', tab: 'catamaranes' };
-  }
-
-  function catForm(ctx, root, cat) {
-    const edit = !!cat;
-    const c = cat || { nombre: '', capacidad: 16, precio: 7500, horario: '08:00', zona: S().ZONAS[0], descripcion: '' };
-    const m = modal(
-      '<h3>' + (edit ? 'Editar catamarán' : 'Nuevo catamarán') + '</h3>' +
-      '<form id="f-cat">' +
-      field('Nombre', '<input class="input" name="nombre" value="' + esc(c.nombre) + '" placeholder="Don Juan II" required>') +
-      '<div class="flex gap-1">' +
-      '<div style="flex:1">' + field('Capacidad', '<input class="input" type="number" name="capacidad" min="1" max="40" value="' + c.capacidad + '" required>') + '</div>' +
-      '<div style="flex:1">' + field('Precio / lugar', '<input class="input" type="number" name="precio" min="0" step="100" value="' + c.precio + '" required>') + '</div>' +
-      '</div>' +
-      '<div class="flex gap-1">' +
-      '<div style="flex:1">' + field('Horario', '<select class="select" name="horario">' + S().HORARIOS.map(h => '<option' + (h === c.horario ? ' selected' : '') + '>' + h + '</option>').join('') + '</select>') + '</div>' +
-      '<div style="flex:1">' + field('Zona', '<select class="select" name="zona">' + S().ZONAS.map(z => '<option' + (z === c.zona ? ' selected' : '') + '>' + esc(z) + '</option>').join('') + '</select>') + '</div>' +
-      '</div>' +
-      field('Descripción', '<textarea class="textarea" name="descripcion" placeholder="Detalles de la embarcación...">' + esc(c.descripcion || '') + '</textarea>') +
-      '<div class="actions"><button type="button" class="btn btn-ghost" data-close>Cancelar</button><button type="submit" class="btn btn-primary">' + (edit ? 'Guardar' : 'Crear') + '</button></div>' +
-      '</form>');
-    m.el.querySelector('[data-close]').addEventListener('click', m.close);
-    m.el.querySelector('#f-cat').addEventListener('submit', e => {
-      e.preventDefault();
-      const f = e.target;
-      const data = { nombre: f.nombre.value.trim(), capacidad: +f.capacidad.value, precio: +f.precio.value, horario: f.horario.value, zona: f.zona.value, descripcion: f.descripcion.value.trim() };
-      if (!data.nombre) { toast('Poné un nombre.', 'err'); return; }
-      if (edit) S().updateCatamaran(cat.id, data);
-      else S().addCatamaran(Object.assign({ duenoId: ctx.user.id }, data));
-      m.close(); toast(edit ? 'Catamarán actualizado' : 'Catamarán creado', 'ok');
-      misCatamaranes._paint(root);
-    });
-  }
-
-  /* =======================================================================
-     DUEÑO — Reservas de su flota
-     ======================================================================= */
-  function reservasDueno(ctx) {
-    const mis = S().catamaranesDe(ctx.user.id);
-    const ids = new Set(mis.map(c => c.id));
-    const rs = S().raw.reservas.filter(r => ids.has(r.catamaranId)).sort((a, b) => b.fecha.localeCompare(a.fecha)).slice(0, 40);
-    const html =
-      '<div class="page-head" style="margin-bottom:12px"><div class="pt"><h1 style="font-size:1.4rem">Reservas</h1><p>Movimientos recientes en tus catamaranes.</p></div></div>' +
-      (rs.length ? '<div class="list">' + rs.map(r => {
-        const cat = S().catamaran(r.catamaranId), u = S().usuario(r.usuarioId);
-        return '<div class="row-card"><div class="lead lead-teal">' + icon('calendar') + '</div>' +
-          '<div class="body"><b>' + esc(cat ? cat.nombre : '—') + '</b><div class="sub">' + esc(u ? u.nombre : 'Cliente') + ' · ' + esc(S().fmtDate(r.fecha)) + ' · ' + r.lugares.length + ' lugar' + (r.lugares.length > 1 ? 'es' : '') + '</div></div>' +
-          '<div class="trail"><span class="amt">' + S().fmtMoney(r.total) + '</span>' + estadoChip(r.estado) + '</div></div>';
-      }).join('') + '</div>' : emptyState('calendar', 'Sin reservas', 'Todavía no hay reservas en tus catamaranes.'));
-    return { html, chrome: 'mobile', tab: 'reservas' };
-  }
-
-  /* =======================================================================
-     MUNICIPIO / ADMIN — Dashboard
-     ======================================================================= */
-  function adminDashboard(ctx) {
-    const s = S().statsResumen();
-    const serie = S().reservasPorDia(7);
-    const flota = S().ocupacionFlota();
-    const especie = S().permisosPorEspecie();
-    const últimos = S().ultimosPermisos(6);
-    const dn = donut([
-      { label: 'Lugares ocupados', value: flota.ocupados, color: 'var(--blue-600)' },
-      { label: 'Disponibles', value: flota.disponibles, color: 'var(--teal-200)' },
-    ], { centerLabel: 'lugares hoy' });
-
-    const kpis = [
-      ['Reservas hoy', s.reservasHoy, s.deltaReservas, 'calendar-check', 'var(--blue-100)', 'var(--blue-600)'],
-      ['Permisos emitidos', s.permisosEmitidos, null, 'ticket', 'var(--amber-100)', 'var(--sun-600)'],
-      ['Ingresos (30 d)', S().fmtMoney(s.ingresosMes), null, 'dollar-sign', 'var(--green-100)', 'var(--green-600)'],
-    ];
-
-    const html =
-      pageHead('Dashboard', 'Resumen operativo de la pesca embarcada en Cabra Corral.') +
-      '<div class="kpi-grid">' + kpis.map(k => kpiCard(k)).join('') + '</div>' +
-      '<div class="panel-grid">' +
-      '<div class="panel"><div class="ph"><h3>Reservas últimos 7 días</h3><span class="sub">por jornada</span></div>' + barChart(serie) + '</div>' +
-      '<div class="panel"><div class="ph"><h3>Ocupación de flota</h3></div>' +
-      '<div style="display:flex;justify-content:center">' + dn.svg + '</div>' + dn.legend + '</div>' +
-      '</div>' +
-      '<div class="panel"><div class="ph"><h3>Permisos recientes</h3><a class="link" href="#/admin/permisos">Ver todos</a></div>' +
-      permisosTable(últimos) + '</div>' +
-      '<div class="panel-grid mt-0" style="margin-top:0">' +
-      '<div class="panel"><div class="ph"><h3>Permisos por especie</h3></div>' + barChart(especie, { color: 'var(--teal-500)' }) + '</div>' +
-      '<div class="panel"><div class="ph"><h3>Estado de fauna</h3><a class="link" href="#/admin/fauna">Detalle</a></div>' + faunaMini() + '</div>' +
-      '</div>';
-    return { html, chrome: 'admin', tab: 'dashboard' };
-  }
-
-  function pageHead(title, sub, extra) {
-    return '<div class="page-head"><div class="pt"><h1>' + esc(title) + '</h1><p>' + esc(sub) + '</p></div>' +
-      (extra || '<div class="daterange">' + icon('calendar') + 'Hoy · ' + esc(S().fmtDate(S().todayISO())) + '</div>') + '</div>';
-  }
-  function kpiCard([label, value, delta, ic, bg, fg]) {
-    let d = '';
-    if (delta != null) {
-      const up = delta >= 0;
-      d = '<div class="kd ' + (up ? 'up' : 'down') + '">' + icon(up ? 'trending-up' : 'trending-down') + (up ? '+' : '') + delta + '%</div>';
-    }
-    return '<div class="kpi"><div class="kl">' + esc(label) + '</div><div class="kv">' + esc(value) + '</div>' + d +
-      '<div class="kico" style="background:' + bg + ';color:' + fg + '">' + icon(ic) + '</div></div>';
-  }
-  function permisosTable(rows) {
-    return '<div class="table-wrap"><table class="data"><thead><tr>' +
-      '<th>Código</th><th>Titular</th><th>Catamarán</th><th>Especie</th><th>Emisión</th><th>Estado</th></tr></thead><tbody>' +
-      rows.map(p => '<tr><td class="mono">' + esc(p.codigo) + '</td>' +
-        '<td><div class="u"><div class="av">' + esc(S().initials(p.usuario ? p.usuario.nombre : '?')) + '</div>' + esc(p.usuario ? p.usuario.nombre : '—') + '</div></td>' +
-        '<td>' + esc(p.catamaran ? p.catamaran.nombre : '—') + '</td>' +
-        '<td>' + esc(p.especie) + '</td>' +
-        '<td>' + esc(S().fmtDate(p.fechaEmision)) + '</td>' +
-        '<td>' + estadoChip(p.estado) + '</td></tr>').join('') +
-      '</tbody></table></div>';
-  }
-  function faunaMini() {
-    const ind = S().indicadoresFauna();
-    return ind.map(i => {
-      const col = i.alerta ? 'var(--red-500)' : i.ratio > 0.7 ? 'var(--amber-500)' : 'var(--teal-500)';
-      return '<div style="margin-bottom:11px"><div class="gh" style="margin-bottom:6px"><b>' + esc(i.especie) + '</b><span class="micro">' + i.emitidos + ' / ' + i.umbral + '</span></div>' +
-        '<div class="track"><i style="width:' + (i.ratio * 100).toFixed(0) + '%;background:' + col + '"></i></div></div>';
-    }).join('');
-  }
-
-  /* =======================================================================
-     ADMIN — Catamaranes (todos)
-     ======================================================================= */
-  function adminCatamaranes(ctx) {
-    const cats = S().catamaranes();
-    const html = pageHead('Catamaranes', 'Embarcaciones habilitadas en el dique.') +
-      '<div class="panel"><div class="table-wrap"><table class="data"><thead><tr>' +
-      '<th>Catamarán</th><th>Dueño</th><th>Capacidad</th><th>Horario</th><th>Zona</th><th>Precio</th><th>Ocupación hoy</th></tr></thead><tbody>' +
-      cats.map(c => {
-        const d = S().usuario(c.duenoId);
-        const occ = S().asientosOcupados(c.id, S().todayISO(), c.horario).size;
-        return '<tr><td><div class="u"><div class="av" style="background:var(--grad-teal);border-radius:9px">' + icon('ship') + '</div><b>' + esc(c.nombre) + '</b></div></td>' +
-          '<td>' + esc(d ? d.nombre : '—') + '</td><td>' + c.capacidad + '</td><td>' + esc(c.horario) + '</td><td>' + esc(c.zona) + '</td>' +
-          '<td>' + S().fmtMoney(c.precio) + '</td><td>' + occ + '/' + c.capacidad + '</td></tr>';
-      }).join('') + '</tbody></table></div></div>';
-    return { html, chrome: 'admin', tab: 'catamaranes' };
-  }
-
-  /* =======================================================================
-     ADMIN — Reservas (todas)
-     ======================================================================= */
-  function adminReservas(ctx) {
-    const rs = S().raw.reservas.slice().sort((a, b) => b.fecha.localeCompare(a.fecha)).slice(0, 60);
-    const html = pageHead('Reservas', 'Últimas reservas registradas en el sistema.') +
-      '<div class="panel"><div class="table-wrap"><table class="data"><thead><tr>' +
-      '<th>Cliente</th><th>Catamarán</th><th>Fecha</th><th>Horario</th><th>Lugares</th><th>Total</th><th>Estado</th></tr></thead><tbody>' +
-      rs.map(r => {
-        const c = S().catamaran(r.catamaranId), u = S().usuario(r.usuarioId);
-        return '<tr><td><div class="u"><div class="av">' + esc(S().initials(u ? u.nombre : '?')) + '</div>' + esc(u ? u.nombre : '—') + '</div></td>' +
-          '<td>' + esc(c ? c.nombre : '—') + '</td><td>' + esc(S().fmtDate(r.fecha)) + '</td><td>' + esc(r.horario) + '</td>' +
-          '<td>' + r.lugares.length + '</td><td>' + S().fmtMoney(r.total) + '</td><td>' + estadoChip(r.estado) + '</td></tr>';
-      }).join('') + '</tbody></table></div></div>';
-    return { html, chrome: 'admin', tab: 'reservas' };
-  }
-
-  /* =======================================================================
-     ADMIN — Permisos (todos)
-     ======================================================================= */
-  function adminPermisos(ctx) {
-    const all = S().ultimosPermisos(200);
-    const html = pageHead('Permisos', 'Permisos de pesca emitidos.',
-      '<button class="btn btn-ghost btn-sm" id="csv-perm">' + icon('download') + 'Exportar CSV</button>') +
-      '<div class="panel">' + permisosTable(all) + '</div>';
-    function mount(root) {
-      root.querySelector('#csv-perm').addEventListener('click', () => downloadCSV('permisos_pescacorral.csv', S().permisosCSV()));
-    }
-    return { html, mount, chrome: 'admin', tab: 'permisos' };
-  }
-
-  /* =======================================================================
-     ADMIN — Reportes
-     ======================================================================= */
-  function adminReportes(ctx) {
-    const serie = S().reservasPorDia(7);
-    const zona = S().permisosPorZona();
-    const especie = S().permisosPorEspecie();
-    const s = S().statsResumen();
-    const dz = donut(zona.map((z, i) => ({ label: z.label, value: z.value })), { centerLabel: 'permisos' });
-    const html =
-      pageHead('Reportes', 'Indicadores para el municipio de Coronel Moldes.',
-        '<div class="flex gap-1"><button class="btn btn-ghost btn-sm" id="print-rep">' + icon('printer') + 'Imprimir</button>' +
-        '<button class="btn btn-primary btn-sm" id="csv-rep">' + icon('download') + 'Exportar CSV</button></div>') +
-      '<div class="kpi-grid">' +
-      kpiCard(['Reservas (total)', S().raw.reservas.length, null, 'calendar', 'var(--blue-100)', 'var(--blue-600)']) +
-      kpiCard(['Permisos vigentes', S().raw.permisos.filter(p => p.estado === 'vigente').length, null, 'shield-check', 'var(--green-100)', 'var(--green-600)']) +
-      kpiCard(['Ingresos (30 d)', S().fmtMoney(s.ingresosMes), null, 'dollar-sign', 'var(--teal-100)', 'var(--teal-700)']) +
-      '</div>' +
-      '<div class="panel"><div class="ph"><h3>Evolución de reservas</h3><span class="sub">últimos 7 días</span></div>' + barChart(serie) + '</div>' +
-      '<div class="panel-grid">' +
-      '<div class="panel"><div class="ph"><h3>Permisos por especie</h3></div>' + barChart(especie, { color: 'var(--teal-500)' }) + '</div>' +
-      '<div class="panel"><div class="ph"><h3>Permisos por zona</h3></div><div style="display:flex;justify-content:center">' + dz.svg + '</div>' + dz.legend + '</div>' +
-      '</div>';
-    function mount(root) {
-      root.querySelector('#csv-rep').addEventListener('click', () => downloadCSV('reporte_permisos_pescacorral.csv', S().permisosCSV()));
-      root.querySelector('#print-rep').addEventListener('click', () => window.print());
-    }
-    return { html, mount, chrome: 'admin', tab: 'reportes' };
-  }
-
-  /* =======================================================================
-     ADMIN — Usuarios (gestión de roles)
-     ======================================================================= */
-  function adminUsuarios(ctx) {
-    const canEdit = ctx.user.rol === 'admin';
-    const html = pageHead('Usuarios', canEdit ? 'Gestión de cuentas y roles del sistema.' : 'Cuentas registradas en el sistema.') +
-      '<div class="panel"><div id="users-body"></div></div>';
-
-    function paint(root) {
-      const us = S().listUsuarios();
-      root.querySelector('#users-body').innerHTML =
-        '<div class="table-wrap"><table class="data"><thead><tr>' +
-        '<th>Usuario</th><th>Correo</th><th>Rol</th><th>Reservas</th>' + (canEdit ? '<th></th>' : '') + '</tr></thead><tbody>' +
-        us.map(u => '<tr><td><div class="u"><div class="av">' + esc(S().initials(u.nombre)) + '</div><b>' + esc(u.nombre) + '</b></div></td>' +
-          '<td>' + esc(u.email) + '</td><td>' + roleChip(u.rol) + '</td><td>' + u.reservas + '</td>' +
-          (canEdit ? '<td><button class="btn btn-ghost btn-sm" data-role="' + u.id + '">' + icon('settings') + 'Rol</button></td>' : '') +
-          '</tr>').join('') + '</tbody></table></div>';
-      if (canEdit) root.querySelectorAll('[data-role]').forEach(b => b.addEventListener('click', () => roleModal(root, S().usuario(b.getAttribute('data-role')), paint)));
-    }
-    function mount(root) { paint(root); }
-    return { html, mount, chrome: 'admin', tab: 'usuarios' };
-  }
-
-  function roleModal(root, u, repaint) {
-    const opts = Object.keys(S().ROLES);
-    const m = modal(
-      '<h3>Cambiar rol</h3><p class="mdesc">' + esc(u.nombre) + ' — elegí el rol que tendrá en el sistema.</p>' +
-      '<div class="menu-list">' + opts.map(k =>
-        '<button data-r="' + k + '"><span class="mi">' + icon({ pescador: 'user', dueno: 'ship', municipio: 'building', admin: 'shield' }[k]) + '</span>' +
-        esc(S().ROLES[k].label) + (u.rol === k ? '<span class="chev">' + icon('check') + '</span>' : '') + '</button>').join('') +
-      '</div><div class="actions" style="margin-top:14px"><button class="btn btn-ghost btn-block" data-close>Cerrar</button></div>');
-    m.el.querySelector('[data-close]').addEventListener('click', m.close);
-    m.el.querySelectorAll('[data-r]').forEach(b => b.addEventListener('click', () => {
-      S().setUserRole(u.id, b.getAttribute('data-r'));
-      m.close(); toast('Rol actualizado', 'ok'); repaint(root);
-    }));
-  }
-
-  /* =======================================================================
-     ADMIN — Fauna (monitoreo HU-015)
-     ======================================================================= */
-  function adminFauna(ctx) {
-    const ind = S().indicadoresFauna();
-    const alertas = ind.filter(i => i.alerta);
-    const html =
-      pageHead('Monitoreo de fauna', 'Control de cupos por especie para preservar el recurso íctico.') +
-      (alertas.length
-        ? '<div class="alert-line alert-warn">' + icon('alert-triangle') + '<div><b>Atención:</b> ' + alertas.map(a => a.especie).join(', ') + ' alcanzó el umbral de permisos. Se sugiere revisar cupos.</div></div>'
-        : '<div class="alert-line alert-ok">' + icon('check-circle') + '<div>Todas las especies dentro de los límites recomendados.</div></div>') +
-      '<div class="gauge-grid">' +
-      ind.map(i => {
-        const col = i.alerta ? 'var(--red-500)' : i.ratio > 0.7 ? 'var(--amber-500)' : 'var(--teal-500)';
-        return '<div class="gauge"><div class="gh">' + icon('fish') + '<b>' + esc(i.especie) + '</b>' + (i.alerta ? '<span class="chip chip-red">Umbral</span>' : '<span class="chip chip-green">OK</span>') + '</div>' +
-          '<div class="track"><i style="width:' + (i.ratio * 100).toFixed(0) + '%;background:' + col + '"></i></div>' +
-          '<div class="gm"><span>' + i.emitidos + ' permisos</span><span>límite ' + i.umbral + '</span></div></div>';
-      }).join('') +
-      '</div>';
-    return { html, chrome: 'admin', tab: 'fauna' };
-  }
-
-  /* ---------- utilidades ---------- */
-  function downloadCSV(filename, csv) {
-    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = filename; document.body.appendChild(a); a.click();
-    setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 100);
-    toast('CSV exportado', 'ok');
-  }
-  function notFound(msg) {
-    return { html: '<div style="padding:30px 0">' + emptyState('alert-triangle', msg, 'Volvé al inicio e intentá de nuevo.') + '<a class="btn btn-primary btn-block" href="#/home">Ir al inicio</a></div>', chrome: 'mobile', tab: 'home' };
-  }
-
-  global.Views = {
-    login, registro, home, catamaranes, reserva, pago, permiso, historial, notificaciones, perfil,
-    duenoHome, misCatamaranes, reservasDueno,
-    adminDashboard, adminCatamaranes, adminReservas, adminPermisos, adminReportes, adminUsuarios, adminFauna,
+  togglePwd();
+  const pwd = U.$("#r-pwd");
+  const renderRules = () => {
+    const st = U.passwordStrength(pwd.value);
+    const meter = U.$$("#pwd-meter span");
+    const colors = ["#e6ebf3", "#ef4444", "#f59e0b", "#f59e0b", "#22c55e", "#16a34a"];
+    meter.forEach((s, i) => { s.style.background = i < st.score ? colors[st.score] : "var(--border)"; });
+    U.$("#pwd-rules").innerHTML = st.rules.map((r) =>
+      `<li class="${r.ok ? "ok" : ""}"><span class="tick">${r.ok ? "✓" : ""}</span>${r.label}</li>`
+    ).join("");
   };
-})(window);
+  renderRules();
+  pwd.addEventListener("input", renderRules);
+
+  U.$("#f-reg").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const v = (id) => U.$(id).value.trim();
+    const nombre = v("#r-nombre"), email = v("#r-email"), pass = U.$("#r-pwd").value, pass2 = U.$("#r-pwd2").value;
+    const errBox = U.$("#reg-err"); errBox.classList.add("hide");
+    const st = U.passwordStrength(pass);
+    if (!nombre || !email) { showErr(errBox, "Completá nombre y email."); return; }
+    if (!st.valid) { showErr(errBox, "La contraseña no cumple todos los requisitos de seguridad."); return; }
+    if (pass !== pass2) { U.$("#pwd2-err").classList.remove("hide"); return; }
+    U.$("#pwd2-err").classList.add("hide");
+    const btn = U.$("#reg-btn"); btn.disabled = true; btn.textContent = "Creando…";
+    try {
+      await D.signUp({ nombre, apellido: v("#r-apellido"), email, telefono: v("#r-tel"), dni: v("#r-dni"), rol: U.$("#r-rol").value, password: pass });
+      const s = await D.getSession();
+      if (s) { U.toast("¡Cuenta creada!", "ok"); ctx.go(isAdmin(s.profile.rol) ? "/admin" : "/home"); }
+      else { U.toast("Revisá tu email para confirmar la cuenta.", "info"); ctx.go("/login"); }
+    } catch (err) {
+      showErr(errBox, err.message); btn.disabled = false; btn.textContent = "Crear cuenta";
+    }
+  });
+}
+
+function togglePwd() {
+  U.$$("[data-toggle-pwd]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const input = btn.parentElement.querySelector("input");
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      btn.innerHTML = U.icon(show ? "eye-off" : "eye", { size: 20 });
+    });
+  });
+}
+function showErr(box, msg) { box.textContent = msg; box.classList.remove("hide"); }
+
+/* ============================================================================
+ *  HOME
+ * ========================================================================== */
+export async function viewHome(ctx) {
+  const p = ctx.session.profile;
+  const [reservas, permisos, notifs, cats] = await Promise.all([
+    D.listReservas(), D.listPermisos(), D.listNotificaciones(), D.listCatamaranes(),
+  ]);
+  const unread = notifs.filter((n) => !n.leida).length;
+  const hoy = U.todayISO();
+  const proxima = reservas.filter((r) => r.estado !== "cancelada" && r.fecha >= hoy).sort((a, b) => a.fecha < b.fecha ? -1 : 1)[0];
+  const permisoVigente = permisos.find((p) => p.estado === "vigente");
+  const disponibles = cats.filter((c) => c.estado === "activa").slice(0, 2);
+
+  const quick = [
+    ["Reservar salida", "Elegí catamarán y lugares", "boat", "t1", "#/catamaranes"],
+    ["Mis permisos", "Permisos digitales con QR", "ticket", "t2", "#/historial?tab=permisos"],
+    ["Historial", "Tus reservas anteriores", "calendar", "t3", "#/historial"],
+    ["Mi perfil", "Datos y configuración", "user", "t4", "#/perfil"],
+  ];
+
+  U.mount(appShell({
+    active: "home", rol: p.rol,
+    topbarHtml: topbar({ title: "PescaCorral", back: false, bell: true, unread }),
+    bodyHtml: `
+      <section class="hero">
+        <span class="hero__chip">${U.icon("map-pin", { size: 15 })} ${U.esc(CFG.LUGAR || "Dique Cabra Corral")}</span>
+        <h1>Hola, ${U.esc(p.nombre)} 👋</h1>
+        <p>Reservá tu salida de pesca y obtené tu permiso municipal al instante.</p>
+        <div class="hero__actions">
+          <a class="btn btn--cta" href="#/catamaranes">${U.icon("boat", { size: 18 })} Reservar salida</a>
+          <a class="btn btn--ghost" href="${permisoVigente ? "#/permiso/" + permisoVigente.id : "#/historial?tab=permisos"}">${U.icon("ticket", { size: 18 })} Mi permiso</a>
+        </div>
+      </section>
+
+      ${proxima ? `
+      <h2 class="section-title">Próxima salida</h2>
+      <div class="card">
+        <div class="flex between items-center">
+          <div>
+            <h3 style="font-size:1.1rem;font-weight:800">${U.esc(proxima.catamaran_nombre)}</h3>
+            <div class="muted" style="font-weight:600;margin-top:2px">${U.icon("calendar", { size: 14 })} ${U.fmtDateLong(proxima.fecha)}</div>
+            <div class="muted" style="font-weight:600">${U.icon("clock", { size: 14 })} Turno ${U.turnoLabel(proxima.turno)} · ${proxima.cantidad_lugares} lugar${proxima.cantidad_lugares > 1 ? "es" : ""}</div>
+          </div>
+          <span class="badge ${U.estadoReservaBadge(proxima.estado).cls}"><span class="dot"></span>${U.estadoReservaBadge(proxima.estado).label}</span>
+        </div>
+        ${proxima.permiso_id ? `<a class="btn btn--outline btn--block mt-12" href="#/permiso/${proxima.permiso_id}">${U.icon("qr", { size: 18 })} Ver permiso digital</a>` : ""}
+      </div>` : ""}
+
+      <h2 class="section-title mt-16">Accesos rápidos</h2>
+      <div class="quickgrid">
+        ${quick.map(([t, s, ic, tone, href]) =>
+          `<a class="quick" href="${href}">
+            <div class="quick__ic ${tone}">${U.icon(ic, { size: 22 })}</div>
+            <h3>${t}</h3><small>${s}</small>
+          </a>`).join("")}
+      </div>
+
+      <h2 class="section-title mt-24">Catamaranes disponibles <a class="muted-link" href="#/catamaranes">Ver todos</a></h2>
+      ${disponibles.map((c) => boatCard(c)).join("") || `<p class="muted">No hay catamaranes disponibles.</p>`}
+    `,
+  }));
+  wireChrome(ctx);
+  wireBoatCards(ctx);
+}
+
+/* ============================================================================
+ *  CATAMARANES
+ * ========================================================================== */
+export async function viewCatamaranes(ctx) {
+  const p = ctx.session.profile;
+  const [cats, notifs] = await Promise.all([D.listCatamaranes(), D.listNotificaciones()]);
+  const unread = notifs.filter((n) => !n.leida).length;
+  const fecha = ctx.params.fecha || U.todayISO();
+  const turno = ctx.params.turno || "manana";
+
+  U.mount(appShell({
+    active: "catamaranes", rol: p.rol,
+    topbarHtml: topbar({ title: "Catamaranes", bell: true, unread }),
+    bodyHtml: `
+      <div class="filters">
+        <input class="input" type="date" id="f-fecha" value="${fecha}" min="${U.todayISO()}" />
+        <select class="select turno" id="f-turno">
+          <option value="manana"${turno === "manana" ? " selected" : ""}>Mañana</option>
+          <option value="tarde"${turno === "tarde" ? " selected" : ""}>Tarde</option>
+        </select>
+      </div>
+      <p class="muted" style="margin:-6px 2px 14px;font-weight:600">${U.icon("calendar", { size: 14 })} ${U.fmtDateLong(fecha)} · Turno ${U.turnoLabel(turno)}</p>
+      <div id="boat-list">${cats.map((c) => boatCard(c, fecha, turno)).join("")}</div>
+    `,
+  }));
+  wireChrome(ctx);
+  wireBoatCards(ctx);
+
+  const update = () => {
+    const f = U.$("#f-fecha").value || U.todayISO();
+    const t = U.$("#f-turno").value;
+    ctx.go(`/catamaranes?fecha=${f}&turno=${t}`);
+  };
+  U.$("#f-fecha").addEventListener("change", update);
+  U.$("#f-turno").addEventListener("change", update);
+}
+
+function boatCard(c, fecha, turno) {
+  const mantenimiento = c.estado !== "activa";
+  const qs = fecha ? `?fecha=${fecha}&turno=${turno || "manana"}` : "";
+  return `<div class="boat" style="margin-bottom:12px">
+    <div class="boat__img" style="color:#0c4a72">${U.icon("boat", { size: 46, stroke: 1.6 })}</div>
+    <div class="boat__main">
+      <h3>${U.esc(c.nombre)}</h3>
+      <div class="boat__meta">${U.icon("users", { size: 13 })} ${c.capacidad} lugares ${c.habilitacion ? "· Hab. " + U.esc(c.habilitacion) : ""}</div>
+      <div class="boat__price">${U.fmtMoney(c.precio)} <small>/ lugar</small></div>
+    </div>
+    <div style="align-self:stretch;display:flex;flex-direction:column;justify-content:center">
+      ${mantenimiento
+        ? `<span class="badge badge--warn">${U.icon("settings", { size: 13 })} Mantenimiento</span>`
+        : `<a class="btn btn--cta btn--sm" href="#/reserva/${c.id}${qs}">Reservar</a>`}
+    </div>
+  </div>`;
+}
+function wireBoatCards() { /* navegación por href; sin JS extra */ }
+
+/* ============================================================================
+ *  RESERVA DE LUGARES
+ * ========================================================================== */
+export async function viewReserva(ctx) {
+  const p = ctx.session.profile;
+  const catId = ctx.params.id;
+  let fecha = ctx.params.fecha || U.todayISO();
+  let turno = ctx.params.turno || "manana";
+
+  const [cat, lugares, especies] = await Promise.all([
+    D.getCatamaran(catId), D.getLugares(catId), D.listEspecies(),
+  ]);
+  if (!cat) { U.mount(appShell({ active: null, rol: p.rol, topbarHtml: topbar({ title: "Reservar", back: true, bell: false }), bodyHtml: emptyState("Catamarán no encontrado", "Volvé a la lista de catamaranes.", "boat") })); wireChrome(ctx); return; }
+
+  const seleccion = new Set();
+  let ocupados = new Set(await D.getOcupacion(catId, fecha));
+
+  U.mount(appShell({
+    active: null, rol: p.rol,
+    topbarHtml: topbar({ title: "Reservar lugares", back: true, bell: false }),
+    bodyHtml: `
+      <div class="card">
+        <div class="reserva-head">
+          <div>
+            <h3>${U.esc(cat.nombre)}</h3>
+            <div class="muted" style="font-weight:600;margin-top:2px">${U.fmtMoney(cat.precio)} / lugar · ${cat.capacidad} lugares</div>
+          </div>
+          <div class="boat__img" style="width:54px;height:54px;color:#0c4a72">${U.icon("boat", { size: 30, stroke: 1.6 })}</div>
+        </div>
+        <div class="filters mt-12">
+          <input class="input" type="date" id="r-fecha" value="${fecha}" min="${U.todayISO()}"/>
+          <select class="select turno" id="r-turno">
+            <option value="manana"${turno === "manana" ? " selected" : ""}>Mañana</option>
+            <option value="tarde"${turno === "tarde" ? " selected" : ""}>Tarde</option>
+          </select>
+        </div>
+      </div>
+
+      <h2 class="section-title mt-16">Elegí tus lugares</h2>
+      <div class="seatmap" id="seatmap">${seatGrid(lugares, ocupados, seleccion)}</div>
+      <div class="seat-legend">
+        <span><i class="lg-free"></i>Libre</span>
+        <span><i class="lg-sel"></i>Elegido</span>
+        <span><i class="lg-occ"></i>Ocupado</span>
+      </div>
+
+      <h2 class="section-title mt-16">Permiso y pago</h2>
+      <div class="card card--flat">
+        <div class="field"><label>Especie a pescar</label>
+          <select class="select" id="r-especie">${especies.map((e) => `<option value="${e.id}">${U.esc(e.nombre)}</option>`).join("")}</select>
+        </div>
+        <div class="flex gap-12">
+          <div class="field grow"><label>Tipo de permiso</label>
+            <select class="select" id="r-tipo">
+              <option value="diario">Diario</option><option value="semanal">Semanal</option><option value="anual">Anual</option>
+            </select>
+          </div>
+          <div class="field grow"><label>Medio de pago</label>
+            <select class="select" id="r-metodo">
+              <option value="tarjeta">Tarjeta</option><option value="transferencia">Transferencia</option>
+              <option value="mercadopago">Mercado Pago</option><option value="efectivo">Efectivo</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="summary mt-16" id="summary"></div>
+      <button class="btn btn--cta btn--block btn--lg mt-16" id="confirm-btn" disabled>
+        ${U.icon("check-circle", { size: 20 })} Confirmar reserva y pago
+      </button>
+      <p class="muted center mt-8" style="font-size:.78rem">El pago es simulado en esta demostración.</p>
+    `,
+  }));
+  wireChrome(ctx);
+
+  const summaryEl = U.$("#summary");
+  const confirmBtn = U.$("#confirm-btn");
+  const refreshSummary = () => {
+    const n = seleccion.size;
+    const total = n * cat.precio;
+    summaryEl.innerHTML = `
+      <div class="flex between"><span>Lugares seleccionados</span><b>${n}</b></div>
+      <div class="flex between mt-8"><span>Precio por lugar</span><b>${U.fmtMoney(cat.precio)}</b></div>
+      <div class="flex between mt-8 total"><span><b>Total a pagar</b></span><b>${U.fmtMoney(total)}</b></div>
+      ${n ? `<div class="muted mt-8" style="font-size:.8rem">Lugares: ${[...seleccion].map((id) => lugares.find((l) => l.id === id).numero).sort((a, b) => a - b).join(", ")}</div>` : ""}`;
+    confirmBtn.disabled = n === 0;
+  };
+  refreshSummary();
+
+  U.$("#seatmap").addEventListener("click", (e) => {
+    const btn = e.target.closest(".seat");
+    if (!btn || btn.classList.contains("seat--occupied")) return;
+    const id = btn.dataset.lugar;
+    if (seleccion.has(id)) { seleccion.delete(id); btn.classList.remove("seat--selected"); }
+    else { seleccion.add(id); btn.classList.add("seat--selected"); }
+    refreshSummary();
+  });
+
+  const reloadSeats = async () => {
+    fecha = U.$("#r-fecha").value || U.todayISO();
+    turno = U.$("#r-turno").value;
+    seleccion.clear();
+    ocupados = new Set(await D.getOcupacion(catId, fecha));
+    U.$("#seatmap").innerHTML = seatGrid(lugares, ocupados, seleccion);
+    refreshSummary();
+  };
+  U.$("#r-fecha").addEventListener("change", reloadSeats);
+  U.$("#r-turno").addEventListener("change", () => { turno = U.$("#r-turno").value; });
+
+  confirmBtn.addEventListener("click", async () => {
+    if (!seleccion.size) return;
+    confirmBtn.disabled = true; confirmBtn.innerHTML = "Procesando…";
+    try {
+      const res = await D.crearReserva({
+        catamaranId: catId, fecha, turno,
+        lugares: [...seleccion],
+        metodo: U.$("#r-metodo").value,
+        tipoPermiso: U.$("#r-tipo").value,
+        especieId: U.$("#r-especie").value,
+      });
+      U.toast("Reserva confirmada · " + res.numero_permiso, "ok");
+      ctx.go("/permiso/" + res.permiso_id);
+    } catch (err) {
+      U.toast(err.message || "No se pudo completar la reserva.", "err");
+      confirmBtn.disabled = false;
+      confirmBtn.innerHTML = `${U.icon("check-circle", { size: 20 })} Confirmar reserva y pago`;
+      await reloadSeats();
+    }
+  });
+}
+
+function seatGrid(lugares, ocupados, seleccion) {
+  return lugares.map((l) => {
+    const occ = ocupados.has(l.id);
+    const sel = seleccion.has(l.id);
+    const cls = occ ? "seat seat--occupied" : sel ? "seat seat--selected" : "seat";
+    return `<button class="${cls}" data-lugar="${l.id}" ${occ ? "disabled" : ""} title="Lugar ${l.numero} · ${U.esc(l.ubicacion || "")}">${l.numero}</button>`;
+  }).join("");
+}
+
+/* ============================================================================
+ *  PERMISO DIGITAL
+ * ========================================================================== */
+export async function viewPermiso(ctx) {
+  const p = ctx.session.profile;
+  const permiso = await D.getPermiso(ctx.params.id);
+  if (!permiso) { U.mount(appShell({ active: null, rol: p.rol, topbarHtml: topbar({ title: "Permiso", back: true, bell: false }), bodyHtml: emptyState("Permiso no encontrado", "Puede haber sido anulado.", "ticket") })); wireChrome(ctx); return; }
+
+  const estadoCls = permiso.estado === "vencido" ? "is-vencido" : permiso.estado === "anulado" ? "is-anulado" : "";
+  const estadoTxt = permiso.estado === "vencido" ? "PERMISO VENCIDO" : permiso.estado === "anulado" ? "PERMISO ANULADO" : "PERMISO VIGENTE";
+
+  U.mount(appShell({
+    active: null, rol: p.rol,
+    topbarHtml: topbar({ title: "Permiso digital", back: true, bell: false }),
+    bodyHtml: `
+      <div class="permit" id="permit">
+        <div class="permit__head ${estadoCls}">${estadoTxt}</div>
+        <div class="permit__qr">${qrSvg(permiso.codigo_qr)}</div>
+        <div class="center" style="margin:-2px 0 6px"><b style="font-size:1.25rem;letter-spacing:.5px">${U.esc(permiso.numero)}</b></div>
+        <div class="permit__body">
+          ${permitRow("Titular", permiso.titular_nombre)}
+          ${permitRow("DNI", permiso.titular_dni)}
+          ${permitRow("Especie", permiso.especie_nombre)}
+          ${permitRow("Catamarán", permiso.catamaran_nombre)}
+          ${permitRow("Fecha de salida", permiso.fecha ? U.fmtDate(permiso.fecha) : "—")}
+          ${permitRow("Turno", permiso.turno ? U.turnoLabel(permiso.turno) : "—")}
+          ${permitRow("Tipo", U.tipoPermisoLabel(permiso.tipo))}
+          ${permitRow("Emisión", U.fmtDate(permiso.fecha_emision))}
+          ${permitRow("Vencimiento", U.fmtDate(permiso.fecha_vencimiento))}
+        </div>
+        <div class="permit__actions stack">
+          <button class="btn btn--primary btn--block" data-print>${U.icon("download", { size: 18 })} Descargar PDF</button>
+          <button class="btn btn--soft btn--block" data-share>${U.icon("share", { size: 18 })} Compartir</button>
+        </div>
+      </div>
+      <p class="muted center mt-12" style="font-size:.8rem">${U.icon("shield", { size: 14 })} Presentá este permiso al personal de control. El código QR permite validar su autenticidad.</p>
+    `,
+  }));
+  wireChrome(ctx);
+
+  U.$("[data-print]")?.addEventListener("click", () => window.print());
+  U.$("[data-share]")?.addEventListener("click", async () => {
+    const txt = `Permiso de pesca ${permiso.numero} · ${permiso.titular_nombre} · ${CFG.MUNICIPIO || "Municipio de Coronel Moldes"}`;
+    if (navigator.share) { try { await navigator.share({ title: "Permiso PescaCorral", text: txt }); } catch {} }
+    else if (navigator.clipboard) { await navigator.clipboard.writeText(txt); U.toast("Datos copiados al portapapeles", "ok"); }
+    else U.toast("Compartir no disponible en este dispositivo", "info");
+  });
+}
+function permitRow(label, value) {
+  return `<div class="permit__row"><span>${U.esc(label)}</span><b>${U.esc(value)}</b></div>`;
+}
+
+/* ============================================================================
+ *  HISTORIAL (reservas / permisos)
+ * ========================================================================== */
+export async function viewHistorial(ctx) {
+  const p = ctx.session.profile;
+  const tab = ctx.params.tab === "permisos" ? "permisos" : "reservas";
+  const [reservas, permisos, notifs] = await Promise.all([D.listReservas(), D.listPermisos(), D.listNotificaciones()]);
+  const unread = notifs.filter((n) => !n.leida).length;
+  const hoy = U.todayISO();
+
+  const reservasHtml = reservas.length ? reservas.map((r) => {
+    const b = U.estadoReservaBadge(r.estado);
+    const cancelable = r.estado === "confirmada" && r.fecha >= hoy;
+    return `<div class="row-item">
+      <div class="row-item__ic">${U.icon("boat", { size: 20 })}</div>
+      <div class="row-item__main">
+        <h4>${U.esc(r.catamaran_nombre)}</h4>
+        <small>${U.fmtDate(r.fecha)} · ${U.turnoLabel(r.turno)} · ${r.cantidad_lugares} lugar${r.cantidad_lugares > 1 ? "es" : ""} · ${U.fmtMoney(r.monto_total)}</small>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+        <span class="badge ${b.cls}">${b.label}</span>
+        <div class="flex gap-8">
+          ${r.permiso_id ? `<a class="btn btn--soft btn--sm" href="#/permiso/${r.permiso_id}">Permiso</a>` : ""}
+          ${cancelable ? `<button class="btn btn--danger btn--sm" data-anular="${r.id}">Anular</button>` : ""}
+        </div>
+      </div>
+    </div>`;
+  }).join("") : emptyState("Sin reservas todavía", "Cuando reserves una salida, aparecerá acá.", "calendar");
+
+  const permisosHtml = permisos.length ? permisos.map((per) => {
+    const cls = per.estado === "vencido" ? "is-vencido" : per.estado === "anulado" ? "is-anulado" : "";
+    const b = U.estadoPermisoBadge(per.estado);
+    return `<a class="permit-mini" href="#/permiso/${per.id}" style="margin-bottom:10px">
+      <div class="permit-mini__badge ${cls}">${U.icon("ticket", { size: 22 })}</div>
+      <div class="grow"><h4>${U.esc(per.numero)}</h4><small>${U.esc(per.especie_nombre)} · ${per.fecha ? U.fmtDate(per.fecha) : "—"}</small></div>
+      <span class="badge ${b.cls}">${b.label}</span>
+    </a>`;
+  }).join("") : emptyState("Sin permisos todavía", "Tus permisos digitales aparecerán acá.", "ticket");
+
+  U.mount(appShell({
+    active: "historial", rol: p.rol,
+    topbarHtml: topbar({ title: "Historial", bell: true, unread }),
+    bodyHtml: `
+      <div class="tabs">
+        <button class="${tab === "reservas" ? "active" : ""}" data-tab="reservas">Reservas</button>
+        <button class="${tab === "permisos" ? "active" : ""}" data-tab="permisos">Permisos</button>
+      </div>
+      <div id="tab-body">${tab === "reservas" ? reservasHtml : permisosHtml}</div>
+    `,
+  }));
+  wireChrome(ctx);
+
+  U.$$("[data-tab]").forEach((b) => b.addEventListener("click", () => ctx.go(`/historial?tab=${b.dataset.tab}`)));
+  U.$$("[data-anular]").forEach((b) => b.addEventListener("click", async () => {
+    const ok = await U.confirmDialog({ title: "Anular reserva", message: "Se cancelará la reserva y su permiso quedará anulado. ¿Confirmás?", okLabel: "Sí, anular", okVariant: "btn--primary" });
+    if (!ok) return;
+    try { await D.anularReserva(b.dataset.anular); U.toast("Reserva anulada", "ok"); ctx.rerender(); }
+    catch (err) { U.toast(err.message, "err"); }
+  }));
+}
+
+/* ============================================================================
+ *  PERFIL
+ * ========================================================================== */
+export async function viewPerfil(ctx) {
+  const p = ctx.session.profile;
+  const notifs = await D.listNotificaciones();
+  const unread = notifs.filter((n) => !n.leida).length;
+
+  U.mount(appShell({
+    active: "perfil", rol: p.rol,
+    topbarHtml: topbar({ title: "Perfil", bell: true, unread }),
+    bodyHtml: `
+      <div class="profile-hero">
+        <div class="avatar">${U.initials(p.nombre, p.apellido)}</div>
+        <div class="center">
+          <h2>${U.esc(p.nombre)} ${U.esc(p.apellido || "")}</h2>
+          <div class="muted" style="font-weight:600">${U.esc(p.email)}</div>
+          <span class="badge badge--info mt-8">${U.icon("shield", { size: 13 })} ${U.rolLabel(p.rol)}</span>
+        </div>
+      </div>
+
+      <h2 class="section-title">Datos personales</h2>
+      <div class="card card--flat">
+        <form id="f-perfil">
+          <div class="flex gap-12">
+            <div class="field grow"><label>Nombre</label><input class="input" id="pf-nombre" value="${U.esc(p.nombre)}"/></div>
+            <div class="field grow"><label>Apellido</label><input class="input" id="pf-apellido" value="${U.esc(p.apellido || "")}"/></div>
+          </div>
+          <div class="field"><label>Teléfono</label><input class="input" id="pf-tel" value="${U.esc(p.telefono || "")}"/></div>
+          <div class="field"><label>DNI</label><input class="input" id="pf-dni" value="${U.esc(p.dni || "")}"/></div>
+          <button class="btn btn--primary btn--block" type="submit">${U.icon("check", { size: 18 })} Guardar cambios</button>
+        </form>
+      </div>
+
+      ${(p.rol === "dueno") ? `<a class="btn btn--outline btn--block mt-12" href="#/gestion">${U.icon("boat", { size: 18 })} Gestionar mis catamaranes</a>` : ""}
+      ${isAdmin(p.rol) ? `<a class="btn btn--outline btn--block mt-12" href="#/admin">${U.icon("grid", { size: 18 })} Ir al panel municipal</a>` : ""}
+
+      <h2 class="section-title mt-24">Cuenta</h2>
+      <div class="card card--flat">
+        <div class="permit__row"><span>Modo de datos</span><b>${D.MODE === "demo" ? "Demostración (local)" : "Supabase (en la nube)"}</b></div>
+        ${D.MODE === "demo" ? `<button class="btn btn--soft btn--block mt-12" data-reset>${U.icon("refresh", { size: 18 })} Reiniciar datos de demo</button>` : ""}
+      </div>
+
+      <button class="btn btn--danger btn--block mt-16" data-logout>${U.icon("logout", { size: 18 })} Cerrar sesión</button>
+      <p class="muted center mt-16" style="font-size:.78rem">PescaCorral · ${U.esc(CFG.MUNICIPIO || "Municipio de Coronel Moldes")}</p>
+    `,
+  }));
+  wireChrome(ctx);
+
+  U.$("#f-perfil").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      await D.updateProfile({ nombre: U.$("#pf-nombre").value.trim(), apellido: U.$("#pf-apellido").value.trim(), telefono: U.$("#pf-tel").value.trim(), dni: U.$("#pf-dni").value.trim() });
+      U.toast("Perfil actualizado", "ok");
+      ctx.rerender();
+    } catch (err) { U.toast(err.message, "err"); }
+  });
+  U.$("[data-reset]")?.addEventListener("click", async () => {
+    const ok = await U.confirmDialog({ title: "Reiniciar demo", message: "Se restauran los datos de ejemplo y se cierra la sesión. ¿Continuar?", okLabel: "Reiniciar" });
+    if (!ok) return;
+    await D.resetDemo(); U.toast("Datos de demo restaurados", "ok"); ctx.go("/login");
+  });
+  U.$("[data-logout]")?.addEventListener("click", async () => { await D.signOut(); ctx.go("/login"); });
+}
+
+/* ============================================================================
+ *  NOTIFICACIONES (drawer modal)
+ * ========================================================================== */
+async function openNotificaciones(ctx) {
+  const notifs = await D.listNotificaciones();
+  const body = notifs.length ? `<div class="notif-list">${notifs.map((n) => `
+    <div class="notif ${n.leida ? "" : "unread"}">
+      <h4>${U.esc(n.titulo)}</h4>
+      <p>${U.esc(n.mensaje)}</p>
+      <small>${U.fmtRelative(n.created_at)}</small>
+    </div>`).join("")}</div>`
+    : `<div class="empty">${U.icon("bell", { size: 40 })}<h3>Sin notificaciones</h3><p>Te avisaremos cuando haya novedades.</p></div>`;
+
+  U.modal({
+    title: "Notificaciones",
+    body,
+    actions: notifs.some((n) => !n.leida)
+      ? [{ label: "Marcar todo como leído", variant: "btn--primary", onClick: async () => { await D.marcarLeidas(); ctx.rerender(); } }]
+      : [],
+  });
+}
+
+/* ============================================================================
+ *  PANEL MUNICIPAL (dashboard)
+ * ========================================================================== */
+export async function viewAdmin(ctx) {
+  const [resumen, porDia, porEspecie, ocupacion, ultimos] = await Promise.all([
+    D.dashboardResumen(), D.reservasPorDia({ from: U.addDaysISO(U.todayISO(), -13), to: U.todayISO() }),
+    D.permisosPorEspecie(), D.ocupacionCatamaranes(), D.ultimosPermisos(6),
+  ]);
+
+  // Serie de 14 días (rellena ceros)
+  const dias = [];
+  for (let i = 13; i >= 0; i--) {
+    const iso = U.addDaysISO(U.todayISO(), -i);
+    const row = porDia.find((d) => d.fecha === iso);
+    dias.push({ label: iso.slice(8), value: row ? Number(row.cantidad_reservas) : 0 });
+  }
+  const especieData = porEspecie.filter((e) => e.permisos_emitidos > 0).map((e, i) => ({ label: e.especie, value: Number(e.permisos_emitidos), color: CHART_COLORS[i % CHART_COLORS.length] }));
+
+  U.mount(adminLayout({
+    active: "panel",
+    title: "Panel municipal",
+    subtitle: `${CFG.MUNICIPIO || "Municipio de Coronel Moldes"} · ${CFG.LUGAR || "Dique Cabra Corral"}`,
+    actions: `<span class="daterange">${U.icon("calendar", { size: 15 })} Últimos 30 días</span>`,
+    body: `
+      <div class="kpis">
+        ${kpi("Reservas hoy", resumen.reservas_hoy, "+ activas", "up")}
+        ${kpi("Permisos vigentes", resumen.permisos_vigentes, `${resumen.permisos_total} emitidos`, "up")}
+        ${kpi("Ingresos totales", U.fmtMoney(resumen.ingresos_total), "acumulado", "up")}
+      </div>
+      <div class="grid-2">
+        <div class="panel">
+          <h3>Reservas por día (últimos 14)</h3>
+          ${barChart(dias, { height: 230, color: "#1b5fc4" })}
+        </div>
+        <div class="panel">
+          <h3>Permisos por especie</h3>
+          ${donutChart(especieData, { centerTop: String(resumen.permisos_total), centerSub: "permisos" })}
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="panel">
+          <h3>Ocupación por catamarán</h3>
+          <table class="table">
+            <thead><tr><th>Catamarán</th><th>Ocupación</th><th style="text-align:right">Lugares</th></tr></thead>
+            <tbody>${ocupacion.map((o) => {
+              const pct = o.capacidad ? Math.round((o.lugares_ocupados / o.capacidad) * 100) : 0;
+              return `<tr><td>${U.esc(o.nombre)}</td>
+                <td style="min-width:120px">${progressBar(o.lugares_ocupados, o.capacidad)}</td>
+                <td style="text-align:right">${o.lugares_ocupados}/${o.capacidad}</td></tr>`;
+            }).join("")}</tbody>
+          </table>
+        </div>
+        <div class="panel">
+          <h3>Últimos permisos emitidos</h3>
+          <table class="table">
+            <thead><tr><th>N°</th><th>Especie</th><th>Estado</th></tr></thead>
+            <tbody>${ultimos.map((u) => {
+              const b = U.estadoPermisoBadge(u.estado);
+              return `<tr><td><b>${U.esc(u.numero)}</b><br><small class="muted">${U.esc(u.titular)}</small></td>
+                <td>${U.esc(u.especie)}</td><td><span class="badge ${b.cls}">${b.label}</span></td></tr>`;
+            }).join("")}</tbody>
+          </table>
+        </div>
+      </div>
+    `,
+  }, ctx));
+  wireAdmin(ctx);
+}
+
+function kpi(label, value, delta, dir) {
+  return `<div class="kpi"><div class="kpi__label">${U.esc(label)}</div>
+    <div class="kpi__value">${value}</div>
+    <div class="kpi__delta ${dir}">${U.icon(dir === "down" ? "trending-up" : "trending-up", { size: 14 })} ${U.esc(delta)}</div></div>`;
+}
+
+/* ============================================================================
+ *  REPORTES
+ * ========================================================================== */
+export async function viewReportes(ctx) {
+  const [resumen, porDiaAll, porEspecie, alertas] = await Promise.all([
+    D.dashboardResumen(), D.reservasPorDia({}), D.permisosPorEspecie(), D.alertasFauna(),
+  ]);
+
+  // Agrupar por mes (últimos 6 meses)
+  const meses = new Map();
+  porDiaAll.forEach((d) => {
+    const m = d.fecha.slice(0, 7);
+    const e = meses.get(m) || { reservas: 0, ingresos: 0 };
+    e.reservas += Number(d.cantidad_reservas); e.ingresos += Number(d.ingresos); meses.set(m, e);
+  });
+  const ML = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+  const mesData = [...meses.entries()].sort().slice(-6).map(([m, v]) => ({ label: ML[Number(m.slice(5)) - 1], value: v.reservas }));
+  const especieData = porEspecie.filter((e) => e.permisos_emitidos > 0).map((e, i) => ({ label: e.especie, value: Number(e.permisos_emitidos), color: CHART_COLORS[i % CHART_COLORS.length] }));
+
+  U.mount(adminLayout({
+    active: "reportes",
+    title: "Reportes",
+    subtitle: "Indicadores de actividad y monitoreo de fauna",
+    actions: `<button class="btn btn--soft btn--sm" data-csv>${U.icon("download", { size: 16 })} CSV</button>
+              <button class="btn btn--primary btn--sm" data-pdf>${U.icon("file-text", { size: 16 })} PDF</button>`,
+    body: `
+      <div class="kpis">
+        ${kpi("Reservas totales", resumen.reservas_total, "histórico", "up")}
+        ${kpi("Ingresos totales", U.fmtMoney(resumen.ingresos_total), "acumulado", "up")}
+        ${kpi("Alertas de fauna", resumen.alertas_activas, "activas", resumen.alertas_activas ? "down" : "up")}
+      </div>
+      <div class="grid-2">
+        <div class="panel">
+          <h3>Evolución mensual de reservas</h3>
+          ${barChart(mesData, { height: 230, color: "#14a89a" })}
+        </div>
+        <div class="panel">
+          <h3>Distribución de permisos por especie</h3>
+          ${donutChart(especieData, { centerTop: String(resumen.permisos_total), centerSub: "permisos" })}
+        </div>
+      </div>
+      <div class="panel">
+        <h3>${U.icon("alert-triangle", { size: 18 })} Monitoreo de fauna · presión pesquera</h3>
+        ${alertas.length ? alertas.map((a) => {
+          const pct = a.umbral ? Math.round((a.permisos_emitidos / a.umbral) * 100) : 0;
+          return `<div style="margin-bottom:16px">
+            <div class="flex between" style="margin-bottom:6px">
+              <b>${U.esc(a.especie)} <span class="muted" style="font-weight:600">· período ${U.esc(a.periodo)}</span></b>
+              <span class="badge ${pct >= 90 ? "badge--danger" : "badge--warn"}">${a.permisos_emitidos}/${a.umbral} · ${pct}%</span>
+            </div>
+            ${progressBar(a.permisos_emitidos, a.umbral)}
+          </div>`;
+        }).join("") : `<p class="muted">No hay alertas activas. La presión pesquera está dentro de los umbrales.</p>`}
+        <p class="panel__foot">El umbral de permisos por especie se configura según los estudios de la dirección de fauna.</p>
+      </div>
+    `,
+  }, ctx));
+  wireAdmin(ctx);
+
+  U.$("[data-pdf]")?.addEventListener("click", () => window.print());
+  U.$("[data-csv]")?.addEventListener("click", () => {
+    const rows = porEspecie.map((e) => ({ especie: e.especie, permisos_emitidos: e.permisos_emitidos, umbral: e.umbral_permisos }));
+    U.downloadText("reporte-permisos-por-especie.csv", U.toCSV(rows, [{ key: "especie", label: "Especie" }, { key: "permisos_emitidos", label: "Permisos emitidos" }, { key: "umbral", label: "Umbral" }]));
+    U.toast("CSV descargado", "ok");
+  });
+}
+
+/* ============================================================================
+ *  USUARIOS (admin)
+ * ========================================================================== */
+export async function viewUsuarios(ctx) {
+  const usuarios = await D.listUsuarios();
+  const yo = ctx.session.profile.id;
+  const roles = ["pescador", "dueno", "admin_municipal", "admin_sistema"];
+
+  U.mount(adminLayout({
+    active: "usuarios",
+    title: "Usuarios",
+    subtitle: `${usuarios.length} cuentas registradas`,
+    body: `<div class="panel">
+      <table class="table">
+        <thead><tr><th>Usuario</th><th>Contacto</th><th>DNI</th><th>Rol</th></tr></thead>
+        <tbody>${usuarios.map((u) => `<tr>
+          <td><b>${U.esc(u.nombre)} ${U.esc(u.apellido || "")}</b></td>
+          <td><small class="muted">${U.esc(u.email)}<br>${U.esc(u.telefono || "—")}</small></td>
+          <td>${U.esc(u.dni || "—")}</td>
+          <td>
+            <select class="select" data-rol="${u.id}" style="padding:8px 10px;font-size:.85rem" ${u.id === yo ? "disabled" : ""}>
+              ${roles.map((r) => `<option value="${r}"${u.rol === r ? " selected" : ""}>${U.rolLabel(r)}</option>`).join("")}
+            </select>
+          </td>
+        </tr>`).join("")}</tbody>
+      </table>
+      <p class="panel__foot">No podés cambiar tu propio rol. Los cambios se aplican al instante.</p>
+    </div>`,
+  }, ctx));
+  wireAdmin(ctx);
+
+  U.$$("[data-rol]").forEach((sel) => sel.addEventListener("change", async () => {
+    try { await D.setRol(sel.dataset.rol, sel.value); U.toast("Rol actualizado", "ok"); }
+    catch (err) { U.toast(err.message, "err"); }
+  }));
+}
+
+/* ============================================================================
+ *  GESTIÓN DE CATAMARANES (dueño / admin)
+ * ========================================================================== */
+export async function viewGestion(ctx) {
+  const p = ctx.session.profile;
+  const admin = isAdmin(p.rol);
+  const cats = await D.listCatamaranes();
+  const propios = admin ? cats : cats.filter((c) => c.id_propietario === p.id);
+
+  const list = propios.length ? propios.map((c) => `
+    <div class="boat" style="margin-bottom:12px">
+      <div class="boat__img" style="color:#0c4a72">${U.icon("boat", { size: 46, stroke: 1.6 })}</div>
+      <div class="boat__main">
+        <h3>${U.esc(c.nombre)}</h3>
+        <div class="boat__meta">${U.icon("users", { size: 13 })} ${c.capacidad} lugares · ${U.fmtMoney(c.precio)}/lugar</div>
+        <span class="badge ${c.estado === "activa" ? "badge--ok" : c.estado === "mantenimiento" ? "badge--warn" : "badge--muted"}" style="margin-top:6px">${estadoCatLabel(c.estado)}</span>
+      </div>
+      <button class="btn btn--soft btn--sm" data-edit="${c.id}">${U.icon("edit", { size: 16 })} Editar</button>
+    </div>`).join("") : emptyState("Sin catamaranes", "Agregá tu primer catamarán para empezar a recibir reservas.", "boat");
+
+  const headerActions = `<button class="btn btn--cta btn--sm" data-nuevo>${U.icon("plus", { size: 16 })} Nuevo</button>`;
+
+  if (admin) {
+    U.mount(adminLayout({ active: "gestion", title: "Catamaranes", subtitle: `${propios.length} embarcaciones`, actions: headerActions, body: `<div class="panel">${list}</div>` }, ctx));
+    wireAdmin(ctx);
+  } else {
+    const notifs = await D.listNotificaciones();
+    const unread = notifs.filter((n) => !n.leida).length;
+    U.mount(appShell({
+      active: "gestion", rol: p.rol,
+      topbarHtml: topbar({ title: "Mis catamaranes", bell: true, unread }),
+      bodyHtml: `<div class="section-title">Embarcaciones ${headerActions}</div>${list}`,
+    }));
+    wireChrome(ctx);
+  }
+
+  const cb = byIdMap(cats);
+  U.$("[data-nuevo]")?.addEventListener("click", () => catamaranModal(ctx, null));
+  U.$$("[data-edit]").forEach((b) => b.addEventListener("click", () => catamaranModal(ctx, cb[b.dataset.edit])));
+}
+
+function estadoCatLabel(e) { return ({ activa: "Activa", inactiva: "Inactiva", mantenimiento: "Mantenimiento" }[e] || e); }
+function byIdMap(arr) { const m = {}; arr.forEach((x) => (m[x.id] = x)); return m; }
+
+function catamaranModal(ctx, cat) {
+  const edit = Boolean(cat);
+  U.modal({
+    title: edit ? "Editar catamarán" : "Nuevo catamarán",
+    body: `
+      <div class="field"><label>Nombre</label><input class="input" id="c-nombre" value="${U.esc(cat?.nombre || "")}" placeholder="Don Juan II"/></div>
+      <div class="field"><label>Descripción</label><input class="input" id="c-desc" value="${U.esc(cat?.descripcion || "")}" placeholder="Catamarán techado…"/></div>
+      <div class="flex gap-12">
+        <div class="field grow"><label>Capacidad</label><input class="input" id="c-cap" type="number" min="1" value="${cat?.capacidad || 12}" ${edit ? "disabled" : ""}/></div>
+        <div class="field grow"><label>Precio / lugar</label><input class="input" id="c-precio" type="number" min="0" value="${cat?.precio || 8000}"/></div>
+      </div>
+      <div class="field"><label>N° de habilitación</label><input class="input" id="c-hab" value="${U.esc(cat?.habilitacion || "")}" placeholder="HAB-2024-000"/></div>
+      <div class="field"><label>Estado</label>
+        <select class="select" id="c-estado">
+          ${["activa", "mantenimiento", "inactiva"].map((e) => `<option value="${e}"${cat?.estado === e ? " selected" : ""}>${estadoCatLabel(e)}</option>`).join("")}
+        </select>
+      </div>
+      ${edit ? `<p class="field__hint">La capacidad no se puede cambiar porque define los asientos ya creados.</p>` : ""}
+    `,
+    actions: [
+      { label: "Cancelar", variant: "btn--soft" },
+      {
+        label: edit ? "Guardar" : "Crear", variant: "btn--primary", close: false,
+        onClick: async () => {
+          const data = {
+            nombre: U.$("#c-nombre").value.trim(),
+            descripcion: U.$("#c-desc").value.trim(),
+            precio: Number(U.$("#c-precio").value),
+            habilitacion: U.$("#c-hab").value.trim(),
+            estado: U.$("#c-estado").value,
+          };
+          if (!data.nombre) { U.toast("Poné un nombre", "err"); return false; }
+          try {
+            if (edit) await D.updateCatamaran(cat.id, data);
+            else await D.crearCatamaran({ ...data, capacidad: Number(U.$("#c-cap").value) });
+            U.closeModal(); U.toast(edit ? "Catamarán actualizado" : "Catamarán creado", "ok"); ctx.rerender();
+          } catch (err) { U.toast(err.message, "err"); return false; }
+        },
+      },
+    ],
+  });
+}
+
+/* ============================================================================
+ *  ESTADO VACÍO
+ * ========================================================================== */
+function emptyState(titulo, texto, ic = "info") {
+  return `<div class="empty">${U.icon(ic, { size: 56, stroke: 1.5 })}<h3>${U.esc(titulo)}</h3><p>${U.esc(texto)}</p></div>`;
+}

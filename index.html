@@ -1,35 +1,72 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="es-AR">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=5.0">
-  <title>PescaCorral — Pesca embarcada en Dique Cabra Corral</title>
-  <meta name="description" content="Reservá tu lugar de pesca embarcada, pagá online y llevá tu permiso digital. Dique Cabra Corral, Salta.">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5" />
+  <title>PescaCorral · Reservas y permisos de pesca</title>
+  <meta name="description" content="Gestión digital de reservas de pesca deportiva y permisos municipales en el Dique Cabra Corral." />
 
   <!-- PWA -->
-  <link rel="manifest" href="manifest.webmanifest">
-  <meta name="theme-color" content="#0A1E3F">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="PescaCorral">
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
-  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#0a2540" />
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="PescaCorral" />
+  <meta name="mobile-web-app-capable" content="yes" />
 
-  <!-- Estilos -->
-  <link rel="stylesheet" href="css/fonts.css">
-  <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
-  <div id="app"><!-- la app se renderiza acá --></div>
-  <div id="toasts"></div>
+  <!-- Punto de montaje de la aplicación -->
+  <div id="app" aria-live="polite">
+    <div class="boot">
+      <div class="boot__logo" aria-hidden="true">
+        <svg viewBox="0 0 64 64" width="56" height="56"><use href="#logo-mark"></use></svg>
+      </div>
+      <p>Cargando PescaCorral…</p>
+    </div>
+  </div>
 
-  <!-- Capas JS (el orden importa) -->
-  <script defer src="js/qrcode.js"></script>
-  <script defer src="js/data.js"></script>
-  <script defer src="js/ui.js"></script>
-  <script defer src="js/views.js"></script>
-  <script defer src="js/app.js"></script>
+  <!-- Contenedor para notificaciones tipo "toast" -->
+  <div id="toast-root" class="toast-root" aria-live="assertive"></div>
+
+  <!-- Definiciones SVG reutilizables (logo + íconos de línea) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <linearGradient id="grad-mark" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#0a2540" />
+        <stop offset="1" stop-color="#0e7490" />
+      </linearGradient>
+      <symbol id="logo-mark" viewBox="0 0 64 64">
+        <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#grad-mark)" />
+        <path d="M32 17 L32 42" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>
+        <path d="M31 17 L31 41 L18 41 Z" fill="#ffffff"/>
+        <path d="M33 22 L33 41 L46 41 Z" fill="#f0703c"/>
+        <path d="M19 42 L45 42 L40 49 L24 49 Z" fill="#ffffff"/>
+        <path d="M17 52 L47 52" stroke="#7dd3e6" stroke-width="2" stroke-linecap="round"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <!-- Configuración (se edita en config.js) -->
+  <script src="config.js"></script>
+  <!-- Generador de QR (offline) -> expone window.qrcode -->
+  <script src="vendor/qrcode.min.js"></script>
+  <!-- Aplicación (módulo ES) -->
+  <script type="module" src="js/app.js"></script>
+
+  <!-- Registro del Service Worker -->
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("service-worker.js").catch((err) => {
+          console.warn("No se pudo registrar el Service Worker:", err);
+        });
+      });
+    }
+  </script>
 </body>
 </html>

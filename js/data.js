@@ -1,303 +1,717 @@
-/* =========================================================================
-   PescaCorral — Capa de datos (prototipo)
-   Persistencia en localStorage. En el sistema real (ver TFG) esta lógica
-   vive en el backend Node.js + Express sobre PostgreSQL, con las
-   contraseñas cifradas mediante hash. Aquí se simula del lado cliente
-   para que el prototipo sea totalmente funcional y demostrable offline.
-   ========================================================================= */
-(function (global) {
-  'use strict';
+/* ============================================================================
+ *  PescaCorral · js/data.js
+ *  Capa de datos única para toda la app. Expone SIEMPRE la misma API, sin
+ *  importar si los datos vienen de:
+ *    · MODO SUPABASE  -> si config.js tiene URL + anon key (PostgreSQL real + RLS)
+ *    · MODO DEMO      -> si no hay credenciales (datos sembrados en localStorage)
+ *
+ *  El MODO DEMO permite probar y presentar la PWA sin backend (ideal defensa TFG).
+ * ========================================================================== */
 
-  const DB_KEY = 'pescacorral_db_v3';
-  const SESSION_KEY = 'pescacorral_session_v3';
-  const LOCK_KEY = 'pescacorral_locks_v3';
+const CFG = (typeof window !== "undefined" && window.PESCACORRAL_CONFIG) || {};
+const HAS_SUPABASE = Boolean(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY);
+export const MODE = HAS_SUPABASE ? "supabase" : "demo";
 
-  /* ---------- utilidades ---------- */
-  const uid = (p = 'id') => p + '_' + Math.random().toString(36).slice(2, 9);
-  const todayISO = () => new Date().toISOString().slice(0, 10);
-  const addDays = (iso, d) => { const x = new Date(iso + 'T00:00:00'); x.setDate(x.getDate() + d); return x.toISOString().slice(0, 10); };
+const DEMO_KEY = "pescacorral.demo.v1";
+const DEMO_PASS = "Demo1234!";
 
-  function seededRandom(str) { // determinístico por string
-    let h = 2166136261;
-    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
-    return function () { h += 0x6D2B79F5; let t = h; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-  }
+let sb = null;                 // cliente supabase (lazy)
+const authListeners = new Set();
 
-  const ROLES = {
-    pescador: { label: 'Pescador / Turista', short: 'Pescador', kind: 'mobile' },
-    dueno: { label: 'Dueño de Catamarán', short: 'Dueño', kind: 'mobile' },
-    municipio: { label: 'Administrador Municipal', short: 'Municipio', kind: 'admin' },
-    admin: { label: 'Administrador del Sistema', short: 'Sistema', kind: 'admin' },
+/* ============================================================================
+ *  INICIALIZACIÓN
+ * ========================================================================== */
+let _ready = null;
+function ready() {
+  if (_ready) return _ready;
+  _ready = (async () => {
+    if (MODE === "supabase") {
+      const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
+      sb = createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, {
+        auth: { persistSession: true, autoRefreshToken: true },
+      });
+      sb.auth.onAuthStateChange(() => authListeners.forEach((fn) => fn()));
+    } else {
+      seedDemo();
+    }
+  })();
+  return _ready;
+}
+
+/* ============================================================================
+ *  MODO DEMO · almacén local
+ * ========================================================================== */
+function loadDB() {
+  try { return JSON.parse(localStorage.getItem(DEMO_KEY)) || null; }
+  catch { return null; }
+}
+function saveDB(db) { localStorage.setItem(DEMO_KEY, JSON.stringify(db)); }
+let DB = null;
+
+const uid = () =>
+  (crypto.randomUUID && crypto.randomUUID()) ||
+  "id-" + Math.random().toString(16).slice(2) + Date.now().toString(16);
+
+/* PRNG determinista (mulberry32) para que los datos demo sean estables. */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+const isoFromOffset = (days, h = 12) => {
+  const d = new Date(); d.setDate(d.getDate() + days); d.setHours(h, 0, 0, 0);
+  return d;
+};
+const dateISO = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const todayISO = () => dateISO(new Date());
 
-  const ESPECIES = ['Pejerrey', 'Dorado', 'Bagre', 'Carpa'];
-  const ZONAS = ['Zona Norte', 'Zona Centro', 'Zona Sur', 'Embalse Cabra Corral'];
-  const HORARIOS = ['07:00', '07:30', '08:00', '09:00', '14:00', '15:30'];
+function seedDemo() {
+  DB = loadDB();
+  if (DB && DB.__v === 1) return;
 
-  /* ---------- datos semilla ---------- */
-  function seed() {
-    const usuarios = [
-      { id: 'u_carlos', nombre: 'Carlos Romero', email: 'carlos@pescacorral.com', pass: 'Pesca2026!', rol: 'pescador', dni: '24.355.789', tel: '+54 387 511 2233', creado: addDays(todayISO(), -120) },
-      { id: 'u_ramon', nombre: 'Ramón Díaz', email: 'dueno@pescacorral.com', pass: 'Pesca2026!', rol: 'dueno', dni: '20.118.402', tel: '+54 387 544 8890', creado: addDays(todayISO(), -200) },
-      { id: 'u_lucia', nombre: 'Lucía Funes', email: 'municipio@pescacorral.com', pass: 'Pesca2026!', rol: 'municipio', dni: '31.902.115', tel: '+54 387 422 0001', creado: addDays(todayISO(), -260) },
-      { id: 'u_admin', nombre: 'Admin Sistema', email: 'admin@pescacorral.com', pass: 'Pesca2026!', rol: 'admin', dni: '27.640.330', tel: '+54 387 400 0000', creado: addDays(todayISO(), -300) },
-      { id: 'u_ana', nombre: 'Ana Ruiz', email: 'ana@mail.com', pass: 'Pesca2026!', rol: 'pescador', dni: '33.214.870', tel: '+54 387 588 1212', creado: addDays(todayISO(), -40) },
-      { id: 'u_jorge', nombre: 'Jorge Pérez', email: 'jorge@mail.com', pass: 'Pesca2026!', rol: 'pescador', dni: '29.880.654', tel: '+54 387 510 7788', creado: addDays(todayISO(), -22) },
-      { id: 'u_marta', nombre: 'Marta Sosa', email: 'marta@mail.com', pass: 'Pesca2026!', rol: 'dueno', dni: '25.447.219', tel: '+54 387 533 9090', creado: addDays(todayISO(), -88) },
-    ];
+  const rnd = mulberry32(20260628);
+  const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
 
-    const catamaranes = [
-      { id: 'c_donjuan', nombre: 'Don Juan II', duenoId: 'u_ramon', capacidad: 20, precio: 8000, horario: '08:00', zona: 'Zona Centro', descripcion: 'Catamarán amplio con sombra y caña de pescar incluida.', activo: true },
-      { id: 'c_elpato', nombre: 'El Pato', duenoId: 'u_marta', capacidad: 16, precio: 7500, horario: '09:00', zona: 'Zona Norte', descripcion: 'Embarcación ágil ideal para grupos pequeños.', activo: true },
-      { id: 'c_victoria', nombre: 'La Victoria', duenoId: 'u_ramon', capacidad: 18, precio: 8500, horario: '07:30', zona: 'Zona Sur', descripcion: 'Salida temprano para pejerrey, con guía local.', activo: true },
-      { id: 'c_santarita', nombre: 'Santa Rita', duenoId: 'u_marta', capacidad: 12, precio: 6500, horario: '14:00', zona: 'Embalse Cabra Corral', descripcion: 'Paseo vespertino con equipamiento básico.', activo: true },
-    ];
+  /* --- Especies (fauna) --- */
+  const especies = [
+    { id: uid(), nombre: "Pejerrey", nombre_cientifico: "Odontesthes bonariensis", umbral_permisos: 400, descripcion: "Especie emblemática del dique, principal objetivo de la pesca deportiva." },
+    { id: uid(), nombre: "Dorado", nombre_cientifico: "Salminus brasiliensis", umbral_permisos: 150, descripcion: "Pesca con devolución obligatoria en temporada de veda." },
+    { id: uid(), nombre: "Bagre", nombre_cientifico: "Rhamdia quelen", umbral_permisos: 300, descripcion: "Especie de fondo, abundante en zonas de menor corriente." },
+    { id: uid(), nombre: "Carpa", nombre_cientifico: "Cyprinus carpio", umbral_permisos: 500, descripcion: "Especie introducida, sin restricciones de captura." },
+  ];
+  const pejerrey = especies[0];
 
-    const reservas = [];
-    const permisos = [];
-    const pagos = [];
-    let permCount = 1;
+  /* --- Usuarios demo --- */
+  const uPescador = { id: uid(), nombre: "Carlos", apellido: "Romero", email: "pescador@demo.com", telefono: "+54 387 4123456", dni: "24.356.789", rol: "pescador", activo: true, created_at: isoFromOffset(-120).toISOString() };
+  const uDueno    = { id: uid(), nombre: "Juan", apellido: "Pérez", email: "dueno@demo.com", telefono: "+54 387 4998877", dni: "20.111.222", rol: "dueno", activo: true, created_at: isoFromOffset(-200).toISOString() };
+  const uMuni     = { id: uid(), nombre: "Laura", apellido: "Gómez", email: "municipio@demo.com", telefono: "+54 387 4100100", dni: "27.654.321", rol: "admin_municipal", activo: true, created_at: isoFromOffset(-300).toISOString() };
+  const uAdmin    = { id: uid(), nombre: "Sofía", apellido: "Díaz", email: "admin@demo.com", telefono: "+54 387 4555000", dni: "30.222.111", rol: "admin_sistema", activo: true, created_at: isoFromOffset(-300).toISOString() };
+  const usuarios = [uPescador, uDueno, uMuni, uAdmin];
 
-    // genera actividad histórica de los últimos 30 días para nutrir el dashboard
-    const seedUsers = ['u_carlos', 'u_ana', 'u_jorge'];
-    for (let d = 30; d >= 0; d--) {
-      const fecha = addDays(todayISO(), -d);
-      const rnd = seededRandom('act' + fecha);
-      const cant = Math.floor(rnd() * 4) + (d % 7 === 0 ? 1 : 0); // algunas reservas por día
-      for (let i = 0; i < cant; i++) {
-        const cat = catamaranes[Math.floor(rnd() * catamaranes.length)];
-        const uId = seedUsers[Math.floor(rnd() * seedUsers.length)];
-        const n = Math.floor(rnd() * 3) + 1;
-        const lugares = [];
-        while (lugares.length < n) { const s = Math.floor(rnd() * cat.capacidad) + 1; if (!lugares.includes(s)) lugares.push(s); }
-        const total = cat.precio * lugares.length;
-        const rId = uid('r');
-        reservas.push({ id: rId, usuarioId: uId, catamaranId: cat.id, fecha, horario: cat.horario, lugares, total, estado: 'confirmada', creado: fecha });
-        pagos.push({ id: uid('p'), reservaId: rId, monto: total, metodo: 'tarjeta', estado: 'aprobado', comprobante: 'CMP-' + String(1000 + permCount), fecha });
-        const especie = ESPECIES[Math.floor(rnd() * ESPECIES.length)];
-        permisos.push({ id: uid('pm'), reservaId: rId, usuarioId: uId, codigo: 'PCC-' + String(10000 + permCount).slice(1), especie, zona: cat.zona, catamaranId: cat.id, fechaEmision: fecha, vencimiento: fecha, estado: d === 0 ? 'vigente' : 'vencido' });
-        permCount++;
-      }
+  /* --- Catamaranes (datos de los prototipos del TFG) --- */
+  const catData = [
+    { nombre: "Don Juan II", capacidad: 20, precio: 8000, estado: "activa",        prop: uDueno.id, hab: "HAB-2024-018", desc: "Catamarán techado con baño y cocina. Salidas diarias al espejo de agua." },
+    { nombre: "El Pato",     capacidad: 16, precio: 7500, estado: "activa",        prop: uDueno.id, hab: "HAB-2024-007", desc: "Embarcación familiar, ideal para grupos pequeños y principiantes." },
+    { nombre: "La Victoria", capacidad: 18, precio: 8500, estado: "activa",        prop: null,      hab: "HAB-2023-031", desc: "Cubierta amplia y sombra. Equipamiento de pesca incluido." },
+    { nombre: "Don Pescador",capacidad: 12, precio: 9500, estado: "activa",        prop: null,      hab: "HAB-2024-022", desc: "Salidas premium con guía de pesca especializado." },
+    { nombre: "Lago Azul",   capacidad: 14, precio: 8000, estado: "mantenimiento", prop: null,      hab: "HAB-2022-014", desc: "Temporalmente fuera de servicio por mantenimiento de motor." },
+  ];
+  const catamaranes = [], lugares = [];
+  for (const c of catData) {
+    const id = uid();
+    catamaranes.push({ id, id_propietario: c.prop, nombre: c.nombre, descripcion: c.desc, capacidad: c.capacidad, precio: c.precio, habilitacion: c.hab, estado: c.estado, created_at: isoFromOffset(-150).toISOString() });
+    const ubic = ["proa", "babor", "estribor", "popa"];
+    for (let n = 1; n <= c.capacidad; n++)
+      lugares.push({ id: uid(), id_catamaran: id, numero: n, ubicacion: ubic[(n - 1) % 4], activo: true });
+  }
+  const activos = catamaranes.filter((c) => c.estado === "activa");
+
+  /* --- Reservas / asientos / pagos / permisos sintéticos --- */
+  const reservas = [], reserva_lugar = [], pagos = [], permisos = [], notificaciones = [];
+  let seq = 215;
+  const metodos = ["tarjeta", "transferencia", "mercadopago", "efectivo"];
+  const lugaresDe = (catId) => lugares.filter((l) => l.id_catamaran === catId);
+  const ocupadoSet = new Set(); // `${lugarId}|${fecha}`
+
+  function crearReservaDemo({ cat, fecha, turno, nLugares, especie, estadoReserva, tipo, titular }) {
+    const libres = lugaresDe(cat.id).filter((l) => !ocupadoSet.has(`${l.id}|${fecha}`));
+    if (!libres.length) return;
+    const elegidos = [];
+    for (let k = 0; k < nLugares && libres.length; k++) {
+      const idx = Math.floor(rnd() * libres.length);
+      elegidos.push(libres.splice(idx, 1)[0]);
     }
-
-    // una reserva próxima activa de Carlos (para historial / permiso vigente del demo)
-    const futura = addDays(todayISO(), 2);
-    const rF = uid('r');
-    reservas.push({ id: rF, usuarioId: 'u_carlos', catamaranId: 'c_donjuan', fecha: futura, horario: '08:00', lugares: [12, 13], total: 16000, estado: 'confirmada', creado: todayISO() });
-    pagos.push({ id: uid('p'), reservaId: rF, monto: 16000, metodo: 'tarjeta', estado: 'aprobado', comprobante: 'CMP-' + String(1000 + permCount), fecha: todayISO() });
-    permisos.push({ id: 'pm_demo', reservaId: rF, usuarioId: 'u_carlos', codigo: 'PCC-0002B', especie: 'Pejerrey', zona: 'Zona Centro', catamaranId: 'c_donjuan', fechaEmision: todayISO(), vencimiento: futura, estado: 'vigente' });
-
-    const notificaciones = [
-      { id: uid('n'), usuarioId: 'u_carlos', tipo: 'reserva', titulo: 'Reserva confirmada', mensaje: 'Tu reserva en Don Juan II quedó confirmada para el ' + fmtDate(futura) + '.', leida: false, fecha: todayISO() },
-      { id: uid('n'), usuarioId: 'u_carlos', tipo: 'permiso', titulo: 'Permiso digital emitido', mensaje: 'Permiso PCC-0002B disponible. Presentalo desde la app ante cualquier control.', leida: false, fecha: todayISO() },
-      { id: uid('n'), usuarioId: 'u_carlos', tipo: 'recordatorio', titulo: 'Recordatorio de salida', mensaje: 'Tu jornada de pesca es en 2 días. La salida es a las 08:00 desde el puerto.', leida: true, fecha: todayISO() },
-    ];
-
-    return { usuarios, catamaranes, reservas, permisos, pagos, notificaciones, _seq: permCount };
-  }
-
-  /* ---------- persistencia ---------- */
-  let data = load();
-  function load() {
-    try { const raw = localStorage.getItem(DB_KEY); if (raw) return JSON.parse(raw); } catch (e) { }
-    const s = seed(); try { localStorage.setItem(DB_KEY, JSON.stringify(s)); } catch (e) { } return s;
-  }
-  function save() { try { localStorage.setItem(DB_KEY, JSON.stringify(data)); } catch (e) { } }
-  function reset() { data = seed(); save(); localStorage.removeItem(SESSION_KEY); localStorage.removeItem(LOCK_KEY); }
-
-  /* ---------- formato ---------- */
-  function fmtMoney(n) { return '$ ' + Number(n || 0).toLocaleString('es-AR'); }
-  function fmtDate(iso) { if (!iso) return ''; const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; }
-  function fmtDateLong(iso) { const dt = new Date(iso + 'T00:00:00'); return dt.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' }); }
-  function initials(name) { return name.split(' ').filter(Boolean).slice(0, 2).map(s => s[0].toUpperCase()).join(''); }
-
-  /* ---------- sesión / auth ---------- */
-  function getSession() { try { const id = localStorage.getItem(SESSION_KEY); return id ? data.usuarios.find(u => u.id === id) || null : null; } catch (e) { return null; } }
-  function setSession(id) { localStorage.setItem(SESSION_KEY, id); }
-  function logout() { localStorage.removeItem(SESSION_KEY); }
-
-  function passwordPolicy(pw) {
-    const len = (pw || '').length >= 8;
-    const upper = /[A-Z]/.test(pw);
-    const lower = /[a-z]/.test(pw);
-    const number = /[0-9]/.test(pw);
-    const special = /[^A-Za-z0-9]/.test(pw);
-    const passed = [len, upper, lower, number, special].filter(Boolean).length;
-    return { len, upper, lower, number, special, score: passed, valid: passed === 5 };
-  }
-
-  function getLocks() { try { return JSON.parse(localStorage.getItem(LOCK_KEY) || '{}'); } catch (e) { return {}; } }
-  function setLocks(l) { localStorage.setItem(LOCK_KEY, JSON.stringify(l)); }
-
-  function register({ nombre, email, tel, rol, pass }) {
-    email = (email || '').trim().toLowerCase();
-    if (!nombre || !email || !pass) return { ok: false, error: 'Completá los campos obligatorios.' };
-    if (data.usuarios.some(u => u.email === email)) return { ok: false, error: 'Ya existe una cuenta con ese correo electrónico.' };
-    if (!passwordPolicy(pass).valid) return { ok: false, error: 'La contraseña no cumple con los requisitos de seguridad.' };
-    const user = { id: uid('u'), nombre: nombre.trim(), email, tel: tel || '', rol: rol || 'pescador', dni: '', pass, creado: todayISO() };
-    data.usuarios.push(user); save(); setSession(user.id);
-    return { ok: true, user };
-  }
-
-  function login(email, pass) {
-    email = (email || '').trim().toLowerCase();
-    const locks = getLocks();
-    const rec = locks[email];
-    if (rec && rec.until && Date.now() < rec.until) {
-      const secs = Math.ceil((rec.until - Date.now()) / 1000);
-      return { ok: false, error: `Cuenta bloqueada temporalmente. Intentá de nuevo en ${secs}s.`, locked: true };
+    const monto = cat.precio * elegidos.length;
+    const rId = uid();
+    reservas.push({ id: rId, id_usuario: titular.id, id_catamaran: cat.id, fecha, turno, estado: estadoReserva, cantidad_lugares: elegidos.length, monto_total: monto, created_at: new Date(fecha + "T10:00:00").toISOString() });
+    const cancel = estadoReserva === "cancelada";
+    for (const l of elegidos) {
+      reserva_lugar.push({ id: uid(), id_reserva: rId, id_lugar: l.id, fecha, estado: cancel ? "cancelada" : "confirmada" });
+      if (!cancel) ocupadoSet.add(`${l.id}|${fecha}`);
     }
-    const user = data.usuarios.find(u => u.email === email);
-    if (!user || user.pass !== pass) {
-      const r = locks[email] || { fails: 0 };
-      r.fails += 1;
-      if (r.fails >= 5) { r.until = Date.now() + 30000; r.fails = 0; locks[email] = r; setLocks(locks); return { ok: false, error: 'Demasiados intentos fallidos. Cuenta bloqueada por 30 segundos.', locked: true }; }
-      locks[email] = r; setLocks(locks);
-      const restantes = 5 - r.fails;
-      return { ok: false, error: `Correo o contraseña incorrectos. ${restantes} intento${restantes === 1 ? '' : 's'} restante${restantes === 1 ? '' : 's'}.` };
-    }
-    delete locks[email]; setLocks(locks);
-    setSession(user.id);
-    return { ok: true, user };
+    pagos.push({ id: uid(), id_reserva: rId, monto, metodo: pick(metodos), estado: cancel ? "rechazado" : "aprobado", comprobante: "CMP-" + rId.replace(/-/g, "").slice(0, 10).toUpperCase(), fecha_pago: new Date(fecha + "T10:05:00").toISOString() });
+
+    const numero = "PCC-" + String(seq++).padStart(6, "0");
+    const emision = new Date(fecha + "T10:05:00");
+    const vence = new Date(emision);
+    if (tipo === "anual") vence.setFullYear(vence.getFullYear() + 1);
+    else if (tipo === "semanal") vence.setDate(vence.getDate() + 7);
+    else vence.setHours(23, 59, 0, 0);
+    let estadoP = cancel ? "anulado" : (vence.getTime() < Date.now() ? "vencido" : "vigente");
+    permisos.push({
+      id: uid(), id_reserva: rId, id_usuario: titular.id, id_especie: especie.id,
+      numero, tipo, codigo_qr: `${numero}|${titular.id}|${fecha}`,
+      fecha_emision: emision.toISOString(), fecha_vencimiento: vence.toISOString(), estado: estadoP,
+    });
+    return { rId, numero };
   }
 
-  function updateUser(id, patch) { const u = data.usuarios.find(x => x.id === id); if (u) { Object.assign(u, patch); save(); } return u; }
-  function setUserRole(id, rol) { return updateUser(id, { rol }); }
-
-  /* ---------- catamaranes ---------- */
-  const catamaranes = () => data.catamaranes.filter(c => c.activo);
-  const catamaran = (id) => data.catamaranes.find(c => c.id === id);
-  const catamaranesDe = (duenoId) => data.catamaranes.filter(c => c.duenoId === duenoId);
-  const usuario = (id) => data.usuarios.find(u => u.id === id);
-
-  function addCatamaran(c) { const nc = Object.assign({ id: uid('c'), activo: true }, c); data.catamaranes.push(nc); save(); return nc; }
-  function updateCatamaran(id, patch) { const c = catamaran(id); if (c) { Object.assign(c, patch); save(); } return c; }
-  function removeCatamaran(id) { const c = catamaran(id); if (c) { c.activo = false; save(); } }
-
-  // asientos ocupados para un catamarán+fecha+horario (reservas reales + ocupación simulada determinística)
-  function asientosOcupados(catId, fecha, horario) {
-    const cat = catamaran(catId); if (!cat) return new Set();
-    const taken = new Set();
-    data.reservas.filter(r => r.catamaranId === catId && r.fecha === fecha && r.horario === horario && r.estado !== 'cancelada')
-      .forEach(r => r.lugares.forEach(s => taken.add(s)));
-    // ocupación ambiental simulada (otros pescadores) — estable por fecha
-    const rnd = seededRandom(catId + fecha + horario);
-    const extra = Math.floor(rnd() * Math.max(2, cat.capacidad * 0.35));
-    let guard = 0;
-    while (taken.size < extra && guard++ < 100) { const s = Math.floor(rnd() * cat.capacidad) + 1; taken.add(s); }
-    return taken;
-  }
-  function disponibles(catId, fecha, horario) { const cat = catamaran(catId); return cat ? cat.capacidad - asientosOcupados(catId, fecha, horario).size : 0; }
-
-  /* ---------- reservas / pagos / permisos ---------- */
-  function crearReserva({ usuarioId, catamaranId, fecha, horario, lugares }) {
-    const cat = catamaran(catamaranId);
-    const total = cat.precio * lugares.length;
-    const r = { id: uid('r'), usuarioId, catamaranId, fecha, horario, lugares: lugares.slice(), total, estado: 'pendiente_pago', creado: todayISO() };
-    data.reservas.push(r); save(); return r;
-  }
-  function reserva(id) { return data.reservas.find(r => r.id === id); }
-  function reservasDe(usuarioId) { return data.reservas.filter(r => r.usuarioId === usuarioId).sort((a, b) => b.fecha.localeCompare(a.fecha)); }
-  function permisosDe(usuarioId) { return data.permisos.filter(p => p.usuarioId === usuarioId).sort((a, b) => b.fechaEmision.localeCompare(a.fechaEmision)); }
-  function permiso(id) { return data.permisos.find(p => p.id === id); }
-  function permisoDeReserva(rId) { return data.permisos.find(p => p.reservaId === rId); }
-
-  function pagarReserva(reservaId, metodo) {
-    const r = reserva(reservaId); if (!r) return { ok: false };
-    const pago = { id: uid('p'), reservaId, monto: r.total, metodo: metodo || 'tarjeta', estado: 'aprobado', comprobante: 'CMP-' + String(1000 + (data._seq++)), fecha: todayISO() };
-    data.pagos.push(pago);
-    r.estado = 'confirmada';
-    const cat = catamaran(r.catamaranId);
-    const codigo = 'PCC-' + String(10000 + data._seq).slice(1);
-    const pm = { id: uid('pm'), reservaId, usuarioId: r.usuarioId, codigo, especie: 'Pejerrey', zona: cat.zona, catamaranId: cat.id, fechaEmision: todayISO(), vencimiento: r.fecha, estado: 'vigente' };
-    data.permisos.push(pm);
-    notificar(r.usuarioId, 'reserva', 'Reserva confirmada', `Tu reserva en ${cat.nombre} quedó confirmada para el ${fmtDate(r.fecha)}.`);
-    notificar(r.usuarioId, 'permiso', 'Permiso digital emitido', `Permiso ${codigo} disponible para presentar ante cualquier control.`);
-    save();
-    return { ok: true, pago, permiso: pm };
+  // Histórico: ~38 reservas entre hace 30 días y hoy.
+  const especiePesos = [pejerrey, pejerrey, pejerrey, especies[2], especies[1], especies[3]];
+  for (let i = 0; i < 38; i++) {
+    const off = -Math.floor(rnd() * 30);
+    const fecha = dateISO(isoFromOffset(off));
+    const cat = pick(activos);
+    const past = off < 0;
+    const estadoReserva = i % 19 === 0 ? "cancelada" : (past ? (rnd() < 0.7 ? "completada" : "confirmada") : "confirmada");
+    crearReservaDemo({ cat, fecha, turno: rnd() < 0.6 ? "manana" : "tarde", nLugares: 1 + Math.floor(rnd() * 4), especie: pick(especiePesos), estadoReserva, tipo: rnd() < 0.85 ? "diario" : (rnd() < 0.5 ? "semanal" : "anual"), titular: uPescador });
   }
 
-  function pagoDeReserva(rId) { return data.pagos.find(p => p.reservaId === rId); }
+  // Reservas próximas (hoy + 3 días) en los catamaranes visibles, para que la
+  // grilla de asientos muestre lugares ocupados al demostrar la reserva.
+  const donJuan = catamaranes.find((c) => c.nombre === "Don Juan II");
+  const elPato  = catamaranes.find((c) => c.nombre === "El Pato");
+  [[donJuan, 0, 6], [donJuan, 1, 4], [elPato, 0, 3], [elPato, 2, 5], [donJuan, 2, 8]].forEach(([cat, off, n]) =>
+    crearReservaDemo({ cat, fecha: dateISO(isoFromOffset(off)), turno: "manana", nLugares: n, especie: pejerrey, estadoReserva: "confirmada", tipo: "diario", titular: uPescador })
+  );
 
-  /* ---------- notificaciones ---------- */
-  function notificar(usuarioId, tipo, titulo, mensaje) { data.notificaciones.unshift({ id: uid('n'), usuarioId, tipo, titulo, mensaje, leida: false, fecha: todayISO() }); save(); }
-  function notificacionesDe(usuarioId) { return data.notificaciones.filter(n => n.usuarioId === usuarioId); }
-  function noLeidas(usuarioId) { return notificacionesDe(usuarioId).filter(n => !n.leida).length; }
-  function marcarLeidas(usuarioId) { data.notificaciones.forEach(n => { if (n.usuarioId === usuarioId) n.leida = true; }); save(); }
+  // La reserva más reciente del pescador queda destacada con su permiso "estrella".
+  permisos.slice(-1).forEach((p) => { /* asegura vigente para la demo */ if (p.estado === "vencido") p.estado = "vigente"; });
 
-  /* ---------- estadísticas (municipio) ---------- */
-  function statsResumen() {
-    const hoy = todayISO();
-    const reservasHoy = data.reservas.filter(r => r.fecha === hoy).length;
-    const ayer = addDays(hoy, -1);
-    const reservasAyer = data.reservas.filter(r => r.fecha === ayer).length || 1;
-    const permisosEmitidos = data.permisos.length;
-    const ingresos = data.pagos.filter(p => p.estado === 'aprobado').reduce((a, p) => a + p.monto, 0);
-    const ingresosMes = data.pagos.filter(p => p.estado === 'aprobado' && p.fecha >= addDays(hoy, -30)).reduce((a, p) => a + p.monto, 0);
-    return {
-      reservasHoy, permisosEmitidos, ingresos, ingresosMes,
-      deltaReservas: Math.round(((reservasHoy - reservasAyer) / reservasAyer) * 100),
-      usuariosActivos: new Set(data.reservas.map(r => r.usuarioId)).size,
-    };
-  }
-  function reservasPorDia(dias = 7) {
-    const out = [];
-    for (let i = dias - 1; i >= 0; i--) {
-      const f = addDays(todayISO(), -i);
-      const dt = new Date(f + 'T00:00:00');
-      out.push({ label: ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'][dt.getDay()], value: data.reservas.filter(r => r.fecha === f).length, fecha: f });
-    }
-    return out;
-  }
-  function ocupacionFlota() {
-    const hoy = todayISO();
-    let ocupados = 0, total = 0;
-    catamaranes().forEach(c => { total += c.capacidad; ocupados += asientosOcupados(c.id, hoy, c.horario).size; });
-    return { ocupados, disponibles: total - ocupados, total };
-  }
-  function permisosPorEspecie() {
-    const m = {}; ESPECIES.forEach(e => m[e] = 0);
-    data.permisos.forEach(p => { m[p.especie] = (m[p.especie] || 0) + 1; });
-    return Object.entries(m).map(([k, v]) => ({ label: k, value: v }));
-  }
-  function permisosPorZona() {
-    const m = {};
-    data.permisos.forEach(p => { m[p.zona] = (m[p.zona] || 0) + 1; });
-    return Object.entries(m).map(([k, v]) => ({ label: k, value: v }));
-  }
-  function ultimosPermisos(n = 8) {
-    return data.permisos.slice().sort((a, b) => b.fechaEmision.localeCompare(a.fechaEmision)).slice(0, n)
-      .map(p => ({ ...p, usuario: usuario(p.usuarioId), catamaran: catamaran(p.catamaranId) }));
-  }
-  // indicadores ambientales (Tabla 2 del TFG) + umbral de alerta para fauna
-  function indicadoresFauna() {
-    const porEspecie = permisosPorEspecie();
-    const UMBRAL = { Pejerrey: 60, Dorado: 20, Bagre: 30, Carpa: 30 };
-    return porEspecie.map(e => ({ especie: e.label, emitidos: e.value, umbral: UMBRAL[e.label] || 40, ratio: Math.min(1, e.value / (UMBRAL[e.label] || 40)), alerta: e.value >= (UMBRAL[e.label] || 40) }));
-  }
+  /* --- Notificaciones del pescador --- */
+  const ultReservas = reservas.filter((r) => r.id_usuario === uPescador.id && r.estado !== "cancelada").slice(-3).reverse();
+  ultReservas.forEach((r, i) => {
+    notificaciones.push({ id: uid(), id_usuario: uPescador.id, tipo: "reserva", titulo: "Reserva confirmada", mensaje: `Tu reserva del ${r.fecha.split("-").reverse().join("/")} fue confirmada.`, leida: i > 0, created_at: new Date(r.fecha + "T10:06:00").toISOString() });
+  });
+  notificaciones.push({ id: uid(), id_usuario: uPescador.id, tipo: "recordatorio", titulo: "Recordatorio de salida", mensaje: "Recordá presentar tu permiso digital al embarcar.", leida: false, created_at: isoFromOffset(-1, 9).toISOString() });
 
-  function listUsuarios() { return data.usuarios.map(u => ({ ...u, reservas: data.reservas.filter(r => r.usuarioId === u.id).length })); }
+  /* --- Alertas de fauna (HU-015) con números realistas para la demo --- */
+  const periodo = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })();
+  const alertas = [
+    { id: uid(), id_especie: pejerrey.id, periodo, permisos_emitidos: 372, umbral: 400, estado: "activa", created_at: isoFromOffset(-2).toISOString() },
+    { id: uid(), id_especie: especies[1].id, periodo, permisos_emitidos: 138, umbral: 150, estado: "activa", created_at: isoFromOffset(-3).toISOString() },
+    { id: uid(), id_especie: especies[2].id, periodo, permisos_emitidos: 210, umbral: 300, estado: "activa", created_at: isoFromOffset(-5).toISOString() },
+  ];
 
-  /* ---------- export CSV (reportes) ---------- */
-  function permisosCSV() {
-    const head = ['Codigo', 'Usuario', 'DNI', 'Catamaran', 'Especie', 'Zona', 'Emision', 'Vencimiento', 'Estado'];
-    const rows = data.permisos.map(p => { const u = usuario(p.usuarioId), c = catamaran(p.catamaranId); return [p.codigo, u ? u.nombre : '', u ? u.dni : '', c ? c.nombre : '', p.especie, p.zona, p.fechaEmision, p.vencimiento, p.estado]; });
-    return [head, ...rows].map(r => r.map(x => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
+  DB = { __v: 1, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, seq, passwords: {}, session: null };
+  saveDB(DB);
+}
+
+function persist() { if (DB) saveDB(DB); }
+function emitAuth() { authListeners.forEach((fn) => fn()); }
+
+/* ---- helpers demo ---- */
+const byId = (arr, id) => arr.find((x) => x.id === id);
+function demoSessionUser() {
+  if (!DB?.session?.userId) return null;
+  return byId(DB.usuarios, DB.session.userId) || null;
+}
+function demoPassword(email) {
+  return DB.passwords[email] || DEMO_PASS; // cuentas sembradas usan Demo1234!
+}
+function applyPermisoEstado(p) {
+  if (p.estado === "anulado") return p;
+  if (p.estado !== "vencido" && new Date(p.fecha_vencimiento).getTime() < Date.now())
+    return { ...p, estado: "vencido" };
+  return p;
+}
+
+/* ============================================================================
+ *  AUTENTICACIÓN
+ * ========================================================================== */
+export function onAuthChange(fn) {
+  authListeners.add(fn);
+  return () => authListeners.delete(fn);
+}
+
+export async function getSession() {
+  await ready();
+  if (MODE === "supabase") {
+    const { data } = await sb.auth.getSession();
+    if (!data.session) return null;
+    const profile = await fetchProfileSupabase(data.session.user.id);
+    return { user: { id: data.session.user.id, email: data.session.user.email }, profile };
   }
+  const u = demoSessionUser();
+  return u ? { user: { id: u.id, email: u.email }, profile: u } : null;
+}
 
-  /* ---------- API pública ---------- */
-  global.Store = {
-    ROLES, ESPECIES, ZONAS, HORARIOS,
-    fmtMoney, fmtDate, fmtDateLong, initials, todayISO, addDays,
-    reset, getSession, setSession, logout,
-    passwordPolicy, register, login, updateUser, setUserRole, usuario, listUsuarios,
-    catamaranes, catamaran, catamaranesDe, addCatamaran, updateCatamaran, removeCatamaran,
-    asientosOcupados, disponibles,
-    crearReserva, reserva, reservasDe, pagarReserva, pagoDeReserva,
-    permiso, permisosDe, permisoDeReserva,
-    notificar, notificacionesDe, noLeidas, marcarLeidas,
-    statsResumen, reservasPorDia, ocupacionFlota, permisosPorEspecie, permisosPorZona, ultimosPermisos, indicadoresFauna,
-    permisosCSV,
-    get raw() { return data; },
+async function fetchProfileSupabase(id) {
+  const { data, error } = await sb.from("usuario").select("*").eq("id", id).single();
+  if (error) return null;
+  return data;
+}
+
+export async function signIn(email, password) {
+  await ready();
+  email = (email || "").trim().toLowerCase();
+  if (MODE === "supabase") {
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) throw new Error(traducirAuth(error.message));
+    return true;
+  }
+  const u = DB.usuarios.find((x) => x.email.toLowerCase() === email);
+  if (!u || demoPassword(u.email) !== password)
+    throw new Error("Email o contraseña incorrectos.");
+  DB.session = { userId: u.id }; persist(); emitAuth();
+  return true;
+}
+
+export async function signUp({ nombre, apellido, email, telefono, dni, rol = "pescador", password }) {
+  await ready();
+  email = (email || "").trim().toLowerCase();
+  if (MODE === "supabase") {
+    const { error } = await sb.auth.signUp({
+      email, password,
+      options: { data: { nombre, apellido, telefono, dni, rol } },
+    });
+    if (error) throw new Error(traducirAuth(error.message));
+    return true;
+  }
+  if (DB.usuarios.some((x) => x.email.toLowerCase() === email))
+    throw new Error("Ya existe una cuenta con ese email.");
+  const u = { id: uid(), nombre, apellido: apellido || "", email, telefono: telefono || "", dni: dni || "", rol, activo: true, created_at: new Date().toISOString() };
+  DB.usuarios.push(u);
+  DB.passwords[email] = password;
+  DB.session = { userId: u.id };
+  persist(); emitAuth();
+  return true;
+}
+
+export async function signOut() {
+  await ready();
+  if (MODE === "supabase") { await sb.auth.signOut(); return; }
+  DB.session = null; persist(); emitAuth();
+}
+
+export async function updateProfile(patch) {
+  await ready();
+  if (MODE === "supabase") {
+    const { data: s } = await sb.auth.getSession();
+    const id = s.session?.user?.id;
+    const { error } = await sb.from("usuario").update(patch).eq("id", id);
+    if (error) throw new Error(error.message);
+    emitAuth();
+    return true;
+  }
+  const u = demoSessionUser();
+  Object.assign(u, patch); persist(); emitAuth();
+  return true;
+}
+
+function traducirAuth(msg = "") {
+  const m = msg.toLowerCase();
+  if (m.includes("invalid login")) return "Email o contraseña incorrectos.";
+  if (m.includes("already registered") || m.includes("already exists")) return "Ya existe una cuenta con ese email.";
+  if (m.includes("password")) return "La contraseña no cumple los requisitos mínimos.";
+  if (m.includes("email")) return "Revisá el email ingresado.";
+  return msg || "No se pudo completar la operación.";
+}
+
+/* ============================================================================
+ *  CATAMARANES Y LUGARES
+ * ========================================================================== */
+export async function listCatamaranes() {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("catamaran").select("*").order("nombre");
+    if (error) throw error; return data;
+  }
+  return [...DB.catamaranes].sort((a, b) => a.nombre.localeCompare(b.nombre));
+}
+
+export async function getCatamaran(id) {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("catamaran").select("*").eq("id", id).single();
+    if (error) throw error; return data;
+  }
+  return byId(DB.catamaranes, id) || null;
+}
+
+export async function getLugares(catId) {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("lugar").select("*").eq("id_catamaran", catId).order("numero");
+    if (error) throw error; return data;
+  }
+  return DB.lugares.filter((l) => l.id_catamaran === catId).sort((a, b) => a.numero - b.numero);
+}
+
+/** Devuelve un array con los IDs de lugar ocupados para esa fecha. */
+export async function getOcupacion(catId, fecha) {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("reserva_lugar")
+      .select("id_lugar, lugar!inner(id_catamaran)")
+      .eq("fecha", fecha).eq("estado", "confirmada").eq("lugar.id_catamaran", catId);
+    if (error) throw error;
+    return data.map((r) => r.id_lugar);
+  }
+  const ids = new Set(DB.lugares.filter((l) => l.id_catamaran === catId).map((l) => l.id));
+  return DB.reserva_lugar.filter((rl) => rl.fecha === fecha && rl.estado === "confirmada" && ids.has(rl.id_lugar)).map((rl) => rl.id_lugar);
+}
+
+export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo = "tarjeta", tipoPermiso = "diario", especieId = null }) {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.rpc("crear_reserva_completa", {
+      p_id_catamaran: catamaranId, p_fecha: fecha, p_turno: turno,
+      p_lugares: lugares, p_metodo_pago: metodo, p_tipo_permiso: tipoPermiso, p_id_especie: especieId,
+    });
+    if (error) throw new Error(error.message);
+    return data;
+  }
+  // Demo: replica la lógica del RPC crear_reserva_completa.
+  const u = demoSessionUser();
+  const cat = byId(DB.catamaranes, catamaranId);
+  if (!cat) throw new Error("El catamarán no existe.");
+  if (!lugares?.length) throw new Error("Elegí al menos un lugar.");
+  for (const lid of lugares) {
+    const ocupado = DB.reserva_lugar.some((rl) => rl.id_lugar === lid && rl.fecha === fecha && rl.estado === "confirmada");
+    if (ocupado) throw new Error("Uno de los lugares ya fue reservado. Actualizá la grilla.");
+  }
+  const monto = cat.precio * lugares.length;
+  const rId = uid();
+  DB.reservas.push({ id: rId, id_usuario: u.id, id_catamaran: cat.id, fecha, turno: turno || "manana", estado: "confirmada", cantidad_lugares: lugares.length, monto_total: monto, created_at: new Date().toISOString() });
+  for (const lid of lugares)
+    DB.reserva_lugar.push({ id: uid(), id_reserva: rId, id_lugar: lid, fecha, estado: "confirmada" });
+  DB.pagos.push({ id: uid(), id_reserva: rId, monto, metodo, estado: "aprobado", comprobante: "CMP-" + rId.replace(/-/g, "").slice(0, 10).toUpperCase(), fecha_pago: new Date().toISOString() });
+
+  const numero = "PCC-" + String(DB.seq++).padStart(6, "0");
+  const emision = new Date();
+  const vence = new Date(fecha + "T23:59:00");
+  if (tipoPermiso === "anual") { vence.setTime(new Date(fecha).getTime()); vence.setFullYear(vence.getFullYear() + 1); }
+  else if (tipoPermiso === "semanal") { vence.setTime(new Date(fecha).getTime()); vence.setDate(vence.getDate() + 7); }
+  const pId = uid();
+  const codigo = `${numero}|${u.id}|${fecha}`;
+  DB.permisos.push({ id: pId, id_reserva: rId, id_usuario: u.id, id_especie: especieId, numero, tipo: tipoPermiso, codigo_qr: codigo, fecha_emision: emision.toISOString(), fecha_vencimiento: vence.toISOString(), estado: "vigente" });
+  DB.notificaciones.unshift({ id: uid(), id_usuario: u.id, tipo: "reserva", titulo: "Reserva confirmada", mensaje: `Tu reserva del ${fecha.split("-").reverse().join("/")} fue confirmada. Permiso ${numero}.`, leida: false, created_at: emision.toISOString() });
+  persist();
+  return { reserva_id: rId, permiso_id: pId, numero_permiso: numero, monto_total: monto, codigo_qr: codigo, fecha_vencimiento: vence.toISOString() };
+}
+
+export async function anularReserva(reservaId) {
+  await ready();
+  if (MODE === "supabase") {
+    const { error } = await sb.rpc("anular_reserva", { p_id_reserva: reservaId });
+    if (error) throw new Error(error.message);
+    return true;
+  }
+  const r = byId(DB.reservas, reservaId);
+  if (!r) throw new Error("La reserva no existe.");
+  r.estado = "cancelada";
+  DB.reserva_lugar.filter((rl) => rl.id_reserva === reservaId).forEach((rl) => (rl.estado = "cancelada"));
+  DB.permisos.filter((p) => p.id_reserva === reservaId).forEach((p) => (p.estado = "anulado"));
+  persist();
+  return true;
+}
+
+/* ============================================================================
+ *  RESERVAS Y PERMISOS DEL USUARIO
+ * ========================================================================== */
+function scopeReservasDemo(u) {
+  if (u.rol === "admin_municipal" || u.rol === "admin_sistema") return DB.reservas;
+  if (u.rol === "dueno") {
+    const mis = new Set(DB.catamaranes.filter((c) => c.id_propietario === u.id).map((c) => c.id));
+    return DB.reservas.filter((r) => mis.has(r.id_catamaran));
+  }
+  return DB.reservas.filter((r) => r.id_usuario === u.id);
+}
+
+export async function listReservas() {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("reserva")
+      .select("*, catamaran(nombre), permiso(id,numero,estado)")
+      .order("fecha", { ascending: false });
+    if (error) throw error;
+    return data.map((r) => {
+      // PostgREST devuelve la relación 1‑a‑1 (permiso) como objeto; 1‑a‑N como arreglo.
+      const per = Array.isArray(r.permiso) ? r.permiso[0] : r.permiso;
+      return {
+        ...r, catamaran_nombre: r.catamaran?.nombre || "",
+        permiso_id: per?.id || null, numero_permiso: per?.numero || null,
+      };
+    });
+  }
+  const u = demoSessionUser();
+  return scopeReservasDemo(u)
+    .slice().sort((a, b) => (a.fecha < b.fecha ? 1 : -1))
+    .map((r) => {
+      const cat = byId(DB.catamaranes, r.id_catamaran);
+      const per = DB.permisos.find((p) => p.id_reserva === r.id);
+      return { ...r, catamaran_nombre: cat?.nombre || "", permiso_id: per?.id || null, numero_permiso: per?.numero || null };
+    });
+}
+
+function scopePermisosDemo(u) {
+  if (u.rol === "admin_municipal" || u.rol === "admin_sistema") return DB.permisos;
+  if (u.rol === "dueno") {
+    const mis = new Set(DB.catamaranes.filter((c) => c.id_propietario === u.id).map((c) => c.id));
+    const res = new Set(DB.reservas.filter((r) => mis.has(r.id_catamaran)).map((r) => r.id));
+    return DB.permisos.filter((p) => res.has(p.id_reserva));
+  }
+  return DB.permisos.filter((p) => p.id_usuario === u.id);
+}
+
+export async function listPermisos() {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("permiso")
+      .select("*, especie(nombre), reserva(fecha,turno,catamaran(nombre))")
+      .order("fecha_emision", { ascending: false });
+    if (error) throw error;
+    return data.map(mapPermisoSupabase);
+  }
+  const u = demoSessionUser();
+  return scopePermisosDemo(u)
+    .slice().sort((a, b) => (a.fecha_emision < b.fecha_emision ? 1 : -1))
+    .map((p) => enrichPermisoDemo(applyPermisoEstado(p)));
+}
+
+export async function getPermiso(id) {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("permiso")
+      .select("*, especie(nombre,nombre_cientifico), reserva(fecha,turno,cantidad_lugares,monto_total,catamaran(nombre)), usuario(nombre,apellido,dni)")
+      .eq("id", id).single();
+    if (error) throw error;
+    return mapPermisoSupabase(data, true);
+  }
+  const p = byId(DB.permisos, id);
+  if (!p) return null;
+  return enrichPermisoDemo(applyPermisoEstado(p), true);
+}
+
+function enrichPermisoDemo(p, full = false) {
+  const r = byId(DB.reservas, p.id_reserva);
+  const cat = r ? byId(DB.catamaranes, r.id_catamaran) : null;
+  const esp = p.id_especie ? byId(DB.especies, p.id_especie) : null;
+  const titular = byId(DB.usuarios, p.id_usuario);
+  const base = {
+    ...p, especie_nombre: esp?.nombre || "—", catamaran_nombre: cat?.nombre || "—",
+    fecha: r?.fecha || null, turno: r?.turno || null,
+    titular_nombre: titular ? `${titular.nombre} ${titular.apellido}`.trim() : "—",
+    titular_dni: titular?.dni || "—",
   };
-})(window);
+  if (full) {
+    base.especie_cientifico = esp?.nombre_cientifico || "";
+    base.cantidad_lugares = r?.cantidad_lugares || 0;
+    base.monto_total = r?.monto_total || 0;
+  }
+  return base;
+}
+
+function mapPermisoSupabase(p, full = false) {
+  const r = p.reserva || {};
+  const out = {
+    ...p, especie_nombre: p.especie?.nombre || "—",
+    catamaran_nombre: r.catamaran?.nombre || "—",
+    fecha: r.fecha || null, turno: r.turno || null,
+    titular_nombre: p.usuario ? `${p.usuario.nombre} ${p.usuario.apellido || ""}`.trim() : "—",
+    titular_dni: p.usuario?.dni || "—",
+  };
+  if (full) {
+    out.especie_cientifico = p.especie?.nombre_cientifico || "";
+    out.cantidad_lugares = r.cantidad_lugares || 0;
+    out.monto_total = r.monto_total || 0;
+  }
+  return out;
+}
+
+/* ============================================================================
+ *  NOTIFICACIONES
+ * ========================================================================== */
+export async function listNotificaciones() {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("notificacion").select("*").order("created_at", { ascending: false }).limit(30);
+    if (error) throw error; return data;
+  }
+  const u = demoSessionUser();
+  return DB.notificaciones.filter((n) => n.id_usuario === u.id).slice().sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+}
+
+export async function marcarLeidas() {
+  await ready();
+  if (MODE === "supabase") {
+    const { data: s } = await sb.auth.getSession();
+    const { error } = await sb.from("notificacion").update({ leida: true }).eq("id_usuario", s.session.user.id).eq("leida", false);
+    if (error) throw error; emitAuth(); return true;
+  }
+  const u = demoSessionUser();
+  DB.notificaciones.filter((n) => n.id_usuario === u.id).forEach((n) => (n.leida = true));
+  persist(); emitAuth();
+  return true;
+}
+
+/* ============================================================================
+ *  ESPECIES (fauna)
+ * ========================================================================== */
+export async function listEspecies() {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("especie").select("*").order("nombre");
+    if (error) throw error; return data;
+  }
+  return [...DB.especies].sort((a, b) => a.nombre.localeCompare(b.nombre));
+}
+
+/* ============================================================================
+ *  PANEL MUNICIPAL / REPORTES
+ * ========================================================================== */
+export async function dashboardResumen() {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("v_dashboard_resumen").select("*").single();
+    if (error) throw error; return data;
+  }
+  const hoy = todayISO();
+  const conf = (r) => r.estado !== "cancelada";
+  const permisosVig = DB.permisos.map(applyPermisoEstado);
+  return {
+    reservas_hoy: DB.reservas.filter((r) => r.fecha === hoy && conf(r)).length,
+    reservas_total: DB.reservas.filter(conf).length,
+    permisos_vigentes: permisosVig.filter((p) => p.estado === "vigente").length,
+    permisos_total: DB.permisos.length,
+    ingresos_total: DB.pagos.filter((p) => p.estado === "aprobado").reduce((s, p) => s + p.monto, 0),
+    usuarios_pescadores: DB.usuarios.filter((u) => u.rol === "pescador").length,
+    alertas_activas: DB.alertas.filter((a) => a.estado === "activa").length,
+  };
+}
+
+export async function reservasPorDia({ from, to } = {}) {
+  await ready();
+  if (MODE === "supabase") {
+    let q = sb.from("v_reservas_por_dia").select("*");
+    if (from) q = q.gte("fecha", from);
+    if (to) q = q.lte("fecha", to);
+    const { data, error } = await q;
+    if (error) throw error; return data;
+  }
+  const map = new Map();
+  DB.reservas.filter((r) => r.estado === "confirmada" || r.estado === "completada")
+    .filter((r) => (!from || r.fecha >= from) && (!to || r.fecha <= to))
+    .forEach((r) => {
+      const e = map.get(r.fecha) || { fecha: r.fecha, cantidad_reservas: 0, ingresos: 0 };
+      e.cantidad_reservas++; e.ingresos += r.monto_total; map.set(r.fecha, e);
+    });
+  return [...map.values()].sort((a, b) => (a.fecha < b.fecha ? -1 : 1));
+}
+
+export async function ocupacionCatamaranes() {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("v_ocupacion_catamaran").select("*");
+    if (error) throw error; return data;
+  }
+  return DB.catamaranes.map((c) => {
+    const ids = new Set(DB.lugares.filter((l) => l.id_catamaran === c.id).map((l) => l.id));
+    const ocup = DB.reserva_lugar.filter((rl) => rl.estado === "confirmada" && ids.has(rl.id_lugar)).length;
+    return { id: c.id, nombre: c.nombre, capacidad: c.capacidad, lugares_ocupados: ocup };
+  }).sort((a, b) => a.nombre.localeCompare(b.nombre));
+}
+
+export async function permisosPorEspecie() {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("v_permisos_por_especie").select("*");
+    if (error) throw error; return data;
+  }
+  return DB.especies.map((e) => ({
+    id: e.id, especie: e.nombre, umbral_permisos: e.umbral_permisos,
+    permisos_emitidos: DB.permisos.filter((p) => p.id_especie === e.id && p.estado !== "anulado").length,
+  })).sort((a, b) => b.permisos_emitidos - a.permisos_emitidos);
+}
+
+export async function alertasFauna() {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("alerta_fauna")
+      .select("*, especie(nombre)").eq("estado", "activa").order("created_at", { ascending: false });
+    if (error) throw error;
+    return data.map((a) => ({ ...a, especie: a.especie?.nombre || "—" }));
+  }
+  return DB.alertas.filter((a) => a.estado === "activa").map((a) => ({
+    ...a, especie: (byId(DB.especies, a.id_especie) || {}).nombre || "—",
+  }));
+}
+
+export async function ultimosPermisos(limit = 6) {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("permiso")
+      .select("id,numero,estado,fecha_emision,especie(nombre),usuario(nombre,apellido),reserva(fecha)")
+      .order("fecha_emision", { ascending: false }).limit(limit);
+    if (error) throw error;
+    return data.map((p) => ({
+      id: p.id, numero: p.numero, estado: p.estado,
+      titular: p.usuario ? `${p.usuario.nombre} ${p.usuario.apellido || ""}`.trim() : "—",
+      especie: p.especie?.nombre || "—", fecha: p.reserva?.fecha || null,
+    }));
+  }
+  return DB.permisos.map(applyPermisoEstado).slice()
+    .sort((a, b) => (a.fecha_emision < b.fecha_emision ? 1 : -1)).slice(0, limit)
+    .map((p) => {
+      const r = byId(DB.reservas, p.id_reserva);
+      const t = byId(DB.usuarios, p.id_usuario);
+      return { id: p.id, numero: p.numero, estado: p.estado, titular: t ? `${t.nombre} ${t.apellido}`.trim() : "—", especie: (byId(DB.especies, p.id_especie) || {}).nombre || "—", fecha: r?.fecha || null };
+    });
+}
+
+/* ============================================================================
+ *  ADMINISTRACIÓN: usuarios y catamaranes
+ * ========================================================================== */
+export async function listUsuarios() {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("usuario").select("*").order("created_at", { ascending: false });
+    if (error) throw error; return data;
+  }
+  return [...DB.usuarios].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+}
+
+export async function setRol(userId, rol) {
+  await ready();
+  if (MODE === "supabase") {
+    const { error } = await sb.from("usuario").update({ rol }).eq("id", userId);
+    if (error) throw new Error(error.message); return true;
+  }
+  const u = byId(DB.usuarios, userId); if (u) u.rol = rol; persist();
+  return true;
+}
+
+export async function crearCatamaran({ nombre, descripcion, capacidad, precio, habilitacion, estado = "activa" }) {
+  await ready();
+  if (MODE === "supabase") {
+    const { data: s } = await sb.auth.getSession();
+    const { data, error } = await sb.from("catamaran")
+      .insert({ nombre, descripcion, capacidad, precio, habilitacion, estado, id_propietario: s.session?.user?.id })
+      .select().single();
+    if (error) throw new Error(error.message);
+    // genera asientos
+    const filas = Array.from({ length: capacidad }, (_, i) => ({ id_catamaran: data.id, numero: i + 1, ubicacion: ["proa", "babor", "estribor", "popa"][i % 4] }));
+    await sb.from("lugar").insert(filas);
+    return data;
+  }
+  const u = demoSessionUser();
+  const id = uid();
+  const cat = { id, id_propietario: u.id, nombre, descripcion: descripcion || "", capacidad: +capacidad, precio: +precio, habilitacion: habilitacion || "", estado, created_at: new Date().toISOString() };
+  DB.catamaranes.push(cat);
+  for (let n = 1; n <= capacidad; n++)
+    DB.lugares.push({ id: uid(), id_catamaran: id, numero: n, ubicacion: ["proa", "babor", "estribor", "popa"][(n - 1) % 4], activo: true });
+  persist();
+  return cat;
+}
+
+export async function updateCatamaran(id, patch) {
+  await ready();
+  if (MODE === "supabase") {
+    const { error } = await sb.from("catamaran").update(patch).eq("id", id);
+    if (error) throw new Error(error.message); return true;
+  }
+  const c = byId(DB.catamaranes, id); if (c) Object.assign(c, patch); persist();
+  return true;
+}
+
+/* Reinicia los datos demo (botón en Perfil). */
+export async function resetDemo() {
+  if (MODE !== "demo") return;
+  localStorage.removeItem(DEMO_KEY);
+  DB = null; seedDemo(); emitAuth();
+}
