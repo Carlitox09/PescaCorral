@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=5.0">
+  <title>PescaCorral — Pesca embarcada en Dique Cabra Corral</title>
+  <meta name="description" content="Reservá tu lugar de pesca embarcada, pagá online y llevá tu permiso digital. Dique Cabra Corral, Salta.">
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#0A1E3F">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="PescaCorral">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+
+  <!-- Estilos -->
+  <link rel="stylesheet" href="css/fonts.css">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div id="app"><!-- la app se renderiza acá --></div>
+  <div id="toasts"></div>
+
+  <!-- Capas JS (el orden importa) -->
+  <script defer src="js/qrcode.js"></script>
+  <script defer src="js/data.js"></script>
+  <script defer src="js/ui.js"></script>
+  <script defer src="js/views.js"></script>
+  <script defer src="js/app.js"></script>
+</body>
+</html>
