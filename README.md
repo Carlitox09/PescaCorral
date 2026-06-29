@@ -1,197 +1,320 @@
-# 🎣 PescaCorral — PWA de reservas y permisos de pesca
+# PescaCorral — PWA para reservas y permisos de pesca
 
-Aplicación web progresiva (**PWA**) para digitalizar la pesca deportiva en el **Dique Cabra Corral** (Coronel Moldes, Salta). Permite a los pescadores reservar lugares en catamaranes habilitados, pagar y obtener un **permiso municipal digital con código QR**; a los dueños de embarcaciones gestionar sus catamaranes; y al **Municipio** monitorear la actividad y la presión sobre la fauna desde un panel de control.
+PescaCorral es una aplicación web progresiva orientada a la gestión de reservas y permisos de pesca deportiva en el **Dique Cabra Corral**, ubicado en Coronel Moldes, Salta.
 
-Este repositorio es la implementación del TFG e incluye **dos piezas**:
+El sistema permite que pescadores y turistas puedan consultar catamaranes disponibles, reservar lugares, realizar un pago simulado y obtener un permiso municipal digital con código QR. También contempla el uso por parte de los dueños de embarcaciones, quienes pueden administrar sus catamaranes, y del Municipio, que cuenta con un panel para consultar información general sobre reservas, permisos, ingresos y actividad pesquera.
 
-1. Una **PWA** en HTML/CSS/JavaScript *vanilla* (sin framework ni paso de compilación), lista para **GitHub Pages**.
-2. La **base de datos relacional completa** (PostgreSQL / Supabase) en `database/`.
+Este repositorio forma parte del desarrollo del Trabajo Final de Grado y contiene dos componentes principales:
 
-La app arranca en **modo demo** (datos de ejemplo en el navegador) y, al cargar credenciales de Supabase, pasa a usar la **base de datos real** con autenticación y seguridad por filas (RLS).
+1. Una **PWA** desarrollada con HTML, CSS y JavaScript vanilla, sin frameworks ni procesos de compilación.
+2. Una **base de datos relacional** preparada para PostgreSQL / Supabase, ubicada en la carpeta `database/`.
 
----
-
-## ✨ Funcionalidades
-
-- **Pescador / Turista:** registro con validación de contraseña segura, exploración de catamaranes por fecha y turno, selección visual de asientos, pago simulado, permiso digital con QR, historial de reservas y permisos, notificaciones.
-- **Dueño de catamarán:** alta y edición de embarcaciones (estado, precio, capacidad, habilitación).
-- **Administración municipal:** panel con indicadores (reservas, permisos, ingresos), gráficos de reservas por día y permisos por especie, ocupación por catamarán, gestión de usuarios y roles, reportes exportables (PDF/CSV) y **monitoreo de fauna** con alertas por umbral de permisos.
-- **PWA:** instalable en el celular, funciona offline (service worker), íconos y splash propios.
+La aplicación puede ejecutarse en **modo demo**, utilizando datos de ejemplo almacenados en el navegador. Si se cargan las credenciales de Supabase en el archivo `config.js`, la aplicación pasa a trabajar con una base de datos real, autenticación de usuarios y políticas de seguridad por filas.
 
 ---
 
-## 📁 Estructura del proyecto
+## Funcionalidades principales
 
-```
+### Pescador / turista
+
+* Registro e inicio de sesión.
+* Búsqueda de catamaranes por fecha y turno.
+* Selección visual de asientos disponibles.
+* Generación de reserva.
+* Pago simulado.
+* Emisión de permiso digital con código QR.
+* Consulta de historial de reservas y permisos.
+* Recepción de notificaciones.
+
+### Dueño de catamarán
+
+* Alta y edición de embarcaciones.
+* Configuración de estado, precio, capacidad y habilitación.
+* Consulta de información vinculada a sus catamaranes.
+
+### Administración municipal
+
+* Panel con indicadores generales.
+* Consulta de reservas, permisos e ingresos.
+* Gráficos de reservas por día y permisos por especie.
+* Visualización de ocupación por catamarán.
+* Gestión de usuarios y roles.
+* Exportación de reportes en PDF y CSV.
+* Monitoreo de fauna mediante alertas por umbrales de permisos.
+
+### Características PWA
+
+* Instalación en dispositivos móviles.
+* Funcionamiento offline mediante service worker.
+* Íconos y configuración para instalación.
+* Compatible con despliegue en GitHub Pages.
+
+---
+
+## Estructura del proyecto
+
+```text
 pescacorral/
-├── index.html              # Punto de entrada (carga config, QR y la app)
-├── manifest.webmanifest    # Metadatos PWA (instalación)
-├── service-worker.js       # Caché offline (precache + estrategias)
-├── config.js               # ← Acá pegás las credenciales de Supabase
+├── index.html              # Punto de entrada de la aplicación
+├── manifest.webmanifest    # Configuración de la PWA
+├── service-worker.js       # Caché offline
+├── config.js               # Configuración de Supabase
 ├── css/
-│   └── styles.css          # Sistema de diseño (paleta del TFG)
+│   └── styles.css          # Estilos generales de la aplicación
 ├── js/
-│   ├── app.js              # Enrutador por hash + arranque
-│   ├── data.js             # Capa de datos (demo localStorage / Supabase)
-│   ├── views.js            # Render de todas las pantallas
-│   ├── ui.js               # Helpers, íconos SVG, toasts, modales, formato
-│   └── charts.js           # Gráficos SVG (barras y dona)
+│   ├── app.js              # Enrutamiento y arranque de la app
+│   ├── data.js             # Capa de datos: demo localStorage / Supabase
+│   ├── views.js            # Renderizado de pantallas
+│   ├── ui.js               # Funciones de interfaz, modales, toasts e íconos
+│   └── charts.js           # Gráficos SVG
 ├── vendor/
-│   └── qrcode.min.js       # Generador de QR offline (MIT)
-├── icons/                  # Íconos PWA (192/512/maskable/favicons)
+│   └── qrcode.min.js       # Generador de códigos QR offline
+├── icons/                  # Íconos de la PWA
 └── database/
-    ├── schema.sql          # Esquema relacional + funciones + vistas + RLS
-    └── seed.sql            # Datos iniciales (especies y catamaranes)
+    ├── schema.sql          # Esquema relacional, funciones, vistas y RLS
+    └── seed.sql            # Datos iniciales
 ```
 
 ---
 
-## 🚀 Puesta en marcha rápida (modo demo)
+## Ejecución rápida en modo demo
 
-No necesitás backend para probarla.
+Para probar la aplicación no es necesario configurar un backend. En este modo se utilizan datos de ejemplo guardados en el navegador.
 
-**Opción A — Servidor local** (recomendado, el service worker requiere `http://`):
+Se recomienda ejecutarla desde un servidor local, ya que el service worker y los módulos JavaScript pueden presentar problemas si se abre directamente el archivo `index.html`.
 
 ```bash
-# Python 3
 cd pescacorral
 python3 -m http.server 8080
-# Abrí http://localhost:8080
 ```
 
-> ⚠️ Abrir `index.html` con doble clic (`file://`) puede bloquear los módulos JS y el service worker. Usá siempre un servidor local o GitHub Pages.
+Luego abrir en el navegador:
 
-**Opción B — GitHub Pages** (ver más abajo).
+```text
+http://localhost:8080
+```
 
-Iniciá sesión con cualquiera de las **cuentas demo** (contraseña `Demo1234!`):
-
-| Cuenta                 | Rol                       |
-|------------------------|---------------------------|
-| `pescador@demo.com`    | Pescador / Turista        |
-| `dueno@demo.com`       | Dueño de catamarán        |
-| `municipio@demo.com`   | Administración municipal  |
-| `admin@demo.com`       | Administrador del sistema |
-
-En **Perfil → Reiniciar datos de demo** se restauran los datos de ejemplo.
+No se recomienda abrir el proyecto con doble clic sobre `index.html`, porque el protocolo `file://` puede bloquear algunas funciones de la aplicación.
 
 ---
 
-## 🌐 Desplegar en GitHub Pages
+## Cuentas demo
 
-1. Creá un repositorio en GitHub (por ejemplo `pescacorral`) y subí **el contenido de esta carpeta** a la raíz.
+La aplicación incluye usuarios de prueba. La contraseña para todas las cuentas es:
 
-   ```bash
-   cd pescacorral
-   git init
-   git add .
-   git commit -m "PescaCorral PWA"
-   git branch -M main
-   git remote add origin https://github.com/TU_USUARIO/pescacorral.git
-   git push -u origin main
-   ```
+```text
+Demo1234!
+```
 
-2. En GitHub: **Settings → Pages**.
-3. En *Build and deployment* → *Source*, elegí **Deploy from a branch**.
-4. Branch: **main**, carpeta **/ (root)**. Guardá.
-5. Esperá ~1 minuto. Tu app quedará en:
-   `https://TU_USUARIO.github.io/pescacorral/`
+| Cuenta                                          | Rol                       |
+| ----------------------------------------------- | ------------------------- |
+| [pescador@demo.com](mailto:pescador@demo.com)   | Pescador / Turista        |
+| [dueno@demo.com](mailto:dueno@demo.com)         | Dueño de catamarán        |
+| [municipio@demo.com](mailto:municipio@demo.com) | Administración municipal  |
+| [admin@demo.com](mailto:admin@demo.com)         | Administrador del sistema |
 
-> Las rutas del proyecto son **relativas** (`./js/...`), así que funciona perfecto aunque GitHub Pages la publique en un subdirectorio. No hace falta configurar nada más.
-
-Para una **PWA instalable**, GitHub Pages ya sirve por HTTPS: al abrirla en el celular vas a poder “Agregar a pantalla de inicio”.
+Desde la sección **Perfil → Reiniciar datos de demo** se pueden restaurar los datos iniciales.
 
 ---
 
-## 🗄️ Conectar la base de datos real (Supabase)
+## Despliegue en GitHub Pages
 
-Con esto la app deja el modo demo y guarda todo en **PostgreSQL** con login real.
+Para publicar la aplicación en GitHub Pages, se debe crear un repositorio y subir el contenido de la carpeta del proyecto a la raíz.
 
-### 1. Crear el proyecto
-1. Entrá a [supabase.com](https://supabase.com) → **New project**.
-2. Elegí nombre, contraseña de base y región (la más cercana).
+```bash
+cd pescacorral
+git init
+git add .
+git commit -m "PescaCorral PWA"
+git branch -M main
+git remote add origin https://github.com/TU_USUARIO/pescacorral.git
+git push -u origin main
+```
 
-### 2. Crear las tablas
-1. En el panel de Supabase: **SQL Editor → New query**.
-2. Pegá **todo** el contenido de `database/schema.sql` y ejecutá (**Run**).
-3. Nueva query: pegá `database/seed.sql` y ejecutá. Esto carga las **especies** y los **catamaranes** de ejemplo con sus asientos.
+Luego, desde GitHub:
 
-> El esquema crea las tablas, las **funciones** (incluida `crear_reserva_completa`, que arma reserva + asientos + pago + permiso en una sola operación atómica), las **vistas** del dashboard y las **políticas RLS** que aíslan los datos por rol. Un *trigger* sobre `auth.users` crea automáticamente el perfil en la tabla `usuario` cuando alguien se registra.
+1. Entrar al repositorio.
+2. Ir a **Settings → Pages**.
+3. En **Build and deployment**, seleccionar **Deploy from a branch**.
+4. Elegir la rama **main** y la carpeta **/ (root)**.
+5. Guardar los cambios.
 
-### 3. Ajustar la autenticación
-Para que el alta de usuarios sea inmediata en la demostración:
+La aplicación quedará publicada en una URL similar a:
 
-- **Authentication → Providers → Email**: dejá habilitado *Email*.
-- **Authentication → Sign In / Providers** (o *Settings*): **desactivá** “Confirm email” si querés que el registro inicie sesión al toque (sin verificar el correo). En producción se recomienda dejarlo activo.
+```text
+https://TU_USUARIO.github.io/pescacorral/
+```
 
-### 4. Pegar las credenciales
-1. En Supabase: **Project Settings → API**.
-2. Copiá **Project URL** y la clave **anon public**.
-3. Abrí `config.js` y completá:
+El proyecto utiliza rutas relativas, por lo que puede funcionar correctamente aunque GitHub Pages lo publique dentro de un subdirectorio.
 
-   ```js
-   window.PESCACORRAL_CONFIG = {
-     SUPABASE_URL: "https://xxxxxxxx.supabase.co",
-     SUPABASE_ANON_KEY: "eyJhbGciOi...",   // clave anon public
-     MUNICIPIO: "Municipio de Coronel Moldes",
-     LUGAR: "Dique Cabra Corral",
-   };
-   ```
+Al estar publicado bajo HTTPS, también puede instalarse como PWA desde un teléfono celular mediante la opción **Agregar a pantalla de inicio**.
 
-4. Volvé a subir el cambio a GitHub (`git commit` + `git push`). Listo: la app ahora usa Supabase.
+---
 
-> 🔐 **¿Es seguro publicar la clave `anon`?** Sí. Es una clave pública pensada para el front-end: lo que protege los datos son las **políticas RLS** definidas en `schema.sql`. **Nunca** pegues acá la clave `service_role`.
+## Conexión con Supabase
 
-### 5. Crear un administrador
-Los usuarios nuevos se registran siempre como `pescador` o `dueno`: **los roles administrativos no se pueden auto-asignar** desde el registro (aunque alguien manipule la llamada a la API, el trigger lo fuerza a `pescador`). Para tener un admin municipal, registrate desde la app y luego, en **SQL Editor**, ejecutá:
+La aplicación puede trabajar con Supabase para guardar datos reales en PostgreSQL, usar autenticación y aplicar reglas de seguridad mediante RLS.
+
+### 1. Crear el proyecto en Supabase
+
+1. Ingresar a Supabase.
+2. Crear un nuevo proyecto.
+3. Definir nombre, contraseña de base de datos y región.
+
+### 2. Crear la base de datos
+
+Desde el panel de Supabase:
+
+1. Ir a **SQL Editor → New query**.
+2. Pegar el contenido completo de `database/schema.sql`.
+3. Ejecutar la consulta.
+4. Crear una nueva consulta.
+5. Pegar el contenido de `database/seed.sql`.
+6. Ejecutar nuevamente.
+
+El archivo `schema.sql` crea las tablas, funciones, vistas y políticas de seguridad. También incluye la función `crear_reserva_completa`, que registra la reserva, los asientos, el pago y el permiso en una única operación. Además, se utiliza un trigger sobre `auth.users` para crear automáticamente el perfil del usuario registrado dentro de la tabla `usuario`.
+
+El archivo `seed.sql` carga datos iniciales, como especies y catamaranes de ejemplo.
+
+### 3. Configurar autenticación
+
+Para facilitar la demostración del sistema, se puede desactivar la confirmación por correo electrónico:
+
+1. Ir a **Authentication → Providers → Email**.
+2. Verificar que el proveedor Email esté habilitado.
+3. Desactivar la opción de confirmación de email si se desea que el usuario pueda iniciar sesión inmediatamente luego de registrarse.
+
+En un entorno de producción, se recomienda mantener la confirmación de email activada.
+
+### 4. Cargar credenciales
+
+Desde Supabase:
+
+1. Ir a **Project Settings → API**.
+2. Copiar el **Project URL**.
+3. Copiar la clave **anon public**.
+4. Abrir el archivo `config.js`.
+5. Completar los valores correspondientes.
+
+```js
+window.PESCACORRAL_CONFIG = {
+  SUPABASE_URL: "https://xxxxxxxx.supabase.co",
+  SUPABASE_ANON_KEY: "eyJhbGciOi...",
+  MUNICIPIO: "Municipio de Coronel Moldes",
+  LUGAR: "Dique Cabra Corral",
+};
+```
+
+Después de modificar `config.js`, se deben subir los cambios al repositorio:
+
+```bash
+git add config.js
+git commit -m "Configurar Supabase"
+git push
+```
+
+Una vez desplegado el cambio, la aplicación dejará de usar el modo demo y comenzará a trabajar con Supabase.
+
+La clave `anon public` puede usarse en el frontend, ya que está pensada para clientes públicos. La protección de los datos depende de las políticas RLS definidas en la base de datos. No debe publicarse la clave `service_role`.
+
+---
+
+## Crear un usuario administrador
+
+Por seguridad, los usuarios registrados desde la aplicación no pueden asignarse roles administrativos por sí mismos.
+
+Los roles administrativos deben asignarse manualmente desde Supabase o desde otro usuario administrador ya existente.
+
+Para asignar el rol de administrador municipal a un usuario registrado, se puede ejecutar la siguiente consulta en el SQL Editor:
 
 ```sql
-update public.usuario set rol = 'admin_municipal' where email = 'tu@email.com';
+update public.usuario
+set rol = 'admin_municipal'
+where email = 'tu@email.com';
 ```
 
-(Otro admin existente también puede cambiar roles desde **Panel → Usuarios**.)
-
-> 🧪 **Validación:** el esquema, el seed, los RPC (`crear_reserva_completa`, `anular_reserva`), la prevención de doble reserva, las políticas RLS y las vistas del dashboard fueron probados contra un PostgreSQL real. Las vistas usan `security_invoker`, de modo que respetan RLS (un pescador no ve datos agregados ajenos).
+También puede utilizarse el panel de usuarios de la aplicación, siempre que ya exista un usuario con permisos administrativos.
 
 ---
 
-## 🧱 Modelo de datos (resumen)
+## Modelo de datos
 
-Entidades principales y sus relaciones (ver `schema.sql` para el detalle):
+El modelo relacional se encuentra definido en `database/schema.sql`. Las entidades principales son:
 
-- **usuario** *(extiende `auth.users`)* — `rol`: `pescador` · `dueno` · `admin_municipal` · `admin_sistema`.
-- **catamaran** *1—N* **lugar** (asientos).
-- **reserva** *N—1* usuario y catamarán; *1—N* **reserva_lugar** (asientos concretos, con índice único que impide doble reserva del mismo asiento por fecha).
-- **permiso** *1—1* reserva — numeración correlativa `PCC-000XXX`, QR y vencimiento según tipo (diario/semanal/anual).
-- **pago** *1—1* reserva.
-- **especie** y **alerta_fauna** — soporte al monitoreo de presión pesquera (HU-015).
-- **notificacion**, **reporte** — avisos y snapshots de reportes.
+* **usuario**: almacena los datos del usuario y su rol dentro del sistema.
+* **catamaran**: representa cada embarcación habilitada.
+* **lugar**: representa los asientos o lugares disponibles dentro de cada catamarán.
+* **reserva**: registra la reserva realizada por un usuario para una fecha, turno y catamarán.
+* **reserva_lugar**: vincula la reserva con los asientos seleccionados.
+* **permiso**: almacena el permiso digital emitido, su numeración, vencimiento y código QR.
+* **pago**: registra el pago asociado a una reserva.
+* **especie**: contiene las especies utilizadas para el control de actividad pesquera.
+* **alerta_fauna**: permite registrar alertas relacionadas con la presión sobre especies.
+* **notificacion**: almacena avisos para los usuarios.
+* **reporte**: guarda reportes generados desde el panel municipal.
 
-Historias de usuario cubiertas: registro y login seguro, gestión de catamaranes, búsqueda y reserva de lugares, emisión de permiso digital, pago, notificaciones, panel municipal, reportes y monitoreo de fauna.
-
----
-
-## 🛠️ Tecnología
-
-- **Front-end:** HTML5, CSS3 y JavaScript ES Modules (sin framework, sin *build*).
-- **PWA:** Web App Manifest + Service Worker (precache y *stale-while-revalidate*).
-- **Backend (opcional):** Supabase — PostgreSQL, Auth y API REST automática con RLS.
-- **QR:** `qrcode-generator` (MIT), 100 % offline.
-- **Gráficos:** SVG generado a mano (sin librerías externas).
-
-> El TFG planteaba Flutter + Node/Express + PostgreSQL. Esta entrega adapta el **mismo modelo y las mismas reglas de negocio** a una PWA + Supabase para poder publicarla gratis en GitHub Pages y mantener la base de datos relacional intacta.
+Entre las reglas principales del modelo se incluye la prevención de doble reserva de un mismo asiento en una misma fecha y turno, la emisión de permisos asociados a reservas y el aislamiento de datos según el rol del usuario mediante RLS.
 
 ---
 
-## ❓ Preguntas frecuentes
+## Historias de usuario contempladas
 
-**No carga / pantalla en blanco.** Asegurate de servirla por `http(s)://` (servidor local o GitHub Pages), no por `file://`.
+El sistema cubre las principales funcionalidades previstas para el prototipo:
 
-**Cambié `config.js` pero sigue en demo.** Verificá que *ambos* valores (`SUPABASE_URL` y `SUPABASE_ANON_KEY`) estén completos y volvé a desplegar. Forzá recarga (Ctrl/Cmd+Shift+R) para actualizar el service worker.
-
-**El registro no inicia sesión.** Está activada la confirmación por email en Supabase. Desactivala (paso 3) o confirmá el correo.
-
-**Quiero reiniciar los datos de la demo.** Perfil → *Reiniciar datos de demo*.
+* Registro e inicio de sesión.
+* Gestión de roles.
+* Alta y edición de catamaranes.
+* Búsqueda de disponibilidad.
+* Reserva de lugares.
+* Generación de permiso digital.
+* Pago simulado.
+* Consulta de historial.
+* Notificaciones.
+* Panel municipal.
+* Reportes.
+* Monitoreo de fauna.
 
 ---
 
-Hecho para el Dique Cabra Corral 🐟 — *Municipio de Coronel Moldes*.
+## Tecnologías utilizadas
+
+* **HTML5**
+* **CSS3**
+* **JavaScript ES Modules**
+* **Web App Manifest**
+* **Service Worker**
+* **Supabase**
+* **PostgreSQL**
+* **Row Level Security**
+* **qrcode-generator**
+* **SVG para gráficos**
+
+La propuesta original del TFG contemplaba una arquitectura con Flutter, Node.js/Express y PostgreSQL. Para esta implementación se adaptó el mismo modelo de datos y las mismas reglas de negocio a una PWA con Supabase, lo que permite publicar el prototipo de forma gratuita en GitHub Pages y mantener una base de datos relacional.
+
+---
+
+## Problemas frecuentes
+
+### La pantalla queda en blanco
+
+Verificar que la aplicación se esté ejecutando mediante `http://` o `https://`. No se recomienda abrir el archivo directamente con `file://`.
+
+### La app sigue en modo demo después de configurar Supabase
+
+Revisar que `SUPABASE_URL` y `SUPABASE_ANON_KEY` estén completos en `config.js`. También puede ser necesario forzar la recarga del navegador con `Ctrl + Shift + R`, ya que el service worker puede conservar archivos anteriores en caché.
+
+### El registro no inicia sesión automáticamente
+
+Esto puede ocurrir si Supabase tiene activada la confirmación por correo electrónico. Se puede desactivar para la demostración o confirmar el correo antes de iniciar sesión.
+
+### Quiero restaurar los datos de ejemplo
+
+Ingresar a **Perfil → Reiniciar datos de demo**.
+
+---
+
+## Autoría y contexto
+
+Proyecto desarrollado como parte del Trabajo Final de Grado, orientado a la digitalización de reservas y permisos de pesca deportiva en el Dique Cabra Corral.
+
+Lugar de aplicación: **Dique Cabra Corral — Municipio de Coronel Moldes, Salta**.
