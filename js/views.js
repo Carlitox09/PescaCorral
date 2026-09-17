@@ -159,10 +159,12 @@ export async function viewLogin(ctx) {
               <input class="input" id="pwd" type="password" autocomplete="current-password" placeholder="Tu contraseña" required />
               <button type="button" class="input-group__btn" data-toggle-pwd aria-label="Mostrar">${U.icon("eye", { size: 20 })}</button>
             </div>
+            <div class="field__hint" style="text-align:right"><a href="#/recuperar" style="color:var(--blue-600);font-weight:700">¿Olvidaste tu contraseña?</a></div>
           </div>
           <div class="field__error hide" id="login-err"></div>
           <button class="btn btn--primary btn--block btn--lg" type="submit" id="login-btn">Ingresar</button>
         </form>
+        <p class="field__hint mt-8" style="text-align:center">${U.icon("lock", { size: 13 })} Por seguridad, la cuenta se bloquea ${D.BLOQUEO_MINUTOS} minutos tras ${D.MAX_INTENTOS} intentos fallidos consecutivos.</p>
       </div>
       ${demo ? `<div class="auth__demo">
         <b>Modo demo.</b> Probá con cuentas de ejemplo (contraseña <b>Demo1234!</b>):<br>
@@ -174,6 +176,7 @@ export async function viewLogin(ctx) {
 
   togglePwd();
   if (demo) U.$("#email").value = "pescador@demo.com";
+  if (ctx.params.msg) showErr(U.$("#login-err"), ctx.params.msg);
 
   U.$("#f-login").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -189,9 +192,139 @@ export async function viewLogin(ctx) {
       ctx.go(isAdmin(s?.profile?.rol) ? "/admin" : "/home");
     } catch (err) {
       showErr(errBox, err.message);
+      U.$("#pwd").value = "";
       btn.disabled = false; btn.textContent = "Ingresar";
     }
   });
+}
+
+/* ---- Recuperación de contraseña (Seguridad · "Recuperación mediante correo") ---- */
+export async function viewRecuperar(ctx) {
+  const demo = D.MODE === "demo";
+  U.mount(`<div class="auth">
+    <div class="auth__head" style="clip-path:polygon(0 0,100% 0,100% 86%,0 100%);padding-bottom:54px">
+      <span class="logo">${U.logoMark(48)}</span>
+      <h1>Recuperar contraseña</h1>
+      <p>Te enviamos un enlace a tu correo para crear una nueva.</p>
+    </div>
+    <div class="auth__card-wrap">
+      <div class="auth__card">
+        <h2>¿Cuál es tu email?</h2>
+        <p class="sub">Ingresá el correo con el que te registraste en PescaCorral.</p>
+        <form id="f-rec" novalidate>
+          <div class="field">
+            <label for="rec-email">Email</label>
+            <input class="input" id="rec-email" type="email" autocomplete="email" placeholder="tu@email.com" required />
+          </div>
+          <div class="field__error hide" id="rec-err"></div>
+          <div class="field__hint hide" id="rec-ok" style="color:var(--green-700);font-weight:600"></div>
+          <button class="btn btn--primary btn--block btn--lg" type="submit" id="rec-btn">${U.icon("mail", { size: 18 })} Enviar enlace</button>
+        </form>
+        ${demo ? `<p class="field__hint mt-8">Modo demo: no se envía un correo real; el enlace se simula y te lleva directamente a crear la nueva contraseña.</p>` : ""}
+      </div>
+    </div>
+    <div class="auth__foot"><a href="#/login">${U.icon("chevron-left", { size: 14 })} Volver a iniciar sesión</a></div>
+  </div>`);
+
+  U.$("#f-rec").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = U.$("#rec-email").value.trim();
+    const errBox = U.$("#rec-err"), okBox = U.$("#rec-ok");
+    errBox.classList.add("hide"); okBox.classList.add("hide");
+    if (!email) { showErr(errBox, "Ingresá tu email."); return; }
+    const btn = U.$("#rec-btn"); btn.disabled = true; btn.textContent = "Enviando…";
+    try {
+      const res = await D.solicitarRecuperacion(email);
+      if (res.simulado) {
+        if (res.existe) { U.toast("Enlace simulado: creá tu nueva contraseña.", "info"); ctx.go("/restablecer"); return; }
+        okBox.textContent = "Si el email está registrado, recibirás un enlace para restablecer la contraseña."; okBox.classList.remove("hide");
+      } else {
+        okBox.textContent = "Listo. Revisá tu bandeja de entrada (y la carpeta de spam): el enlace vence a los 60 minutos."; okBox.classList.remove("hide");
+      }
+      btn.disabled = false; btn.innerHTML = `${U.icon("mail", { size: 18 })} Enviar enlace`;
+    } catch (err) {
+      showErr(errBox, err.message); btn.disabled = false; btn.innerHTML = `${U.icon("mail", { size: 18 })} Enviar enlace`;
+    }
+  });
+}
+
+export async function viewRestablecer(ctx) {
+  const rec = D.recuperacionPendiente();
+  const puede = D.MODE === "demo" ? Boolean(rec?.email) : Boolean(ctx.session);
+  U.mount(`<div class="auth">
+    <div class="auth__head" style="clip-path:polygon(0 0,100% 0,100% 86%,0 100%);padding-bottom:54px">
+      <span class="logo">${U.logoMark(48)}</span>
+      <h1>Nueva contraseña</h1>
+      <p>${puede ? "Elegí una contraseña segura para tu cuenta." : "El enlace no es válido."}</p>
+    </div>
+    <div class="auth__card-wrap">
+      <div class="auth__card">
+        ${puede ? `
+        <h2>Restablecer contraseña</h2>
+        <p class="sub">${U.esc(rec?.email || ctx.session?.user?.email || "")}</p>
+        <form id="f-rst" novalidate>
+          <div class="field">
+            <label>Nueva contraseña</label>
+            <div class="input-group">
+              <input class="input" id="rst-pwd" type="password" autocomplete="new-password" required placeholder="Creá una contraseña segura"/>
+              <button type="button" class="input-group__btn" data-toggle-pwd aria-label="Mostrar">${U.icon("eye", { size: 20 })}</button>
+            </div>
+            <div class="pwd-meter" id="pwd-meter">${"<span></span>".repeat(5)}</div>
+            <ul class="pwd-rules" id="pwd-rules"></ul>
+          </div>
+          <div class="field">
+            <label>Repetir contraseña</label>
+            <input class="input" id="rst-pwd2" type="password" autocomplete="new-password" required placeholder="Repetí la contraseña"/>
+          </div>
+          <div class="field__error hide" id="rst-err"></div>
+          <button class="btn btn--primary btn--block btn--lg" type="submit" id="rst-btn">${U.icon("check", { size: 18 })} Guardar nueva contraseña</button>
+        </form>
+        <button class="btn btn--soft btn--block mt-12" data-cancel>Cancelar</button>` : `
+        <h2>Enlace inválido o vencido</h2>
+        <p class="sub">Solicitá un nuevo enlace de recuperación para continuar.</p>
+        <a class="btn btn--primary btn--block btn--lg" href="#/recuperar">${U.icon("mail", { size: 18 })} Solicitar nuevo enlace</a>`}
+      </div>
+    </div>
+    <div class="auth__foot"><a href="#/login" data-cancel-link>${U.icon("chevron-left", { size: 14 })} Volver a iniciar sesión</a></div>
+  </div>`);
+
+  const cancelar = async () => { D.limpiarRecuperacion(); if (D.MODE === "supabase" && ctx.session) await D.signOut(); ctx.go("/login"); };
+  U.$("[data-cancel]")?.addEventListener("click", cancelar);
+  U.$("[data-cancel-link]")?.addEventListener("click", (e) => { e.preventDefault(); cancelar(); });
+  if (!puede) return;
+
+  togglePwd();
+  wirePasswordMeter(U.$("#rst-pwd"));
+  U.$("#f-rst").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const pass = U.$("#rst-pwd").value, pass2 = U.$("#rst-pwd2").value;
+    const errBox = U.$("#rst-err"); errBox.classList.add("hide");
+    if (!U.passwordStrength(pass).valid) { showErr(errBox, "La contraseña no cumple todos los requisitos de seguridad."); return; }
+    if (pass !== pass2) { showErr(errBox, "Las contraseñas no coinciden."); return; }
+    const btn = U.$("#rst-btn"); btn.disabled = true; btn.textContent = "Guardando…";
+    try {
+      await D.actualizarPassword(pass);
+      U.toast("Contraseña actualizada", "ok");
+      const s = await D.getSession();
+      ctx.go(isAdmin(s?.profile?.rol) ? "/admin" : "/home");
+    } catch (err) {
+      showErr(errBox, err.message); btn.disabled = false; btn.innerHTML = `${U.icon("check", { size: 18 })} Guardar nueva contraseña`;
+    }
+  });
+}
+
+/* Medidor de fortaleza reutilizado por registro y restablecimiento. */
+function wirePasswordMeter(pwd) {
+  const render = () => {
+    const st = U.passwordStrength(pwd.value);
+    const colors = ["#e6ebf3", "#ef4444", "#f59e0b", "#f59e0b", "#22c55e", "#16a34a"];
+    U.$$("#pwd-meter span").forEach((s, i) => { s.style.background = i < st.score ? colors[st.score] : "var(--border)"; });
+    U.$("#pwd-rules").innerHTML = st.rules.map((r) =>
+      `<li class="${r.ok ? "ok" : ""}"><span class="tick">${r.ok ? "✓" : ""}</span>${r.label}</li>`
+    ).join("");
+  };
+  render();
+  pwd.addEventListener("input", render);
 }
 
 export async function viewRegistro(ctx) {
@@ -246,18 +379,7 @@ export async function viewRegistro(ctx) {
   </div>`);
 
   togglePwd();
-  const pwd = U.$("#r-pwd");
-  const renderRules = () => {
-    const st = U.passwordStrength(pwd.value);
-    const meter = U.$$("#pwd-meter span");
-    const colors = ["#e6ebf3", "#ef4444", "#f59e0b", "#f59e0b", "#22c55e", "#16a34a"];
-    meter.forEach((s, i) => { s.style.background = i < st.score ? colors[st.score] : "var(--border)"; });
-    U.$("#pwd-rules").innerHTML = st.rules.map((r) =>
-      `<li class="${r.ok ? "ok" : ""}"><span class="tick">${r.ok ? "✓" : ""}</span>${r.label}</li>`
-    ).join("");
-  };
-  renderRules();
-  pwd.addEventListener("input", renderRules);
+  wirePasswordMeter(U.$("#r-pwd"));
 
   U.$("#f-reg").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -298,11 +420,12 @@ function showErr(box, msg) { box.textContent = msg; box.classList.remove("hide")
  * ========================================================================== */
 export async function viewHome(ctx) {
   const p = ctx.session.profile;
+  const hoy = U.todayISO();
+  try { await D.generarRecordatorios(); } catch (e) { console.warn(e); }
   const [reservas, permisos, notifs, cats] = await Promise.all([
-    D.listReservas(), D.listPermisos(), D.listNotificaciones(), D.listCatamaranes(),
+    D.listReservas(), D.listPermisos(), D.listNotificaciones(), D.disponibilidad(hoy),
   ]);
   const unread = notifs.filter((n) => !n.leida).length;
-  const hoy = U.todayISO();
   const proxima = reservas.filter((r) => r.estado !== "cancelada" && r.fecha >= hoy).sort((a, b) => a.fecha < b.fecha ? -1 : 1)[0];
   const permisoVigente = permisos.find((p) => p.estado === "vigente");
   const disponibles = cats.filter((c) => c.estado === "activa").slice(0, 2);
@@ -351,8 +474,8 @@ export async function viewHome(ctx) {
           </a>`).join("")}
       </div>
 
-      <h2 class="section-title mt-24">Catamaranes disponibles <a class="muted-link" href="#/catamaranes">Ver todos</a></h2>
-      ${disponibles.map((c) => boatCard(c)).join("") || `<p class="muted">No hay catamaranes disponibles.</p>`}
+      <h2 class="section-title mt-24">Catamaranes hoy <a class="muted-link" href="#/catamaranes">Ver todos</a></h2>
+      ${disponibles.map((c) => boatCard(c, hoy, "manana")).join("") || `<p class="muted">No hay catamaranes disponibles.</p>`}
     `,
   }));
   wireChrome(ctx);
@@ -364,10 +487,10 @@ export async function viewHome(ctx) {
  * ========================================================================== */
 export async function viewCatamaranes(ctx) {
   const p = ctx.session.profile;
-  const [cats, notifs] = await Promise.all([D.listCatamaranes(), D.listNotificaciones()]);
-  const unread = notifs.filter((n) => !n.leida).length;
   const fecha = ctx.params.fecha || U.todayISO();
   const turno = ctx.params.turno || "manana";
+  const [cats, notifs] = await Promise.all([D.disponibilidad(fecha), D.listNotificaciones()]);
+  const unread = notifs.filter((n) => !n.leida).length;
 
   U.mount(appShell({
     active: "catamaranes", rol: p.rol,
@@ -399,17 +522,26 @@ export async function viewCatamaranes(ctx) {
 function boatCard(c, fecha, turno) {
   const mantenimiento = c.estado !== "activa";
   const qs = fecha ? `?fecha=${fecha}&turno=${turno || "manana"}` : "";
+  const conDispo = typeof c.libres === "number";
+  const agotado = conDispo && c.libres === 0;
+  const dispo = conDispo
+    ? (agotado ? `<span class="badge badge--danger" style="margin-top:4px">Sin disponibilidad</span>`
+               : `<span class="badge ${c.libres <= 3 ? "badge--warn" : "badge--ok"}" style="margin-top:4px">${c.libres} de ${c.capacidad} lugares libres</span>`)
+    : "";
   return `<div class="boat" style="margin-bottom:12px">
     <div class="boat__img" style="color:#0c4a72">${U.icon("boat", { size: 46, stroke: 1.6 })}</div>
     <div class="boat__main">
       <h3>${U.esc(c.nombre)}</h3>
       <div class="boat__meta">${U.icon("users", { size: 13 })} ${c.capacidad} lugares ${c.habilitacion ? "· Hab. " + U.esc(c.habilitacion) : ""}</div>
       <div class="boat__price">${U.fmtMoney(c.precio)} <small>/ lugar</small></div>
+      ${mantenimiento ? "" : dispo}
     </div>
     <div style="align-self:stretch;display:flex;flex-direction:column;justify-content:center">
       ${mantenimiento
         ? `<span class="badge badge--warn">${U.icon("settings", { size: 13 })} Mantenimiento</span>`
-        : `<a class="btn btn--cta btn--sm" href="#/reserva/${c.id}${qs}">Reservar</a>`}
+        : agotado
+          ? `<button class="btn btn--soft btn--sm" disabled>Completo</button>`
+          : `<a class="btn btn--cta btn--sm" href="#/reserva/${c.id}${qs}">Reservar</a>`}
     </div>
   </div>`;
 }
@@ -483,9 +615,9 @@ export async function viewReserva(ctx) {
 
       <div class="summary mt-16" id="summary"></div>
       <button class="btn btn--cta btn--block btn--lg mt-16" id="confirm-btn" disabled>
-        ${U.icon("check-circle", { size: 20 })} Confirmar reserva y pago
+        ${U.icon("credit-card", { size: 20 })} Pagar y confirmar reserva
       </button>
-      <p class="muted center mt-8" style="font-size:.78rem">El pago es simulado en esta demostración.</p>
+      <p class="muted center mt-8" style="font-size:.78rem">La pasarela de pago es simulada en este prototipo: no se realiza ningún cobro real.</p>
     `,
   }));
   wireChrome(ctx);
@@ -524,24 +656,85 @@ export async function viewReserva(ctx) {
   U.$("#r-fecha").addEventListener("change", reloadSeats);
   U.$("#r-turno").addEventListener("change", () => { turno = U.$("#r-turno").value; });
 
+  const labelBtn = `${U.icon("credit-card", { size: 20 })} Pagar y confirmar reserva`;
   confirmBtn.addEventListener("click", async () => {
     if (!seleccion.size) return;
+    const metodo = U.$("#r-metodo").value;
+    const monto = seleccion.size * cat.precio;
+    // 1) Pago (pasarela simulada, HU-007). Si se rechaza, no se reserva ni se emite permiso.
+    const pago = await pagoModal({ metodo, monto, lugares: seleccion.size, catamaran: cat.nombre });
+    if (!pago) return;                              // canceló
     confirmBtn.disabled = true; confirmBtn.innerHTML = "Procesando…";
     try {
       const res = await D.crearReserva({
         catamaranId: catId, fecha, turno,
         lugares: [...seleccion],
-        metodo: U.$("#r-metodo").value,
+        metodo,
         tipoPermiso: U.$("#r-tipo").value,
         especieId: U.$("#r-especie").value,
       });
-      U.toast("Reserva confirmada · " + res.numero_permiso, "ok");
+      U.toast("Pago aprobado · Reserva confirmada · " + res.numero_permiso, "ok");
       ctx.go("/permiso/" + res.permiso_id);
     } catch (err) {
       U.toast(err.message || "No se pudo completar la reserva.", "err");
       confirmBtn.disabled = false;
-      confirmBtn.innerHTML = `${U.icon("check-circle", { size: 20 })} Confirmar reserva y pago`;
+      confirmBtn.innerHTML = labelBtn;
       await reloadSeats();
+    }
+  });
+}
+
+/* Modal de pago simulado. Resuelve con el resultado aprobado o null si se cancela.
+ * Permite reintentar dentro del mismo modal cuando la pasarela rechaza. */
+function pagoModal({ metodo, monto, lugares, catamaran }) {
+  const conTarjeta = metodo === "tarjeta" || metodo === "mercadopago";
+  return new Promise((resolve) => {
+    let resolved = false;
+    const done = (v) => { if (!resolved) { resolved = true; resolve(v); } };
+    const m = U.modal({
+      title: `Pago · ${U.metodoPagoLabel(metodo)}`,
+      dismissable: false,
+      body: `
+        <div class="summary" style="margin-top:0">
+          <div class="flex between"><span>${U.esc(catamaran)}</span><b>${lugares} lugar${lugares > 1 ? "es" : ""}</b></div>
+          <div class="flex between mt-8 total"><span><b>Total</b></span><b>${U.fmtMoney(monto)}</b></div>
+        </div>
+        ${conTarjeta ? `
+        <div class="field mt-12"><label>Número de tarjeta</label><input class="input" id="pg-num" inputmode="numeric" autocomplete="cc-number" placeholder="4111 1111 1111 1111" value="4111 1111 1111 1111"/></div>
+        <div class="field"><label>Titular</label><input class="input" id="pg-tit" autocomplete="cc-name" placeholder="Como figura en la tarjeta"/></div>
+        <div class="flex gap-12">
+          <div class="field grow"><label>Vencimiento</label><input class="input" id="pg-ven" autocomplete="cc-exp" placeholder="MM/AA"/></div>
+          <div class="field grow"><label>CVV</label><input class="input" id="pg-cvv" inputmode="numeric" autocomplete="cc-csc" placeholder="123" maxlength="4"/></div>
+        </div>
+        <p class="field__hint">Pasarela simulada. Tarjeta de prueba aprobada: 4111 1111 1111 1111 · rechazada: cualquier número terminado en 0000.</p>`
+        : `<p class="field__hint mt-12">Pasarela simulada: al confirmar, el pago por ${U.esc(U.metodoPagoLabel(metodo).toLowerCase())} se registra como aprobado y se emite el comprobante digital.</p>`}
+        <div class="field__error hide" id="pg-err"></div>`,
+      actions: [
+        { label: "Cancelar", variant: "btn--soft", onClick: () => done(null) },
+        {
+          label: "Confirmar pago", variant: "btn--cta", close: false,
+          onClick: async () => {
+            const errBox = U.$("#pg-err"); errBox.classList.add("hide");
+            const btn = U.$('[data-act="1"]', m.root); btn.disabled = true; btn.textContent = "Autorizando…";
+            const tarjeta = conTarjeta ? {
+              numero: U.$("#pg-num").value, titular: U.$("#pg-tit").value,
+              vencimiento: U.$("#pg-ven").value, cvv: U.$("#pg-cvv").value,
+            } : {};
+            const res = await D.procesarPago({ metodo, monto, tarjeta });
+            if (res.aprobado) { U.closeModal(); done(res); return false; }
+            // Pago fallido (HU-007 · criterio 2): se informa y se permite reintentar.
+            showErr(errBox, res.motivo || "Pago rechazado.");
+            btn.disabled = false; btn.textContent = "Reintentar pago";
+            return false;
+          },
+        },
+      ],
+    });
+    if (conTarjeta) {
+      const num = U.$("#pg-num");
+      num.addEventListener("input", () => { num.value = num.value.replace(/\D/g, "").slice(0, 19).replace(/(\d{4})(?=\d)/g, "$1 "); });
+      const ven = U.$("#pg-ven");
+      ven.addEventListener("input", () => { const d = ven.value.replace(/\D/g, "").slice(0, 4); ven.value = d.length > 2 ? d.slice(0, 2) + "/" + d.slice(2) : d; });
     }
   });
 }
@@ -584,6 +777,8 @@ export async function viewPermiso(ctx) {
           ${permitRow("Tipo", U.tipoPermisoLabel(permiso.tipo))}
           ${permitRow("Emisión", U.fmtDate(permiso.fecha_emision))}
           ${permitRow("Vencimiento", U.fmtDate(permiso.fecha_vencimiento))}
+          ${permiso.monto_total ? permitRow("Importe abonado", U.fmtMoney(permiso.monto_total)) : ""}
+          ${permiso.pago_comprobante ? permitRow("Comprobante de pago", `${permiso.pago_comprobante} · ${U.metodoPagoLabel(permiso.pago_metodo)}`) : ""}
         </div>
         <div class="permit__actions stack">
           <button class="btn btn--primary btn--block" data-print>${U.icon("download", { size: 18 })} Descargar PDF</button>
@@ -705,9 +900,18 @@ export async function viewPerfil(ctx) {
       ${(p.rol === "dueno") ? `<a class="btn btn--outline btn--block mt-12" href="#/gestion">${U.icon("boat", { size: 18 })} Gestionar mis catamaranes</a>` : ""}
       ${isAdmin(p.rol) ? `<a class="btn btn--outline btn--block mt-12" href="#/admin">${U.icon("grid", { size: 18 })} Ir al panel municipal</a>` : ""}
 
+      <h2 class="section-title mt-24">Notificaciones</h2>
+      <div class="card card--flat">
+        <label class="flex between items-center" style="cursor:pointer;gap:12px">
+          <span><b>Recordatorios de salida</b><br><small class="muted">Aviso el día previo y el día de tu reserva.</small></span>
+          <input type="checkbox" id="pf-recordatorios" ${D.prefRecordatorios() ? "checked" : ""} style="width:22px;height:22px;accent-color:var(--blue-600)"/>
+        </label>
+      </div>
+
       <h2 class="section-title mt-24">Cuenta</h2>
       <div class="card card--flat">
         <div class="permit__row"><span>Modo de datos</span><b>${D.MODE === "demo" ? "Demostración (local)" : "Supabase (en la nube)"}</b></div>
+        <a class="btn btn--outline btn--block mt-12" href="#/recuperar">${U.icon("lock", { size: 18 })} Cambiar contraseña</a>
         ${D.MODE === "demo" ? `<button class="btn btn--soft btn--block mt-12" data-reset>${U.icon("refresh", { size: 18 })} Reiniciar datos de demo</button>` : ""}
       </div>
 
@@ -719,11 +923,17 @@ export async function viewPerfil(ctx) {
 
   U.$("#f-perfil").addEventListener("submit", async (e) => {
     e.preventDefault();
+    const nombre = U.$("#pf-nombre").value.trim();
+    if (!nombre) { U.toast("El nombre es obligatorio.", "err"); U.$("#pf-nombre").classList.add("input--error"); return; }
     try {
-      await D.updateProfile({ nombre: U.$("#pf-nombre").value.trim(), apellido: U.$("#pf-apellido").value.trim(), telefono: U.$("#pf-tel").value.trim(), dni: U.$("#pf-dni").value.trim() });
+      await D.updateProfile({ nombre, apellido: U.$("#pf-apellido").value.trim(), telefono: U.$("#pf-tel").value.trim(), dni: U.$("#pf-dni").value.trim() });
       U.toast("Perfil actualizado", "ok");
       ctx.rerender();
     } catch (err) { U.toast(err.message, "err"); }
+  });
+  U.$("#pf-recordatorios")?.addEventListener("change", (e) => {
+    D.setPrefRecordatorios(e.target.checked);
+    U.toast(e.target.checked ? "Recordatorios activados" : "Recordatorios desactivados", "ok");
   });
   U.$("[data-reset]")?.addEventListener("click", async () => {
     const ok = await U.confirmDialog({ title: "Reiniciar demo", message: "Se restauran los datos de ejemplo y se cierra la sesión. ¿Continuar?", okLabel: "Reiniciar" });
@@ -759,35 +969,57 @@ async function openNotificaciones(ctx) {
  *  PANEL MUNICIPAL (dashboard)
  * ========================================================================== */
 export async function viewAdmin(ctx) {
-  const [resumen, porDia, porEspecie, ocupacion, ultimos] = await Promise.all([
-    D.dashboardResumen(), D.reservasPorDia({ from: U.addDaysISO(U.todayISO(), -13), to: U.todayISO() }),
-    D.permisosPorEspecie(), D.ocupacionCatamaranes(), D.ultimosPermisos(6),
-  ]);
+  // Filtros (HU-013 · criterio 2): rango de fechas y embarcación.
+  const hoy = U.todayISO();
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(ctx.params.to || "") ? ctx.params.to : hoy;
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(ctx.params.from || "") && ctx.params.from <= to ? ctx.params.from : U.addDaysISO(to, -13);
+  const catSel = ctx.params.cat || "";
 
-  // Serie de 14 días (rellena ceros)
+  const [resumen, porDia, porEspecie, dispo, ultimos] = await Promise.all([
+    D.dashboardResumen(), D.reservasPorDia({ from, to }),
+    D.permisosPorEspecie(), D.disponibilidad(to), D.ultimosPermisos(6),
+  ]);
+  // Ocupación "en tiempo real" del día seleccionado (fin del rango), por embarcación.
+  const ocupacionAll = dispo.map((c) => ({ id: c.id, nombre: c.nombre, capacidad: Number(c.capacidad), lugares_ocupados: c.ocupados }));
+  const ocupacion = catSel ? ocupacionAll.filter((o) => o.id === catSel) : ocupacionAll;
+
+  // Serie diaria del período (rellena ceros; agrupa por semana si el rango es largo)
+  const nDias = Math.round((new Date(to) - new Date(from)) / 86400000) + 1;
   const dias = [];
-  for (let i = 13; i >= 0; i--) {
-    const iso = U.addDaysISO(U.todayISO(), -i);
+  for (let i = nDias - 1; i >= 0; i--) {
+    const iso = U.addDaysISO(to, -i);
     const row = porDia.find((d) => d.fecha === iso);
-    dias.push({ label: iso.slice(8), value: row ? Number(row.cantidad_reservas) : 0 });
+    dias.push({ label: nDias > 21 ? U.fmtDateShort(iso) : iso.slice(8), value: row ? Number(row.cantidad_reservas) : 0 });
   }
+  const serie = nDias > 31
+    ? dias.reduce((acc, d, i) => { const k = Math.floor(i / 7); (acc[k] ||= { label: "sem " + (k + 1), value: 0 }).value += d.value; return acc; }, [])
+    : dias;
+  const reservasPeriodo = porDia.reduce((s, d) => s + Number(d.cantidad_reservas), 0);
+  const ingresosPeriodo = porDia.reduce((s, d) => s + Number(d.ingresos), 0);
   const especieData = porEspecie.filter((e) => e.permisos_emitidos > 0).map((e, i) => ({ label: e.especie, value: Number(e.permisos_emitidos), color: CHART_COLORS[i % CHART_COLORS.length] }));
 
   U.mount(adminLayout({
     active: "panel",
     title: "Panel municipal",
     subtitle: `${CFG.MUNICIPIO || "Municipio de Coronel Moldes"} · ${CFG.LUGAR || "Dique Cabra Corral"}`,
-    actions: `<span class="daterange">${U.icon("calendar", { size: 15 })} Últimos 30 días</span>`,
+    actions: `
+      <input class="input" type="date" id="pa-from" value="${from}" max="${to}" style="width:auto;padding:8px 10px;font-size:.85rem" aria-label="Desde"/>
+      <span class="muted">a</span>
+      <input class="input" type="date" id="pa-to" value="${to}" max="${hoy}" style="width:auto;padding:8px 10px;font-size:.85rem" aria-label="Hasta"/>
+      <select class="select" id="pa-cat" style="width:auto;padding:8px 10px;font-size:.85rem" aria-label="Embarcación">
+        <option value="">Todas las embarcaciones</option>
+        ${ocupacionAll.map((o) => `<option value="${o.id}"${o.id === catSel ? " selected" : ""}>${U.esc(o.nombre)}</option>`).join("")}
+      </select>`,
     body: `
       <div class="kpis">
-        ${kpi("Reservas hoy", resumen.reservas_hoy, "+ activas", "up")}
+        ${kpi("Reservas hoy", resumen.reservas_hoy, `${reservasPeriodo} en el período`, "up")}
         ${kpi("Permisos vigentes", resumen.permisos_vigentes, `${resumen.permisos_total} emitidos`, "up")}
-        ${kpi("Ingresos totales", U.fmtMoney(resumen.ingresos_total), "acumulado", "up")}
+        ${kpi("Ingresos del período", U.fmtMoney(ingresosPeriodo), `${U.fmtMoney(resumen.ingresos_total)} acumulado`, "up")}
       </div>
       <div class="grid-2">
         <div class="panel">
-          <h3>Reservas por día (últimos 14)</h3>
-          ${barChart(dias, { height: 230, color: "#1b5fc4" })}
+          <h3>Reservas por día · ${U.fmtDate(from)} a ${U.fmtDate(to)}</h3>
+          ${barChart(serie, { height: 230, color: "#1b5fc4" })}
         </div>
         <div class="panel">
           <h3>Permisos por especie</h3>
@@ -796,15 +1028,14 @@ export async function viewAdmin(ctx) {
       </div>
       <div class="grid-2">
         <div class="panel">
-          <h3>Ocupación por catamarán</h3>
+          <h3>Ocupación por catamarán · ${U.fmtDate(to)}</h3>
           <table class="table">
             <thead><tr><th>Catamarán</th><th>Ocupación</th><th style="text-align:right">Lugares</th></tr></thead>
             <tbody>${ocupacion.map((o) => {
-              const pct = o.capacidad ? Math.round((o.lugares_ocupados / o.capacidad) * 100) : 0;
               return `<tr><td>${U.esc(o.nombre)}</td>
                 <td style="min-width:120px">${progressBar(o.lugares_ocupados, o.capacidad)}</td>
                 <td style="text-align:right">${o.lugares_ocupados}/${o.capacidad}</td></tr>`;
-            }).join("")}</tbody>
+            }).join("") || `<tr><td colspan="3" class="muted">Sin datos.</td></tr>`}</tbody>
           </table>
         </div>
         <div class="panel">
@@ -822,6 +1053,12 @@ export async function viewAdmin(ctx) {
     `,
   }, ctx));
   wireAdmin(ctx);
+
+  const applyFilters = () => {
+    const f = U.$("#pa-from").value || from, t = U.$("#pa-to").value || to, c = U.$("#pa-cat").value;
+    ctx.go(`/admin?from=${f}&to=${t}${c ? "&cat=" + c : ""}`);
+  };
+  ["#pa-from", "#pa-to", "#pa-cat"].forEach((s) => U.$(s)?.addEventListener("change", applyFilters));
 }
 
 function kpi(label, value, delta, dir) {
@@ -834,8 +1071,10 @@ function kpi(label, value, delta, dir) {
  *  REPORTES
  * ========================================================================== */
 export async function viewReportes(ctx) {
-  const [resumen, porDiaAll, porEspecie, alertas] = await Promise.all([
-    D.dashboardResumen(), D.reservasPorDia({}), D.permisosPorEspecie(), D.alertasFauna(),
+  // Cierre de período automático (HU-009): garantiza un reporte mensual aunque no haya pg_cron.
+  try { await D.asegurarReporteMensual(); } catch (e) { console.warn("Reporte mensual:", e.message); }
+  const [resumen, porDiaAll, porEspecie, alertas, enviados] = await Promise.all([
+    D.dashboardResumen(), D.reservasPorDia({}), D.permisosPorEspecie(), D.alertasFauna(), D.listReportes(8).catch(() => []),
   ]);
 
   // Agrupar por mes (últimos 6 meses)
@@ -854,7 +1093,8 @@ export async function viewReportes(ctx) {
     title: "Reportes",
     subtitle: "Indicadores de actividad y monitoreo de fauna",
     actions: `<button class="btn btn--soft btn--sm" data-csv>${U.icon("download", { size: 16 })} CSV</button>
-              <button class="btn btn--primary btn--sm" data-pdf>${U.icon("file-text", { size: 16 })} PDF</button>`,
+              <button class="btn btn--soft btn--sm" data-pdf>${U.icon("file-text", { size: 16 })} PDF</button>
+              <button class="btn btn--primary btn--sm" data-enviar>${U.icon("mail", { size: 16 })} Enviar al municipio</button>`,
     body: `
       <div class="kpis">
         ${kpi("Reservas totales", resumen.reservas_total, "histórico", "up")}
@@ -885,10 +1125,31 @@ export async function viewReportes(ctx) {
         }).join("") : `<p class="muted">No hay alertas activas. La presión pesquera está dentro de los umbrales.</p>`}
         <p class="panel__foot">El umbral de permisos por especie se configura según los estudios de la dirección de fauna.</p>
       </div>
+      <div class="panel">
+        <h3>${U.icon("mail", { size: 18 })} Reportes enviados al municipio</h3>
+        <table class="table">
+          <thead><tr><th>Fecha</th><th>Reporte</th><th>Destinatario</th><th>Origen</th></tr></thead>
+          <tbody>${enviados.map((r) => `<tr>
+            <td style="white-space:nowrap">${U.fmtDateTime(r.created_at || r.fecha)}</td>
+            <td><b>${U.esc(r.titulo)}</b><br><small class="muted">Permisos: ${r.datos?.resumen?.permisos_total ?? "—"} · Reservas: ${r.datos?.resumen?.reservas_total ?? "—"}</small></td>
+            <td>${U.esc(r.destinatario)}</td>
+            <td><span class="badge ${r.origen === "automatico" ? "badge--info" : "badge--ok"}">${r.origen === "automatico" ? "Automático" : "Manual"}</span></td>
+          </tr>`).join("") || `<tr><td colspan="4" class="muted">Todavía no se enviaron reportes.</td></tr>`}</tbody>
+        </table>
+        <p class="panel__foot">Cada envío queda registrado con fecha, destinatario y una instantánea de los indicadores. El cierre mensual se genera automáticamente.</p>
+      </div>
     `,
   }, ctx));
   wireAdmin(ctx);
 
+  U.$("[data-enviar]")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget; btn.disabled = true;
+    try {
+      const r = await D.enviarReporteMunicipio("general", "manual");
+      U.toast(`Reporte enviado al ${r?.destinatario || r?.parametros?.destinatario || "municipio"}`, "ok");
+      ctx.rerender();
+    } catch (err) { U.toast(err.message || "No se pudo enviar el reporte.", "err"); btn.disabled = false; }
+  });
   U.$("[data-pdf]")?.addEventListener("click", () => window.print());
   U.$("[data-csv]")?.addEventListener("click", () => {
     const rows = porEspecie.map((e) => ({ especie: e.especie, permisos_emitidos: e.permisos_emitidos, umbral: e.umbral_permisos }));

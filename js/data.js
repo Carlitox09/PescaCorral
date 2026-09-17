@@ -15,6 +15,14 @@ export const MODE = HAS_SUPABASE ? "supabase" : "demo";
 const DEMO_KEY = "pescacorral.demo.v1";
 const DEMO_PASS = "Demo1234!";
 
+/* Política de acceso (TFG · sección Seguridad / HU-002):
+ *   bloqueo temporal de la cuenta tras MAX_INTENTOS fallidos consecutivos. */
+export const MAX_INTENTOS = 3;
+export const BLOQUEO_MINUTOS = 15;
+const LOCK_KEY = "pescacorral.intentos.v1";      // fallback local (modo demo / sin migración)
+const RECOVERY_KEY = "pescacorral.recovery";      // recuperación de contraseña en curso (por pestaña)
+const PREF_RECORDATORIOS = "pescacorral.pref.recordatorios";
+
 let sb = null;                 // cliente supabase (lazy)
 const authListeners = new Set();
 
@@ -28,9 +36,16 @@ function ready() {
     if (MODE === "supabase") {
       const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
       sb = createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, {
-        auth: { persistSession: true, autoRefreshToken: true },
+        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
       });
-      sb.auth.onAuthStateChange(() => authListeners.forEach((fn) => fn()));
+      sb.auth.onAuthStateChange((event) => {
+        // El enlace de "olvidé mi contraseña" vuelve a la app con una sesión de
+        // recuperación: se marca para que el enrutador lleve a #/restablecer.
+        if (event === "PASSWORD_RECOVERY") {
+          try { sessionStorage.setItem(RECOVERY_KEY, JSON.stringify({ demo: false })); } catch {}
+        }
+        authListeners.forEach((fn) => fn(event));
+      });
     } else {
       seedDemo();
     }
@@ -71,7 +86,7 @@ const todayISO = () => dateISO(new Date());
 
 function seedDemo() {
   DB = loadDB();
-  if (DB && DB.__v === 1) return;
+  if (DB && DB.__v === 2) return;
 
   const rnd = mulberry32(20260628);
   const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
@@ -187,12 +202,12 @@ function seedDemo() {
     { id: uid(), id_especie: especies[2].id, periodo, permisos_emitidos: 210, umbral: 300, estado: "activa", created_at: isoFromOffset(-5).toISOString() },
   ];
 
-  DB = { __v: 1, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, seq, passwords: {}, session: null };
+  DB = { __v: 2, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, reportes: [], seq, passwords: {}, session: null };
   saveDB(DB);
 }
 
 function persist() { if (DB) saveDB(DB); }
-function emitAuth() { authListeners.forEach((fn) => fn()); }
+function emitAuth(event = "DEMO") { authListeners.forEach((fn) => fn(event)); }
 
 /* ---- helpers demo ---- */
 const byId = (arr, id) => arr.find((x) => x.id === id);
@@ -236,18 +251,132 @@ async function fetchProfileSupabase(id) {
   return data;
 }
 
+/* ---- Bloqueo temporal por intentos fallidos (HU-002 · criterio 3) ----
+ * En modo Supabase el registro vive en la tabla intento_acceso (funciones
+ * acceso_bloqueado / registrar_intento_acceso, ver database/migrations/002).
+ * Si esas funciones no existen todavía, se usa un registro local por email. */
+function loadLocks() { try { return JSON.parse(localStorage.getItem(LOCK_KEY)) || {}; } catch { return {}; } }
+function saveLocks(l) { try { localStorage.setItem(LOCK_KEY, JSON.stringify(l)); } catch {} }
+function lockEstadoLocal(email) {
+  const l = loadLocks(); const e = l[email];
+  if (!e) return { bloqueado: false, intentos: 0, restantes: MAX_INTENTOS, minutos: 0 };
+  if (e.hasta && e.hasta > Date.now())
+    return { bloqueado: true, intentos: e.intentos, restantes: 0, minutos: Math.max(1, Math.ceil((e.hasta - Date.now()) / 60000)) };
+  if (e.hasta && e.hasta <= Date.now()) { delete l[email]; saveLocks(l); return { bloqueado: false, intentos: 0, restantes: MAX_INTENTOS, minutos: 0 }; }
+  return { bloqueado: false, intentos: e.intentos, restantes: Math.max(0, MAX_INTENTOS - e.intentos), minutos: 0 };
+}
+function registrarIntentoLocal(email, exitoso) {
+  const l = loadLocks();
+  if (exitoso) { delete l[email]; saveLocks(l); return lockEstadoLocal(email); }
+  const prev = l[email];
+  const e = prev && !(prev.hasta && prev.hasta <= Date.now()) ? prev : { intentos: 0, hasta: null };
+  e.intentos += 1;
+  if (e.intentos >= MAX_INTENTOS) e.hasta = Date.now() + BLOQUEO_MINUTOS * 60000;
+  l[email] = e; saveLocks(l);
+  return lockEstadoLocal(email);
+}
+function normalizarLock(d) {
+  const intentos = Number(d.intentos) || 0;
+  return { bloqueado: Boolean(d.bloqueado), intentos, restantes: Math.max(0, MAX_INTENTOS - intentos), minutos: Number(d.minutos_restantes) || 0 };
+}
+const esFuncionInexistente = (err) => /PGRST202|could not find the function|does not exist/i.test(String(err?.message || err?.code || ""));
+
+async function lockEstado(email) {
+  if (MODE === "supabase") {
+    const { data, error } = await sb.rpc("acceso_bloqueado", { p_email: email });
+    if (!error && data) return normalizarLock(data);
+    if (error && !esFuncionInexistente(error)) console.warn("acceso_bloqueado:", error.message);
+  }
+  return lockEstadoLocal(email);
+}
+async function registrarIntento(email, exitoso) {
+  if (MODE === "supabase") {
+    const { data, error } = await sb.rpc("registrar_intento_acceso", { p_email: email, p_exitoso: exitoso });
+    if (!error && data) return normalizarLock(data);
+    if (error && !esFuncionInexistente(error)) console.warn("registrar_intento_acceso:", error.message);
+  }
+  return registrarIntentoLocal(email, exitoso);
+}
+/** Estado de bloqueo de una cuenta (para mostrarlo en la pantalla de login). */
+export async function estadoBloqueo(email) {
+  await ready();
+  return lockEstado((email || "").trim().toLowerCase());
+}
+function msgBloqueo(estado) {
+  const min = estado.minutos || BLOQUEO_MINUTOS;
+  return `Cuenta bloqueada temporalmente por ${MAX_INTENTOS} intentos fallidos consecutivos. ` +
+         `Volvé a intentar en ${min} minuto${min === 1 ? "" : "s"} o recuperá tu contraseña.`;
+}
+const esCredencialInvalida = (msg = "") => /invalid login|invalid credentials|invalid_credentials/i.test(msg);
+
 export async function signIn(email, password) {
   await ready();
   email = (email || "").trim().toLowerCase();
+  const previo = await lockEstado(email);
+  if (previo.bloqueado) throw new Error(msgBloqueo(previo));
+
+  let ok = false;
   if (MODE === "supabase") {
     const { error } = await sb.auth.signInWithPassword({ email, password });
+    ok = !error;
+    // Errores que no son "credencial incorrecta" (p. ej. email sin confirmar) no cuentan como intento.
+    if (error && !esCredencialInvalida(error.message)) throw new Error(traducirAuth(error.message));
+  } else {
+    const u = DB.usuarios.find((x) => x.email.toLowerCase() === email);
+    ok = Boolean(u && demoPassword(u.email) === password);
+    if (ok) { DB.session = { userId: u.id }; persist(); }
+  }
+
+  const estado = await registrarIntento(email, ok);
+  if (!ok) {
+    if (estado.bloqueado) throw new Error(msgBloqueo(estado));
+    const r = estado.restantes;
+    throw new Error(`Email o contraseña incorrectos. ${r === 1 ? "Te queda 1 intento" : `Te quedan ${r} intentos`} antes del bloqueo temporal.`);
+  }
+  if (MODE === "demo") emitAuth("SIGNED_IN");
+  return true;
+}
+
+/* ---- Recuperación de contraseña por correo electrónico (Seguridad) ---- */
+export async function solicitarRecuperacion(email) {
+  await ready();
+  email = (email || "").trim().toLowerCase();
+  if (!email) throw new Error("Ingresá tu email.");
+  if (MODE === "supabase") {
+    // Supabase envía un enlace; al volver, la app detecta PASSWORD_RECOVERY y muestra #/restablecer.
+    const redirectTo = location.origin + location.pathname;
+    const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo });
     if (error) throw new Error(traducirAuth(error.message));
+    return { simulado: false };
+  }
+  // Demo: no hay correo real; el "enlace" se simula habilitando el cambio de clave en esta pestaña.
+  const existe = DB.usuarios.some((x) => x.email.toLowerCase() === email);
+  if (existe) { try { sessionStorage.setItem(RECOVERY_KEY, JSON.stringify({ email, demo: true })); } catch {} }
+  return { simulado: true, existe };
+}
+export function recuperacionPendiente() {
+  try { return JSON.parse(sessionStorage.getItem(RECOVERY_KEY)); } catch { return null; }
+}
+export function limpiarRecuperacion() { try { sessionStorage.removeItem(RECOVERY_KEY); } catch {} }
+
+export async function actualizarPassword(nueva) {
+  await ready();
+  if (MODE === "supabase") {
+    const { error } = await sb.auth.updateUser({ password: nueva });
+    if (error) throw new Error(traducirAuth(error.message));
+    const { data } = await sb.auth.getSession();
+    if (data.session?.user?.email) await registrarIntento(data.session.user.email.toLowerCase(), true);
+    limpiarRecuperacion(); emitAuth("USER_UPDATED");
     return true;
   }
-  const u = DB.usuarios.find((x) => x.email.toLowerCase() === email);
-  if (!u || demoPassword(u.email) !== password)
-    throw new Error("Email o contraseña incorrectos.");
-  DB.session = { userId: u.id }; persist(); emitAuth();
+  const rec = recuperacionPendiente();
+  if (!rec?.email) throw new Error("No hay una recuperación de contraseña en curso.");
+  const u = DB.usuarios.find((x) => x.email.toLowerCase() === rec.email);
+  if (!u) throw new Error("La cuenta no existe.");
+  DB.passwords[u.email.toLowerCase()] = nueva;
+  registrarIntentoLocal(u.email.toLowerCase(), true);   // se levanta cualquier bloqueo
+  DB.session = { userId: u.id }; persist();
+  limpiarRecuperacion(); emitAuth("USER_UPDATED");
   return true;
 }
 
@@ -295,8 +424,12 @@ export async function updateProfile(patch) {
 
 function traducirAuth(msg = "") {
   const m = msg.toLowerCase();
-  if (m.includes("invalid login")) return "Email o contraseña incorrectos.";
+  if (m.includes("invalid login") || m.includes("invalid credentials")) return "Email o contraseña incorrectos.";
   if (m.includes("already registered") || m.includes("already exists")) return "Ya existe una cuenta con ese email.";
+  if (m.includes("not confirmed")) return "Tenés que confirmar tu email antes de ingresar.";
+  if (m.includes("rate limit") || m.includes("too many")) return "Demasiados intentos. Esperá unos minutos y volvé a probar.";
+  if (m.includes("same password") || m.includes("different from the old")) return "La nueva contraseña debe ser distinta de la anterior.";
+  if (m.includes("auth session missing") || m.includes("session")) return "El enlace de recuperación no es válido o expiró. Solicitá uno nuevo.";
   if (m.includes("password")) return "La contraseña no cumple los requisitos mínimos.";
   if (m.includes("email")) return "Revisá el email ingresado.";
   return msg || "No se pudo completar la operación.";
@@ -332,18 +465,68 @@ export async function getLugares(catId) {
   return DB.lugares.filter((l) => l.id_catamaran === catId).sort((a, b) => a.numero - b.numero);
 }
 
+/* Lugares ocupados (confirmados) en una fecha, para todos los catamaranes.
+ * En Supabase se lee la vista v_lugares_ocupados (migración 002), que muestra
+ * la ocupación sin revelar quién reservó; si no existe, se consulta la tabla
+ * (limitada por RLS a lo que el usuario puede ver). */
+async function ocupadosPorFecha(fecha) {
+  if (MODE === "supabase") {
+    let rows = null;
+    const v = await sb.from("v_lugares_ocupados").select("id_lugar, id_catamaran").eq("fecha", fecha);
+    if (!v.error) rows = v.data;
+    else {
+      const t = await sb.from("reserva_lugar").select("id_lugar, lugar!inner(id_catamaran)").eq("fecha", fecha).eq("estado", "confirmada");
+      if (t.error) throw t.error;
+      rows = t.data.map((r) => ({ id_lugar: r.id_lugar, id_catamaran: r.lugar?.id_catamaran }));
+    }
+    return rows;
+  }
+  const lugarCat = new Map(DB.lugares.map((l) => [l.id, l.id_catamaran]));
+  return DB.reserva_lugar.filter((rl) => rl.fecha === fecha && rl.estado === "confirmada")
+    .map((rl) => ({ id_lugar: rl.id_lugar, id_catamaran: lugarCat.get(rl.id_lugar) }));
+}
+
 /** Devuelve un array con los IDs de lugar ocupados para esa fecha. */
 export async function getOcupacion(catId, fecha) {
   await ready();
-  if (MODE === "supabase") {
-    const { data, error } = await sb.from("reserva_lugar")
-      .select("id_lugar, lugar!inner(id_catamaran)")
-      .eq("fecha", fecha).eq("estado", "confirmada").eq("lugar.id_catamaran", catId);
-    if (error) throw error;
-    return data.map((r) => r.id_lugar);
+  return (await ocupadosPorFecha(fecha)).filter((r) => r.id_catamaran === catId).map((r) => r.id_lugar);
+}
+
+/** Catamaranes con lugares libres/ocupados para una fecha (HU-004). */
+export async function disponibilidad(fecha) {
+  await ready();
+  const [cats, ocupados] = await Promise.all([listCatamaranes(), ocupadosPorFecha(fecha)]);
+  const porCat = new Map();
+  ocupados.forEach((r) => porCat.set(r.id_catamaran, (porCat.get(r.id_catamaran) || 0) + 1));
+  return cats.map((c) => {
+    const ocup = porCat.get(c.id) || 0;
+    return { ...c, ocupados: ocup, libres: Math.max(0, Number(c.capacidad) - ocup) };
+  });
+}
+
+/* ============================================================================
+ *  PAGO (HU-007) · pasarela simulada
+ *  El prototipo no se integra con una pasarela real: simula la autorización.
+ *  Reglas de prueba: tarjeta/Mercado Pago requieren número (13-19 dígitos),
+ *  vencimiento MM/AA vigente y CVV; un número terminado en 0000 se rechaza
+ *  (escenario "pago fallido" de la matriz de casos de prueba).
+ * ========================================================================== */
+export async function procesarPago({ metodo = "tarjeta", monto = 0, tarjeta = {} } = {}) {
+  await new Promise((r) => setTimeout(r, 700));   // latencia de la pasarela
+  if (!(Number(monto) > 0)) return { aprobado: false, motivo: "El importe a pagar no es válido." };
+  if (metodo === "tarjeta" || metodo === "mercadopago") {
+    const num = String(tarjeta.numero || "").replace(/\s+/g, "");
+    if (!/^\d{13,19}$/.test(num)) return { aprobado: false, motivo: "Número de tarjeta inválido." };
+    if (!String(tarjeta.titular || "").trim()) return { aprobado: false, motivo: "Ingresá el nombre del titular." };
+    const mv = /^(\d{2})\/(\d{2})$/.exec(String(tarjeta.vencimiento || "").trim());
+    if (!mv || +mv[1] < 1 || +mv[1] > 12) return { aprobado: false, motivo: "Vencimiento inválido (usá MM/AA)." };
+    const hoy = new Date();
+    if (2000 + +mv[2] < hoy.getFullYear() || (2000 + +mv[2] === hoy.getFullYear() && +mv[1] < hoy.getMonth() + 1))
+      return { aprobado: false, motivo: "La tarjeta está vencida." };
+    if (!/^\d{3,4}$/.test(String(tarjeta.cvv || ""))) return { aprobado: false, motivo: "Código de seguridad inválido." };
+    if (num.endsWith("0000")) return { aprobado: false, motivo: "Transacción rechazada por la entidad emisora. Probá con otro medio de pago." };
   }
-  const ids = new Set(DB.lugares.filter((l) => l.id_catamaran === catId).map((l) => l.id));
-  return DB.reserva_lugar.filter((rl) => rl.fecha === fecha && rl.estado === "confirmada" && ids.has(rl.id_lugar)).map((rl) => rl.id_lugar);
+  return { aprobado: true, autorizacion: "AUT-" + Math.random().toString(36).slice(2, 8).toUpperCase() };
 }
 
 export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo = "tarjeta", tipoPermiso = "diario", especieId = null }) {
@@ -468,7 +651,7 @@ export async function getPermiso(id) {
   await ready();
   if (MODE === "supabase") {
     const { data, error } = await sb.from("permiso")
-      .select("*, especie(nombre,nombre_cientifico), reserva(fecha,turno,cantidad_lugares,monto_total,catamaran(nombre)), usuario(nombre,apellido,dni)")
+      .select("*, especie(nombre,nombre_cientifico), reserva(fecha,turno,cantidad_lugares,monto_total,catamaran(nombre),pago(comprobante,metodo,estado)), usuario(nombre,apellido,dni)")
       .eq("id", id).single();
     if (error) throw error;
     return mapPermisoSupabase(data, true);
@@ -490,9 +673,12 @@ function enrichPermisoDemo(p, full = false) {
     titular_dni: titular?.dni || "—",
   };
   if (full) {
+    const pago = r ? DB.pagos.find((x) => x.id_reserva === r.id) : null;
     base.especie_cientifico = esp?.nombre_cientifico || "";
     base.cantidad_lugares = r?.cantidad_lugares || 0;
     base.monto_total = r?.monto_total || 0;
+    base.pago_comprobante = pago?.comprobante || "";
+    base.pago_metodo = pago?.metodo || "";
   }
   return base;
 }
@@ -507,9 +693,12 @@ function mapPermisoSupabase(p, full = false) {
     titular_dni: p.usuario?.dni || "—",
   };
   if (full) {
+    const pago = Array.isArray(r.pago) ? r.pago[0] : r.pago;
     out.especie_cientifico = p.especie?.nombre_cientifico || "";
     out.cantidad_lugares = r.cantidad_lugares || 0;
     out.monto_total = r.monto_total || 0;
+    out.pago_comprobante = pago?.comprobante || "";
+    out.pago_metodo = pago?.metodo || "";
   }
   return out;
 }
@@ -538,6 +727,46 @@ export async function marcarLeidas() {
   DB.notificaciones.filter((n) => n.id_usuario === u.id).forEach((n) => (n.leida = true));
   persist(); emitAuth();
   return true;
+}
+
+/* Preferencia del usuario (HU-011 · criterio 3): recibir recordatorios de salida.
+ * Se guarda en el dispositivo; por defecto activada. */
+export function prefRecordatorios() {
+  try { return localStorage.getItem(PREF_RECORDATORIOS) !== "0"; } catch { return true; }
+}
+export function setPrefRecordatorios(on) {
+  try { localStorage.setItem(PREF_RECORDATORIOS, on ? "1" : "0"); } catch {}
+}
+
+/* Recordatorios de salida (HU-011 · criterio 2): genera una notificación para
+ * cada reserva confirmada de hoy o mañana que aún no tenga recordatorio.
+ * En Supabase lo hace la función generar_recordatorios (migración 002; además
+ * pg_cron la ejecuta a diario para todos los usuarios). */
+export async function generarRecordatorios() {
+  await ready();
+  if (!prefRecordatorios()) return 0;
+  if (MODE === "supabase") {
+    const { data, error } = await sb.rpc("generar_recordatorios", { p_solo_usuario: true });
+    if (error) { if (!esFuncionInexistente(error)) console.warn("generar_recordatorios:", error.message); return 0; }
+    if (Number(data) > 0) emitAuth("NOTIF");
+    return Number(data) || 0;
+  }
+  const u = demoSessionUser();
+  if (!u) return 0;
+  const hoy = todayISO(), manana = dateISO(isoFromOffset(1));
+  let n = 0;
+  DB.reservas.filter((r) => r.id_usuario === u.id && r.estado === "confirmada" && (r.fecha === hoy || r.fecha === manana)).forEach((r) => {
+    if (DB.notificaciones.some((x) => x.tipo === "recordatorio" && x.id_reserva === r.id)) return;
+    const cat = byId(DB.catamaranes, r.id_catamaran);
+    DB.notificaciones.unshift({
+      id: uid(), id_usuario: u.id, id_reserva: r.id, tipo: "recordatorio", titulo: "Recordatorio de salida",
+      mensaje: `Tu salida en ${cat?.nombre || "el catamarán"} es ${r.fecha === hoy ? "hoy" : "mañana"} (${r.fecha.split("-").reverse().join("/")}), turno ${r.turno === "tarde" ? "tarde" : "mañana"}. Recordá presentar tu permiso digital al embarcar.`,
+      leida: false, created_at: new Date().toISOString(),
+    });
+    n++;
+  });
+  if (n) persist();
+  return n;
 }
 
 /* ============================================================================
@@ -652,6 +881,92 @@ export async function ultimosPermisos(limit = 6) {
       const t = byId(DB.usuarios, p.id_usuario);
       return { id: p.id, numero: p.numero, estado: p.estado, titular: t ? `${t.nombre} ${t.apellido}`.trim() : "—", especie: (byId(DB.especies, p.id_especie) || {}).nombre || "—", fecha: r?.fecha || null };
     });
+}
+
+/* ============================================================================
+ *  REPORTES AL MUNICIPIO (HU-009)
+ *  Cada envío queda registrado en la tabla "reporte" con fecha, destinatario,
+ *  origen (manual / automático) y una instantánea de los indicadores. En
+ *  Supabase lo realiza la función generar_reporte_municipal (migración 002),
+ *  que además notifica a los administradores municipales; pg_cron la ejecuta
+ *  automáticamente al cierre de cada mes. Sin la migración, la instantánea se
+ *  arma en el cliente y se inserta directamente (sólo administradores, por RLS).
+ * ========================================================================== */
+const DESTINATARIO = () => CFG.MUNICIPIO || "Municipio de Coronel Moldes";
+const periodoActual = () => todayISO().slice(0, 7);
+const tituloReporte = (tipo) => ({
+  ocupacion: "Reporte de ocupación de catamaranes", permisos: "Reporte de permisos emitidos",
+  fauna: "Reporte de presión pesquera por especie", ingresos: "Reporte de ingresos",
+}[tipo] || "Reporte general de actividad pesquera") + " · " + periodoActual();
+
+async function snapshotReporte() {
+  const [resumen, permisos_por_especie, ocupacion_catamaranes, reservas_por_dia] = await Promise.all([
+    dashboardResumen(), permisosPorEspecie(), ocupacionCatamaranes(), reservasPorDia({ from: periodoActual() + "-01" }),
+  ]);
+  return { resumen, permisos_por_especie, ocupacion_catamaranes, reservas_por_dia, generado_en: new Date().toISOString() };
+}
+
+export async function enviarReporteMunicipio(tipo = "general", origen = "manual") {
+  await ready();
+  const destinatario = DESTINATARIO();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.rpc("generar_reporte_municipal", { p_tipo: tipo, p_origen: origen });
+    if (!error) return data;
+    if (!esFuncionInexistente(error)) throw new Error(error.message);
+    const datos = await snapshotReporte();
+    const { data: s } = await sb.auth.getSession();
+    const { data: row, error: e2 } = await sb.from("reporte").insert({
+      tipo, titulo: tituloReporte(tipo), fecha: todayISO(),
+      parametros: { periodo: periodoActual(), origen, destinatario },
+      datos, generado_por: s.session?.user?.id || null,
+    }).select().single();
+    if (e2) throw new Error(e2.message);
+    return row;
+  }
+  const u = demoSessionUser();
+  const datos = await snapshotReporte();
+  const rep = {
+    id: uid(), tipo, titulo: tituloReporte(tipo), fecha: todayISO(),
+    parametros: { periodo: periodoActual(), origen, destinatario }, destinatario, origen, estado_envio: "enviado",
+    datos, generado_por: u?.id || null, created_at: new Date().toISOString(),
+  };
+  DB.reportes = DB.reportes || [];
+  DB.reportes.unshift(rep);
+  DB.usuarios.filter((x) => x.rol === "admin_municipal").forEach((adm) => DB.notificaciones.unshift({
+    id: uid(), id_usuario: adm.id, tipo: "sistema", titulo: "Reporte recibido",
+    mensaje: `El sistema envió "${rep.titulo}" al ${destinatario}.`, leida: false, created_at: rep.created_at,
+  }));
+  persist();
+  return rep;
+}
+
+export async function listReportes(limit = 12) {
+  await ready();
+  let rows;
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("reporte").select("*").order("created_at", { ascending: false }).limit(limit);
+    if (error) throw error;
+    rows = data;
+  } else {
+    rows = (DB.reportes || []).slice(0, limit);
+  }
+  return rows.map((r) => ({
+    ...r,
+    destinatario: r.destinatario || r.parametros?.destinatario || DESTINATARIO(),
+    origen: r.origen || r.parametros?.origen || "manual",
+    periodo: r.parametros?.periodo || String(r.fecha || "").slice(0, 7),
+    estado_envio: r.estado_envio || "enviado",
+  }));
+}
+
+/* Cierre de período: si el mes en curso todavía no tiene reporte automático,
+ * lo genera. Cubre el caso en que pg_cron no esté habilitado. */
+export async function asegurarReporteMensual() {
+  await ready();
+  const existentes = await listReportes(50);
+  const periodo = periodoActual();
+  if (existentes.some((r) => r.origen === "automatico" && r.periodo === periodo)) return null;
+  return enviarReporteMunicipio("general", "automatico");
 }
 
 /* ============================================================================
