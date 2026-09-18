@@ -6,7 +6,7 @@
  *   - Recursos propios (css/js/icons/vendor): stale-while-revalidate.
  *   - Llamadas a Supabase (/auth, /rest, /realtime): siempre a la red (no se cachean).
  * ========================================================================== */
-const VERSION = "pescacorral-v1.0.0";
+const VERSION = "pescacorral-v1.1.0";
 const APP_SHELL = [
   "./",
   "./index.html",

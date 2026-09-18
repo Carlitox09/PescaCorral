@@ -13,6 +13,8 @@ const isAdmin = (rol) => rol === "admin_municipal" || rol === "admin_sistema";
 const ROUTES = {
   login:       { view: V.viewLogin,       auth: false },
   registro:    { view: V.viewRegistro,    auth: false },
+  recuperar:   { view: V.viewRecuperar,   auth: false, anySession: true },
+  restablecer: { view: V.viewRestablecer, auth: false, anySession: true },
   home:        { view: V.viewHome,        auth: true },
   catamaranes: { view: V.viewCatamaranes, auth: true },
   reserva:     { view: V.viewReserva,     auth: true },
@@ -53,6 +55,14 @@ async function render() {
   if (rendering) return;                    // evita reentradas; el último hash gana
   rendering = true;
   try {
+    // Supabase devuelve errores de enlaces vencidos en el hash (#error=...&error_description=...).
+    const rawHash = (location.hash || "").replace(/^#/, "");
+    if (/(^|&)error_description=/.test(rawHash)) {
+      const desc = new URLSearchParams(rawHash).get("error_description") || "El enlace no es válido.";
+      toast(desc.replace(/\+/g, " "), "err", 6000);
+      go("/recuperar"); return;
+    }
+
     const { base, params } = parseHash();
     const route = ROUTES[base] || ROUTES.home;
 
@@ -60,10 +70,13 @@ async function render() {
     try { session = await D.getSession(); } catch (e) { console.warn(e); }
     if (myToken !== token) return;           // cambió el hash mientras resolvíamos
 
+    // Recuperación de contraseña en curso: se fuerza la pantalla de nueva contraseña.
+    if (D.recuperacionPendiente() && base !== "restablecer" && base !== "recuperar") { go("/restablecer"); return; }
+
     // --- Guardas de acceso ---
     if (!route.auth) {
       // login / registro: si ya hay sesión, ir a la pantalla principal
-      if (session) { go(isAdmin(session.profile.rol) ? "/admin" : "/home"); return; }
+      if (session && !route.anySession) { go(isAdmin(session.profile.rol) ? "/admin" : "/home"); return; }
     } else {
       if (!session) { go("/login"); return; }
       // admins entran directo a su panel cuando piden "home"
@@ -96,7 +109,11 @@ async function render() {
 window.addEventListener("hashchange", render);
 
 // Re-render ante cambios de autenticación (login/logout, refresh de token).
-D.onAuthChange(() => render());
+// PASSWORD_RECOVERY llega al volver desde el enlace de "olvidé mi contraseña".
+D.onAuthChange((event) => {
+  if (event === "PASSWORD_RECOVERY") { go("/restablecer"); return; }
+  render();
+});
 
 // Primer render.
 if (!location.hash) location.hash = "#/home";

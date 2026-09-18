@@ -1,320 +1,180 @@
-# PescaCorral — PWA para reservas y permisos de pesca
+# PescaCorral: PWA para reservas y permisos de pesca
 
-PescaCorral es una aplicación web progresiva orientada a la gestión de reservas y permisos de pesca deportiva en el **Dique Cabra Corral**, ubicado en Coronel Moldes, Salta.
+PescaCorral es una **aplicación web progresiva (PWA)** para la gestión de reservas de lugares en catamaranes y permisos digitales de pesca deportiva en el **Dique Cabra Corral** (Coronel Moldes, Salta). Es el prototipo tecnológico del Trabajo Final de Grado de la Licenciatura en Informática (Universidad Siglo 21).
 
-El sistema permite que pescadores y turistas puedan consultar catamaranes disponibles, reservar lugares, realizar un pago simulado y obtener un permiso municipal digital con código QR. También contempla el uso por parte de los dueños de embarcaciones, quienes pueden administrar sus catamaranes, y del Municipio, que cuenta con un panel para consultar información general sobre reservas, permisos, ingresos y actividad pesquera.
+La aplicación permite que pescadores y turistas consulten la disponibilidad de catamaranes, reserven lugares, paguen (pasarela simulada) y obtengan un permiso municipal digital con código QR. Los dueños de embarcaciones administran sus catamaranes y el Municipio cuenta con un panel de indicadores, reportes, alertas de fauna y gestión de usuarios.
 
-Este repositorio forma parte del desarrollo del Trabajo Final de Grado y contiene dos componentes principales:
-
-1. Una **PWA** desarrollada con HTML, CSS y JavaScript vanilla, sin frameworks ni procesos de compilación.
-2. Una **base de datos relacional** preparada para PostgreSQL / Supabase, ubicada en la carpeta `database/`.
-
-La aplicación puede ejecutarse en **modo demo**, utilizando datos de ejemplo almacenados en el navegador. Si se cargan las credenciales de Supabase en el archivo `config.js`, la aplicación pasa a trabajar con una base de datos real, autenticación de usuarios y políticas de seguridad por filas.
+**Aplicación publicada:** https://carlitox09.github.io/PescaCorral/
 
 ---
 
-## Funcionalidades principales
+## Arquitectura (alineada con el TFG)
 
-### Pescador / turista
+| Capa | Tecnología | Detalle |
+| --- | --- | --- |
+| Presentación | PWA en HTML5, CSS3 y JavaScript (ES Modules) | Instalable en el teléfono, service worker con caché de la interfaz, manifest. Publicada en GitHub Pages bajo HTTPS. |
+| Lógica | Supabase | Auth (email + contraseña, hash, JWT, recuperación por correo), API REST generada automáticamente (PostgREST), funciones de negocio en PL/pgSQL y políticas RLS por rol. |
+| Datos | PostgreSQL (gestionado por Supabase) | Esquema en `database/schema.sql`. |
 
-* Registro e inicio de sesión.
-* Búsqueda de catamaranes por fecha y turno.
-* Selección visual de asientos disponibles.
-* Generación de reserva.
-* Pago simulado.
-* Emisión de permiso digital con código QR.
-* Consulta de historial de reservas y permisos.
-* Recepción de notificaciones.
+No hay servidor propio ni proceso de compilación: el repositorio se sirve tal cual.
 
-### Dueño de catamarán
+### Modos de ejecución
 
-* Alta y edición de embarcaciones.
-* Configuración de estado, precio, capacidad y habilitación.
-* Consulta de información vinculada a sus catamaranes.
+* **Modo Supabase** (por defecto, `config.js` con credenciales): datos reales, autenticación y RLS.
+* **Modo demo** (si `config.js` queda sin credenciales): datos de ejemplo en el navegador, sin backend. Útil para probar sin conexión.
 
-### Administración municipal
+---
 
-* Panel con indicadores generales.
-* Consulta de reservas, permisos e ingresos.
-* Gráficos de reservas por día y permisos por especie.
-* Visualización de ocupación por catamarán.
-* Gestión de usuarios y roles.
-* Exportación de reportes en PDF y CSV.
-* Monitoreo de fauna mediante alertas por umbrales de permisos.
+## Funcionalidades por historia de usuario
 
-### Características PWA
-
-* Instalación en dispositivos móviles.
-* Funcionamiento offline mediante service worker.
-* Íconos y configuración para instalación.
-* Compatible con despliegue en GitHub Pages.
+| HU | Funcionalidad | Dónde está |
+| --- | --- | --- |
+| HU-001 | Registro con validación de contraseña (8+ caracteres, mayúscula, minúscula, número, especial) | `#/registro` |
+| HU-002 | Inicio de sesión; **bloqueo temporal de 15 minutos tras 3 intentos fallidos consecutivos**; recuperación de contraseña por correo | `#/login`, `#/recuperar`, `#/restablecer` |
+| HU-003 | Alta y edición de catamaranes (estado, precio, capacidad, habilitación) | `#/gestion` |
+| HU-004 | Disponibilidad por fecha y turno con **lugares libres por catamarán** | `#/catamaranes` |
+| HU-005 | Reserva con selección visual de asientos; sin doble reserva (índice único) | `#/reserva/:id` |
+| HU-006 | Permiso digital con QR, vencimiento y estado (vigente / vencido / anulado) | `#/permiso/:id` |
+| HU-007 | **Pasarela de pago simulada** con escenario de rechazo y comprobante digital | modal de pago en la reserva |
+| HU-008 | Reportes con gráficos, exportación CSV (Excel) y PDF | `#/reportes` |
+| HU-009 | **Envío de reportes al municipio** (manual y cierre mensual automático) con registro de fecha, destinatario y origen | `#/reportes` |
+| HU-010 | Historial de reservas y permisos | `#/historial` |
+| HU-011 | Centro de notificaciones y **recordatorios de salida** (día previo y día de la reserva), con preferencia del usuario | campana / `#/perfil` |
+| HU-012 | Gestión de roles | `#/usuarios` |
+| HU-013 | Panel municipal con **filtros por rango de fechas y embarcación** | `#/admin` |
+| HU-014 | Perfil de usuario | `#/perfil` |
+| HU-015 | Monitoreo de fauna: permisos por especie y alertas por umbral | `#/reportes` |
 
 ---
 
 ## Estructura del proyecto
 
 ```text
-pescacorral/
-├── index.html              # Punto de entrada de la aplicación
+PescaCorral/
+├── index.html              # Punto de entrada
 ├── manifest.webmanifest    # Configuración de la PWA
-├── service-worker.js       # Caché offline
-├── config.js               # Configuración de Supabase
-├── css/
-│   └── styles.css          # Estilos generales de la aplicación
+├── service-worker.js       # Caché offline del app shell
+├── config.js               # Credenciales de Supabase (anon key) y datos del municipio
+├── css/styles.css
 ├── js/
-│   ├── app.js              # Enrutamiento y arranque de la app
-│   ├── data.js             # Capa de datos: demo localStorage / Supabase
-│   ├── views.js            # Renderizado de pantallas
-│   ├── ui.js               # Funciones de interfaz, modales, toasts e íconos
+│   ├── app.js              # Enrutador por hash, guardas de sesión y rol
+│   ├── data.js             # Capa de datos: Supabase / demo (misma API)
+│   ├── views.js            # Pantallas
+│   ├── ui.js               # Íconos, modales, toasts, formato, reglas de contraseña
 │   └── charts.js           # Gráficos SVG
-├── vendor/
-│   └── qrcode.min.js       # Generador de códigos QR offline
+├── vendor/qrcode.min.js    # Generador de QR offline
 ├── icons/                  # Íconos de la PWA
 └── database/
-    ├── schema.sql          # Esquema relacional, funciones, vistas y RLS
-    └── seed.sql            # Datos iniciales
+    ├── schema.sql          # Esquema completo (tablas, funciones, vistas, RLS, pg_cron)
+    ├── seed.sql            # Datos iniciales (especies, catamaranes, alertas)
+    └── migrations/
+        └── 002_seguridad_reportes_recordatorios.sql   # Para bases creadas antes de esta versión
 ```
 
 ---
 
-## Ejecución rápida en modo demo
+## Puesta en marcha
 
-Para probar la aplicación no es necesario configurar un backend. En este modo se utilizan datos de ejemplo guardados en el navegador.
+### Ejecución local
 
-Se recomienda ejecutarla desde un servidor local, ya que el service worker y los módulos JavaScript pueden presentar problemas si se abre directamente el archivo `index.html`.
+Servir la carpeta con cualquier servidor estático (los módulos ES y el service worker no funcionan con `file://`):
 
 ```bash
-cd pescacorral
+# Python
 python3 -m http.server 8080
+# o Node
+npx serve .
 ```
 
-Luego abrir en el navegador:
+Abrir `http://localhost:8080`.
 
-```text
-http://localhost:8080
+### Base de datos en Supabase
+
+1. Crear un proyecto en https://supabase.com.
+2. **SQL Editor → New query**: pegar y ejecutar `database/schema.sql` completo, y luego `database/seed.sql`.
+3. Si la base ya existía con una versión anterior del esquema, ejecutar en cambio `database/migrations/002_seguridad_reportes_recordatorios.sql` (es idempotente). Agrega el bloqueo por intentos, la vista de ocupación, el envío de reportes y los recordatorios.
+4. (Opcional) **Database → Extensions**: habilitar `pg_cron` para que el reporte mensual y los recordatorios diarios se generen sin intervención. Si no está habilitado, la app los genera al ingresar a Reportes y a la pantalla principal.
+
+### Autenticación en Supabase
+
+* **Authentication → Providers → Email**: habilitado. Para la demostración se puede desactivar la confirmación de correo.
+* **Authentication → URL Configuration**: agregar la URL donde corre la app en *Site URL* y *Redirect URLs* (por ejemplo `https://carlitox09.github.io/PescaCorral/` y `http://localhost:8080/`). Es necesario para que el enlace de **recuperación de contraseña** vuelva a la aplicación.
+* Los roles administrativos no pueden autoasignarse desde el registro. Para otorgar uno:
+
+```sql
+update public.usuario set rol = 'admin_municipal' where email = 'tu@email.com';
 ```
 
-No se recomienda abrir el proyecto con doble clic sobre `index.html`, porque el protocolo `file://` puede bloquear algunas funciones de la aplicación.
+### Credenciales
+
+`config.js` contiene la *Project URL* y la clave **anon public** (segura para el frontend: la protección real la dan las políticas RLS). Nunca publicar la clave `service_role`.
 
 ---
 
-## Cuentas demo
+## Seguridad implementada
 
-La aplicación incluye usuarios de prueba. La contraseña para todas las cuentas es:
+* Contraseñas almacenadas sólo como hash por Supabase Auth; sesiones con JWT.
+* Reglas de complejidad de contraseña verificadas en el registro y en el restablecimiento.
+* **Bloqueo temporal**: la tabla `intento_acceso` y las funciones `acceso_bloqueado` / `registrar_intento_acceso` (SECURITY DEFINER) registran los intentos fallidos por email y rechazan el ingreso durante 15 minutos a partir del tercero. La tabla no es accesible desde la API. Si las funciones no existen (migración no aplicada), la app aplica la misma política en el navegador.
+* **Recuperación de contraseña** por enlace enviado al correo (`resetPasswordForEmail`); al volver, la app detecta el evento `PASSWORD_RECOVERY` y muestra la pantalla de nueva contraseña.
+* **RLS**: cada perfil (pescador, dueño, administración municipal, administrador del sistema) sólo puede leer y modificar los registros que le corresponden, aun consultando la API directamente.
 
-```text
-Demo1234!
-```
+---
 
-| Cuenta                                          | Rol                       |
-| ----------------------------------------------- | ------------------------- |
-| [pescador@demo.com](mailto:pescador@demo.com)   | Pescador / Turista        |
-| [dueno@demo.com](mailto:dueno@demo.com)         | Dueño de catamarán        |
-| [municipio@demo.com](mailto:municipio@demo.com) | Administración municipal  |
-| [admin@demo.com](mailto:admin@demo.com)         | Administrador del sistema |
+## Datos de prueba
 
-Desde la sección **Perfil → Reiniciar datos de demo** se pueden restaurar los datos iniciales.
+### Cuentas del modo demo
+
+Contraseña para todas: `Demo1234!`
+
+| Cuenta | Rol |
+| --- | --- |
+| pescador@demo.com | Pescador / Turista |
+| dueno@demo.com | Dueño de catamarán |
+| municipio@demo.com | Administración municipal |
+| admin@demo.com | Administrador del sistema |
+
+Desde **Perfil → Reiniciar datos de demo** se restauran los datos iniciales.
+
+### Pasarela de pago simulada
+
+| Escenario | Dato |
+| --- | --- |
+| Pago aprobado | `4111 1111 1111 1111`, cualquier titular, vencimiento futuro (MM/AA), CVV de 3 dígitos |
+| Pago rechazado por la entidad | cualquier número terminado en `0000` |
+| Transferencia / efectivo | se registran como aprobados al confirmar |
+
+Un pago rechazado no crea la reserva ni emite el permiso, y permite reintentar.
 
 ---
 
 ## Despliegue en GitHub Pages
 
-Para publicar la aplicación en GitHub Pages, se debe crear un repositorio y subir el contenido de la carpeta del proyecto a la raíz.
+Subir el contenido de la carpeta a la raíz del repositorio y, en **Settings → Pages**, elegir *Deploy from a branch* → rama `main`, carpeta `/ (root)`. El proyecto usa rutas relativas, por lo que funciona dentro de un subdirectorio. Bajo HTTPS puede instalarse como PWA desde el teléfono (*Agregar a pantalla de inicio*).
 
-```bash
-cd pescacorral
-git init
-git add .
-git commit -m "PescaCorral PWA"
-git branch -M main
-git remote add origin https://github.com/TU_USUARIO/pescacorral.git
-git push -u origin main
-```
-
-Luego, desde GitHub:
-
-1. Entrar al repositorio.
-2. Ir a **Settings → Pages**.
-3. En **Build and deployment**, seleccionar **Deploy from a branch**.
-4. Elegir la rama **main** y la carpeta **/ (root)**.
-5. Guardar los cambios.
-
-La aplicación quedará publicada en una URL similar a:
-
-```text
-https://TU_USUARIO.github.io/pescacorral/
-```
-
-El proyecto utiliza rutas relativas, por lo que puede funcionar correctamente aunque GitHub Pages lo publique dentro de un subdirectorio.
-
-Al estar publicado bajo HTTPS, también puede instalarse como PWA desde un teléfono celular mediante la opción **Agregar a pantalla de inicio**.
-
----
-
-## Conexión con Supabase
-
-La aplicación puede trabajar con Supabase para guardar datos reales en PostgreSQL, usar autenticación y aplicar reglas de seguridad mediante RLS.
-
-### 1. Crear el proyecto en Supabase
-
-1. Ingresar a Supabase.
-2. Crear un nuevo proyecto.
-3. Definir nombre, contraseña de base de datos y región.
-
-### 2. Crear la base de datos
-
-Desde el panel de Supabase:
-
-1. Ir a **SQL Editor → New query**.
-2. Pegar el contenido completo de `database/schema.sql`.
-3. Ejecutar la consulta.
-4. Crear una nueva consulta.
-5. Pegar el contenido de `database/seed.sql`.
-6. Ejecutar nuevamente.
-
-El archivo `schema.sql` crea las tablas, funciones, vistas y políticas de seguridad. También incluye la función `crear_reserva_completa`, que registra la reserva, los asientos, el pago y el permiso en una única operación. Además, se utiliza un trigger sobre `auth.users` para crear automáticamente el perfil del usuario registrado dentro de la tabla `usuario`.
-
-El archivo `seed.sql` carga datos iniciales, como especies y catamaranes de ejemplo.
-
-### 3. Configurar autenticación
-
-Para facilitar la demostración del sistema, se puede desactivar la confirmación por correo electrónico:
-
-1. Ir a **Authentication → Providers → Email**.
-2. Verificar que el proveedor Email esté habilitado.
-3. Desactivar la opción de confirmación de email si se desea que el usuario pueda iniciar sesión inmediatamente luego de registrarse.
-
-En un entorno de producción, se recomienda mantener la confirmación de email activada.
-
-### 4. Cargar credenciales
-
-Desde Supabase:
-
-1. Ir a **Project Settings → API**.
-2. Copiar el **Project URL**.
-3. Copiar la clave **anon public**.
-4. Abrir el archivo `config.js`.
-5. Completar los valores correspondientes.
-
-```js
-window.PESCACORRAL_CONFIG = {
-  SUPABASE_URL: "https://xxxxxxxx.supabase.co",
-  SUPABASE_ANON_KEY: "eyJhbGciOi...",
-  MUNICIPIO: "Municipio de Coronel Moldes",
-  LUGAR: "Dique Cabra Corral",
-};
-```
-
-Después de modificar `config.js`, se deben subir los cambios al repositorio:
-
-```bash
-git add config.js
-git commit -m "Configurar Supabase"
-git push
-```
-
-Una vez desplegado el cambio, la aplicación dejará de usar el modo demo y comenzará a trabajar con Supabase.
-
-La clave `anon public` puede usarse en el frontend, ya que está pensada para clientes públicos. La protección de los datos depende de las políticas RLS definidas en la base de datos. No debe publicarse la clave `service_role`.
-
----
-
-## Crear un usuario administrador
-
-Por seguridad, los usuarios registrados desde la aplicación no pueden asignarse roles administrativos por sí mismos.
-
-Los roles administrativos deben asignarse manualmente desde Supabase o desde otro usuario administrador ya existente.
-
-Para asignar el rol de administrador municipal a un usuario registrado, se puede ejecutar la siguiente consulta en el SQL Editor:
-
-```sql
-update public.usuario
-set rol = 'admin_municipal'
-where email = 'tu@email.com';
-```
-
-También puede utilizarse el panel de usuarios de la aplicación, siempre que ya exista un usuario con permisos administrativos.
+Tras cada cambio en `service-worker.js` se incrementa la constante `VERSION` para que los navegadores renueven la caché.
 
 ---
 
 ## Modelo de datos
 
-El modelo relacional se encuentra definido en `database/schema.sql`. Las entidades principales son:
+Definido en `database/schema.sql`:
 
-* **usuario**: almacena los datos del usuario y su rol dentro del sistema.
-* **catamaran**: representa cada embarcación habilitada.
-* **lugar**: representa los asientos o lugares disponibles dentro de cada catamarán.
-* **reserva**: registra la reserva realizada por un usuario para una fecha, turno y catamarán.
-* **reserva_lugar**: vincula la reserva con los asientos seleccionados.
-* **permiso**: almacena el permiso digital emitido, su numeración, vencimiento y código QR.
-* **pago**: registra el pago asociado a una reserva.
-* **especie**: contiene las especies utilizadas para el control de actividad pesquera.
-* **alerta_fauna**: permite registrar alertas relacionadas con la presión sobre especies.
-* **notificacion**: almacena avisos para los usuarios.
-* **reporte**: guarda reportes generados desde el panel municipal.
-
-Entre las reglas principales del modelo se incluye la prevención de doble reserva de un mismo asiento en una misma fecha y turno, la emisión de permisos asociados a reservas y el aislamiento de datos según el rol del usuario mediante RLS.
-
----
-
-## Historias de usuario contempladas
-
-El sistema cubre las principales funcionalidades previstas para el prototipo:
-
-* Registro e inicio de sesión.
-* Gestión de roles.
-* Alta y edición de catamaranes.
-* Búsqueda de disponibilidad.
-* Reserva de lugares.
-* Generación de permiso digital.
-* Pago simulado.
-* Consulta de historial.
-* Notificaciones.
-* Panel municipal.
-* Reportes.
-* Monitoreo de fauna.
-
----
-
-## Tecnologías utilizadas
-
-* **HTML5**
-* **CSS3**
-* **JavaScript ES Modules**
-* **Web App Manifest**
-* **Service Worker**
-* **Supabase**
-* **PostgreSQL**
-* **Row Level Security**
-* **qrcode-generator**
-* **SVG para gráficos**
-
-La propuesta original del TFG contemplaba una arquitectura con Flutter, Node.js/Express y PostgreSQL. Para esta implementación se adaptó el mismo modelo de datos y las mismas reglas de negocio a una PWA con Supabase, lo que permite publicar el prototipo de forma gratuita en GitHub Pages y mantener una base de datos relacional.
+* **usuario** (extiende `auth.users`; rol), **especie**, **catamaran**, **lugar**, **reserva**, **reserva_lugar**, **permiso**, **pago**, **reporte** (con destinatario, origen y estado de envío), **notificacion** (con `id_reserva` para recordatorios), **alerta_fauna**, **intento_acceso**.
+* Funciones: `crear_reserva_completa` (reserva + asientos + pago + permiso + notificación en una transacción), `anular_reserva`, `acceso_bloqueado`, `registrar_intento_acceso`, `generar_reporte_municipal`, `generar_recordatorios`, `handle_new_user` (trigger sobre `auth.users`).
+* Vistas: `v_dashboard_resumen`, `v_reservas_por_dia`, `v_ocupacion_catamaran`, `v_permisos_por_especie`, `v_lugares_ocupados`.
 
 ---
 
 ## Problemas frecuentes
 
-### La pantalla queda en blanco
-
-Verificar que la aplicación se esté ejecutando mediante `http://` o `https://`. No se recomienda abrir el archivo directamente con `file://`.
-
-### La app sigue en modo demo después de configurar Supabase
-
-Revisar que `SUPABASE_URL` y `SUPABASE_ANON_KEY` estén completos en `config.js`. También puede ser necesario forzar la recarga del navegador con `Ctrl + Shift + R`, ya que el service worker puede conservar archivos anteriores en caché.
-
-### El registro no inicia sesión automáticamente
-
-Esto puede ocurrir si Supabase tiene activada la confirmación por correo electrónico. Se puede desactivar para la demostración o confirmar el correo antes de iniciar sesión.
-
-### Quiero restaurar los datos de ejemplo
-
-Ingresar a **Perfil → Reiniciar datos de demo**.
+* **Pantalla en blanco**: la app debe servirse por `http://` o `https://`, no abrirse con doble clic.
+* **Sigue en modo demo**: revisar `SUPABASE_URL` y `SUPABASE_ANON_KEY` en `config.js` y recargar con `Ctrl + Shift + R`.
+* **El enlace de recuperación no vuelve a la app**: agregar la URL de la app en *Authentication → URL Configuration* de Supabase.
+* **"Could not find the function…" en la consola**: falta ejecutar la migración 002; la app sigue funcionando con la política aplicada en el navegador.
 
 ---
 
-## Autoría y contexto
+## Autoría
 
-Proyecto desarrollado como parte del Trabajo Final de Grado, orientado a la digitalización de reservas y permisos de pesca deportiva en el Dique Cabra Corral.
-
-Lugar de aplicación: **Dique Cabra Corral — Municipio de Coronel Moldes, Salta**.
+Carlos Agustín Romero · Licenciatura en Informática · Universidad Siglo 21. Lugar de aplicación: Dique Cabra Corral, Municipio de Coronel Moldes, Salta.
