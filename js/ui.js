@@ -1,7 +1,7 @@
 /* ============================================================================
  *  PescaCorral · js/ui.js
  *  Utilidades de interfaz: selección de DOM, íconos SVG, toasts, modales,
- *  formato de datos y validación de contraseña. Sin dependencias externas.
+ *  y formato de datos. Sin dependencias externas.
  * ========================================================================== */
 
 /* --------------------------------- DOM ----------------------------------- */
@@ -260,25 +260,6 @@ export function initials(nombre = "", apellido = "") {
   const a = (nombre || "").trim()[0] || "";
   const b = (apellido || "").trim()[0] || "";
   return (a + b).toUpperCase() || "U";
-}
-
-/* ------------------------- Fortaleza de contraseña ----------------------- */
-/** Reglas de seguridad pedidas por el TFG (HU-014 / política de acceso). */
-export function passwordRules(pwd = "") {
-  return [
-    { id: "len", label: "Al menos 8 caracteres",       ok: pwd.length >= 8 },
-    { id: "may", label: "Una letra mayúscula",          ok: /[A-Z]/.test(pwd) },
-    { id: "min", label: "Una letra minúscula",          ok: /[a-z]/.test(pwd) },
-    { id: "num", label: "Un número",                    ok: /[0-9]/.test(pwd) },
-    { id: "esp", label: "Un carácter especial (!@#…)",  ok: /[^A-Za-z0-9]/.test(pwd) },
-  ];
-}
-export function passwordStrength(pwd = "") {
-  const rules = passwordRules(pwd);
-  const score = rules.filter((r) => r.ok).length;     // 0..5
-  const valid = score === 5;
-  const labels = ["Muy débil", "Débil", "Regular", "Buena", "Fuerte", "Excelente"];
-  return { score, valid, rules, label: labels[score] };
 }
 
 /* ---------------------------- Varios ------------------------------------- */

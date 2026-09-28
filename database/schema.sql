@@ -10,9 +10,10 @@
 --  1. Entrá a tu proyecto en https://supabase.com  ->  SQL Editor.
 --  2. Pegá y ejecutá este archivo (schema.sql) COMPLETO.
 --  3. Luego ejecutá seed.sql para cargar datos de ejemplo (catamaranes, etc.).
---  4. La autenticación (email + contraseña) la maneja Supabase Auth: las
---     contraseñas se almacenan cifradas (hash) en auth.users. La tabla
---     "usuario" EXTIENDE ese registro con los datos de perfil y el rol.
+--  4. El ingreso se realiza exclusivamente con una cuenta de Google (OAuth 2.0)
+--     a través de Supabase Auth, que registra la identidad en auth.users. La
+--     aplicación no recibe ni almacena contraseñas. La tabla "usuario" EXTIENDE
+--     ese registro con los datos de perfil y el rol.
 --
 --  Este script es idempotente: se puede volver a ejecutar sin error.
 -- ============================================================================
@@ -50,7 +51,9 @@ drop sequence if exists public.seq_numero_permiso cascade;
 
 -- ---------------------------------------------------------------------------
 -- USUARIO  (perfil; extiende auth.users de Supabase)
---   La contraseña NO se guarda acá: vive cifrada en auth.users (Supabase Auth).
+--   La identidad la verifica Google; acá no hay contraseñas. En el primer
+--   ingreso el perfil se crea con los datos de Google (handle_new_user) y el
+--   usuario completa DNI, teléfono y tipo de cuenta (perfil_completo).
 --   Roles del sistema (TFG · sección Seguridad):
 --     pescador        -> Pescador / Turista
 --     dueno           -> Dueño de Catamarán
@@ -67,6 +70,8 @@ create table public.usuario (
     rol         text        not null default 'pescador'
                     check (rol in ('pescador','dueno','admin_municipal','admin_sistema')),
     activo      boolean     not null default true,
+    perfil_completo boolean not null default false,   -- alta confirmada (HU-001)
+    avatar_url  text,                                  -- foto de la cuenta de Google
     created_at  timestamptz not null default now(),
     updated_at  timestamptz not null default now()
 );
@@ -240,18 +245,6 @@ create index idx_notificacion_usuario on public.notificacion (id_usuario, leida)
 create index idx_notificacion_reserva on public.notificacion (id_reserva);
 
 -- ---------------------------------------------------------------------------
--- INTENTO_ACCESO  (Seguridad · HU-002: bloqueo temporal tras 3 intentos)
---   No es accesible desde la API: sólo a través de las funciones
---   acceso_bloqueado / registrar_intento_acceso (sección 8).
--- ---------------------------------------------------------------------------
-create table public.intento_acceso (
-    email           text primary key,
-    intentos        integer     not null default 0,
-    ultimo_intento  timestamptz not null default now(),
-    bloqueado_hasta timestamptz
-);
-
--- ---------------------------------------------------------------------------
 -- ALERTA_FAUNA  (HU-015 · alertas de umbral por especie)
 -- ---------------------------------------------------------------------------
 create table public.alerta_fauna (
@@ -320,8 +313,10 @@ create trigger trg_reserva_updated   before update on public.reserva
     for each row execute function public.set_updated_at();
 
 -- ----------------------------------------------------------------------------
--- Alta automática del perfil al registrarse un usuario en Supabase Auth.
--- Lee los metadatos enviados desde la app (nombre, apellido, telefono, dni, rol).
+-- Alta automática del perfil en el primer ingreso con Google.
+-- Google entrega nombre completo, correo y foto; DNI, teléfono y tipo de cuenta
+-- los completa el usuario. Toda cuenta nueva es "pescador": los roles
+-- administrativos sólo se otorgan manualmente (ver README).
 -- ----------------------------------------------------------------------------
 create or replace function public.handle_new_user()
 returns trigger
@@ -330,25 +325,22 @@ security definer
 set search_path = public
 as $$
 declare
-    v_rol text;
+    v_meta     jsonb := coalesce(new.raw_user_meta_data, '{}'::jsonb);
+    v_completo text  := trim(coalesce(v_meta->>'full_name', v_meta->>'name', ''));
+    v_nombre   text;
+    v_apellido text;
 begin
-    -- El rol llega en los metadatos de registro, pero los roles administrativos
-    -- NO pueden auto-asignarse: sólo se otorgan manualmente (ver README).
-    v_rol := coalesce(new.raw_user_meta_data->>'rol', 'pescador');
-    if v_rol not in ('pescador', 'dueno') then
-        v_rol := 'pescador';
-    end if;
+    v_nombre := coalesce(nullif(trim(v_meta->>'given_name'), ''),
+                         nullif(split_part(v_completo, ' ', 1), ''),
+                         split_part(new.email, '@', 1));
+    v_apellido := coalesce(nullif(trim(v_meta->>'family_name'), ''),
+                           nullif(trim(substr(v_completo, length(split_part(v_completo, ' ', 1)) + 2)), ''),
+                           '');
 
-    insert into public.usuario (id, nombre, apellido, email, telefono, dni, rol)
-    values (
-        new.id,
-        coalesce(new.raw_user_meta_data->>'nombre',   split_part(new.email, '@', 1)),
-        coalesce(new.raw_user_meta_data->>'apellido', ''),
-        new.email,
-        new.raw_user_meta_data->>'telefono',
-        new.raw_user_meta_data->>'dni',
-        v_rol
-    )
+    insert into public.usuario (id, nombre, apellido, email, avatar_url, rol, perfil_completo)
+    values (new.id, v_nombre, v_apellido, lower(new.email),
+            coalesce(v_meta->>'avatar_url', v_meta->>'picture'),
+            'pescador', false)
     on conflict (id) do nothing;
     return new;
 end;
@@ -358,6 +350,47 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
     after insert on auth.users
     for each row execute function public.handle_new_user();
+
+-- ----------------------------------------------------------------------------
+-- Protección de los datos sensibles del perfil.
+-- La política RLS permite que cada usuario edite su propio perfil; este
+-- trigger impide que, al hacerlo, cambie su rol, su correo o su estado. El tipo
+-- de cuenta (pescador o dueño) sólo se elige una vez, en el alta. Las consultas
+-- administrativas (SQL Editor) no tienen restricción.
+-- ----------------------------------------------------------------------------
+create or replace function public.proteger_perfil()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+    if auth.uid() is null or public.es_admin() then
+        return new;
+    end if;
+
+    if new.id <> old.id
+       or new.email <> old.email
+       or new.activo <> old.activo
+       or new.created_at <> old.created_at then
+        raise exception 'No está permitido modificar ese dato del perfil';
+    end if;
+
+    if new.rol <> old.rol then
+        if old.perfil_completo or new.rol not in ('pescador', 'dueno') then
+            raise exception 'El tipo de cuenta sólo puede modificarlo la administración municipal';
+        end if;
+    end if;
+
+    if old.perfil_completo then
+        new.perfil_completo := true;           -- el alta no se puede deshacer
+    end if;
+    return new;
+end;
+$$;
+
+create trigger trg_usuario_proteger
+    before update on public.usuario
+    for each row execute function public.proteger_perfil();
 
 -- ============================================================================
 -- 3. LÓGICA DE NEGOCIO (RPC)
@@ -583,7 +616,6 @@ alter table public.pago           enable row level security;
 alter table public.reporte        enable row level security;
 alter table public.notificacion   enable row level security;
 alter table public.alerta_fauna   enable row level security;
-alter table public.intento_acceso enable row level security;   -- sin políticas: sólo vía funciones
 
 -- ----- USUARIO --------------------------------------------------------------
 create policy usuario_select_propio on public.usuario
@@ -700,7 +732,6 @@ grant execute on function public.es_admin()   to authenticated, anon;
 -- PostgreSQL). Las vistas usan security_invoker, así que también respetan RLS.
 grant usage on schema public to anon, authenticated;
 grant select, insert, update, delete on all tables in schema public to anon, authenticated;
-revoke all on public.intento_acceso from anon, authenticated;
 grant usage, select on all sequences in schema public to anon, authenticated;
 grant select on
     public.v_reservas_por_dia,
@@ -718,82 +749,11 @@ grant select on public.v_lugares_ocupados to anon, authenticated;
 -- alter publication supabase_realtime add table public.notificacion;
 
 -- ============================================================================
--- 8. SEGURIDAD DE ACCESO, REPORTES AL MUNICIPIO Y RECORDATORIOS
---    (mismo contenido que database/migrations/002_*.sql)
+-- 8. REPORTES AL MUNICIPIO Y RECORDATORIOS
+--    (mismo contenido que las migraciones 002 y 003)
 -- ============================================================================
 
--- ---- 8.1 Bloqueo temporal tras 3 intentos fallidos (Seguridad · HU-002) ----
-create or replace function public.acceso_bloqueado(p_email text)
-returns jsonb
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-    r     public.intento_acceso;
-    v_min integer := 0;
-begin
-    select * into r from public.intento_acceso where email = lower(trim(p_email));
-    if r.email is null then
-        return jsonb_build_object('bloqueado', false, 'intentos', 0, 'minutos_restantes', 0);
-    end if;
-    if r.bloqueado_hasta is not null and r.bloqueado_hasta > now() then
-        v_min := ceil(extract(epoch from (r.bloqueado_hasta - now())) / 60.0);
-        return jsonb_build_object('bloqueado', true, 'intentos', r.intentos, 'minutos_restantes', greatest(v_min, 1));
-    end if;
-    if r.bloqueado_hasta is not null then          -- bloqueo vencido: se reinicia el contador
-        delete from public.intento_acceso where email = r.email;
-        return jsonb_build_object('bloqueado', false, 'intentos', 0, 'minutos_restantes', 0);
-    end if;
-    return jsonb_build_object('bloqueado', false, 'intentos', r.intentos, 'minutos_restantes', 0);
-end;
-$$;
-
-create or replace function public.registrar_intento_acceso(p_email text, p_exitoso boolean)
-returns jsonb
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-    v_email   text := lower(trim(p_email));
-    v_max     constant integer  := 3;                    -- intentos permitidos
-    v_bloqueo constant interval := interval '15 minutes'; -- duración del bloqueo
-    r         public.intento_acceso;
-begin
-    if p_exitoso then
-        delete from public.intento_acceso where email = v_email;
-        return jsonb_build_object('bloqueado', false, 'intentos', 0, 'minutos_restantes', 0);
-    end if;
-
-    insert into public.intento_acceso (email, intentos, ultimo_intento)
-    values (v_email, 1, now())
-    on conflict (email) do update set
-        intentos = case
-                     when public.intento_acceso.bloqueado_hasta is not null
-                      and public.intento_acceso.bloqueado_hasta > now()  then public.intento_acceso.intentos
-                     when public.intento_acceso.bloqueado_hasta is not null then 1
-                     else public.intento_acceso.intentos + 1
-                   end,
-        ultimo_intento  = now(),
-        bloqueado_hasta = case
-                            when public.intento_acceso.bloqueado_hasta is not null
-                             and public.intento_acceso.bloqueado_hasta > now() then public.intento_acceso.bloqueado_hasta
-                            else null
-                          end
-    returning * into r;
-
-    if r.intentos >= v_max and (r.bloqueado_hasta is null or r.bloqueado_hasta <= now()) then
-        update public.intento_acceso set bloqueado_hasta = now() + v_bloqueo where email = v_email;
-    end if;
-    return public.acceso_bloqueado(v_email);
-end;
-$$;
-
-grant execute on function public.acceso_bloqueado(text)                    to anon, authenticated;
-grant execute on function public.registrar_intento_acceso(text, boolean)   to anon, authenticated;
-
--- ---- 8.2 Envío de reportes al municipio (HU-009) ----------------------------
+-- ---- 8.1 Envío de reportes al municipio (HU-009) ----------------------------
 create or replace function public.generar_reporte_municipal(p_tipo text default 'general', p_origen text default 'manual')
 returns jsonb
 language plpgsql
@@ -849,7 +809,7 @@ end;
 $$;
 grant execute on function public.generar_reporte_municipal(text, text) to authenticated;
 
--- ---- 8.3 Recordatorios de salida (HU-011) -----------------------------------
+-- ---- 8.2 Recordatorios de salida (HU-011) -----------------------------------
 create or replace function public.generar_recordatorios(p_solo_usuario boolean default true)
 returns integer
 language plpgsql
@@ -884,7 +844,7 @@ end;
 $$;
 grant execute on function public.generar_recordatorios(boolean) to authenticated;
 
--- ---- 8.4 Automatización con pg_cron (opcional) ------------------------------
+-- ---- 8.3 Automatización con pg_cron (opcional) ------------------------------
 -- Requiere habilitar la extensión en Supabase -> Database -> Extensions. Si no
 -- está disponible, la app genera el reporte mensual al ingresar a Reportes y
 -- los recordatorios al ingresar a la pantalla principal.
@@ -895,8 +855,6 @@ begin
         $c$ select public.generar_reporte_municipal('general', 'automatico') $c$);
     perform cron.schedule('pescacorral-recordatorios',     '0 8 * * *',
         $c$ select public.generar_recordatorios(false) $c$);
-    perform cron.schedule('pescacorral-limpieza-intentos', '30 3 * * *',
-        $c$ delete from public.intento_acceso where ultimo_intento < now() - interval '1 day' $c$);
     raise notice 'pg_cron: tareas programadas.';
 exception when others then
     raise notice 'pg_cron no disponible (%). La app cubre la automatización desde el cliente.', sqlerrm;

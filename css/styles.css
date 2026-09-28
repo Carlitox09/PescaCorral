@@ -280,6 +280,28 @@ a { color: inherit; text-decoration: none; }
   font-size: .82rem; line-height: 1.45;
 }
 .auth__demo b { color: #083353; }
+.auth__points { list-style: none; padding: 0; margin-top: 18px; display: grid; gap: 8px; }
+.auth__points li { display: flex; align-items: center; gap: 9px; font-size: .82rem; color: var(--muted); }
+.auth__points svg { flex: none; color: var(--teal-600); }
+.auth__avatar { width: 52px; height: 52px; border-radius: 50%; border: 2px solid #ffffff80; object-fit: cover; }
+
+/* Botón "Continuar con Google" (lineamientos de marca: fondo blanco, borde gris, logo a color) */
+.btn--google { background: #fff; color: #1f1f1f; border: 1px solid #747775; box-shadow: none; font-weight: 600; }
+.btn--google:hover { background: #f8fafd; box-shadow: var(--shadow-sm); }
+.btn--google .g-logo, .permit__row .g-logo, .input--readonly .g-logo { width: 20px; height: 20px; flex: none; }
+.permit__row b .g-logo { display: inline-block; vertical-align: -4px; margin-right: 4px; width: 17px; height: 17px; }
+.input--readonly { display: flex; align-items: center; gap: 9px; color: var(--text-2); cursor: default; overflow: hidden; }
+.input--readonly span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Selector de cuentas (modo demostración) */
+.acct-list { display: grid; margin-top: 10px; border-top: 1px solid var(--border); }
+.acct { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 6px; text-align: left; border-bottom: 1px solid var(--border); }
+.acct:hover { background: var(--surface-2); }
+.acct__av { width: 36px; height: 36px; border-radius: 50%; flex: none; display: grid; place-items: center; background: var(--grad-cta); color: #fff; font-weight: 800; font-size: .82rem; }
+.acct__av--plus { background: var(--surface-2); color: var(--text-2); }
+.acct__txt { min-width: 0; }
+.acct__txt b { display: block; font-size: .92rem; }
+.acct__txt small { color: var(--muted); display: block; overflow: hidden; text-overflow: ellipsis; }
 
 .field { margin-bottom: 14px; }
 .field > label { display: block; font-size: .82rem; font-weight: 700; color: var(--text-2); margin-bottom: 6px; }
@@ -298,15 +320,6 @@ a { color: inherit; text-decoration: none; }
 .input-group__btn { position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
   width: 34px; height: 34px; border-radius: 9px; color: var(--muted); display: grid; place-items: center; }
 .input-group__btn:hover { background: var(--surface-2); }
-
-/* Medidor de fortaleza de contraseña */
-.pwd-meter { display: flex; gap: 5px; margin-top: 8px; }
-.pwd-meter span { height: 5px; flex: 1; border-radius: 999px; background: var(--border); transition: background .2s; }
-.pwd-rules { margin-top: 8px; display: grid; gap: 3px; }
-.pwd-rules li { list-style: none; font-size: .76rem; color: var(--muted); display: flex; align-items: center; gap: 7px; }
-.pwd-rules li.ok { color: var(--green-700); }
-.pwd-rules li .tick { width: 14px; height: 14px; border-radius: 999px; background: var(--border); color: #fff; display: grid; place-items: center; font-size: .6rem; flex: none; }
-.pwd-rules li.ok .tick { background: var(--green-600); }
 
 /* Filtros (fecha / turno) */
 .filters { display: flex; gap: 10px; margin-bottom: 16px; }
@@ -402,6 +415,7 @@ a { color: inherit; text-decoration: none; }
 .avatar { width: 84px; height: 84px; border-radius: 50%; background: var(--grad-cta); color: #fff;
   display: grid; place-items: center; font-size: 2rem; font-weight: 800; box-shadow: var(--shadow); }
 .profile-hero h2 { font-size: 1.3rem; font-weight: 800; }
+.avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
 
 /* Estado vacío */
 .empty { text-align: center; padding: 40px 20px; color: var(--muted); }

@@ -5,16 +5,15 @@
  * ========================================================================== */
 import * as D from "./data.js";
 import * as V from "./views.js";
-import { toast } from "./ui.js";
+import { toast, esc } from "./ui.js";
 
 const isAdmin = (rol) => rol === "admin_municipal" || rol === "admin_sistema";
 
-/* Tabla de rutas: base -> { view, auth, roles? } */
+/* Tabla de rutas: base -> { view, auth, roles?, alta? }
+ *   alta: pantalla del primer ingreso, sólo accesible con el perfil incompleto. */
 const ROUTES = {
   login:       { view: V.viewLogin,       auth: false },
-  registro:    { view: V.viewRegistro,    auth: false },
-  recuperar:   { view: V.viewRecuperar,   auth: false, anySession: true },
-  restablecer: { view: V.viewRestablecer, auth: false, anySession: true },
+  registro:    { view: V.viewRegistro,    auth: true, alta: true },
   home:        { view: V.viewHome,        auth: true },
   catamaranes: { view: V.viewCatamaranes, auth: true },
   reserva:     { view: V.viewReserva,     auth: true },
@@ -45,6 +44,21 @@ function go(path) {
   if (location.hash === target) render();   // misma ruta -> refrescar
   else location.hash = target;              // dispara hashchange -> render
 }
+const inicioSegunRol = (rol) => (isAdmin(rol) ? "/admin" : "/home");
+const aLogin = (msg) => go("/login" + (msg ? "?msg=" + encodeURIComponent(msg) : ""));
+
+/* Al volver de Google, un error llega en la URL (?error=… o #error=…).
+ * Devuelve el mensaje a mostrar, o null si no hay error. */
+function errorDeIngreso() {
+  const q = new URLSearchParams(location.search);
+  const h = new URLSearchParams((location.hash || "").replace(/^#/, ""));
+  const code = q.get("error") || h.get("error");
+  const desc = q.get("error_description") || h.get("error_description");
+  if (!code && !desc) return null;
+  history.replaceState(null, "", location.pathname);   // limpia la URL
+  if (/access_denied/i.test(code || "")) return "Cancelaste el ingreso con Google.";
+  return "No se pudo completar el ingreso con Google" + (desc ? `: ${desc.replace(/\+/g, " ")}` : ".");
+}
 
 /* ------------------------------- Render ---------------------------------- */
 let rendering = false;
@@ -55,13 +69,8 @@ async function render() {
   if (rendering) return;                    // evita reentradas; el último hash gana
   rendering = true;
   try {
-    // Supabase devuelve errores de enlaces vencidos en el hash (#error=...&error_description=...).
-    const rawHash = (location.hash || "").replace(/^#/, "");
-    if (/(^|&)error_description=/.test(rawHash)) {
-      const desc = new URLSearchParams(rawHash).get("error_description") || "El enlace no es válido.";
-      toast(desc.replace(/\+/g, " "), "err", 6000);
-      go("/recuperar"); return;
-    }
+    const errIngreso = errorDeIngreso();
+    if (errIngreso) { aLogin(errIngreso); return; }
 
     const { base, params } = parseHash();
     const route = ROUTES[base] || ROUTES.home;
@@ -70,20 +79,30 @@ async function render() {
     try { session = await D.getSession(); } catch (e) { console.warn(e); }
     if (myToken !== token) return;           // cambió el hash mientras resolvíamos
 
-    // Recuperación de contraseña en curso: se fuerza la pantalla de nueva contraseña.
-    if (D.recuperacionPendiente() && base !== "restablecer" && base !== "recuperar") { go("/restablecer"); return; }
+    // Tras el intercambio del código de Google, se quita ?code= de la barra de direcciones.
+    if (session && new URLSearchParams(location.search).has("code"))
+      history.replaceState(null, "", location.pathname + location.hash);
 
     // --- Guardas de acceso ---
     if (!route.auth) {
-      // login / registro: si ya hay sesión, ir a la pantalla principal
-      if (session && !route.anySession) { go(isAdmin(session.profile.rol) ? "/admin" : "/home"); return; }
+      if (session) { go(D.perfilCompleto(session.profile) ? inicioSegunRol(session.profile.rol) : "/registro"); return; }
     } else {
       if (!session) { go("/login"); return; }
-      // admins entran directo a su panel cuando piden "home"
-      if (base === "home" && isAdmin(session.profile.rol)) { go("/admin"); return; }
-      if (route.roles && !route.roles.includes(session.profile.rol)) {
+      const p = session.profile;
+      if (!p) throw new Error("No se pudo cargar tu perfil. Volvé a intentar en unos segundos.");
+      if (p.activo === false) {
+        await D.signOut();
+        aLogin("Tu cuenta está desactivada. Comunicate con el Municipio de Coronel Moldes.");
+        return;
+      }
+      const completo = D.perfilCompleto(p);
+      if (!completo && !route.alta) { go("/registro"); return; }   // primer ingreso
+      if (completo && route.alta) { go(inicioSegunRol(p.rol)); return; }
+      // Los perfiles administrativos entran directo a su panel.
+      if (base === "home" && isAdmin(p.rol)) { go("/admin"); return; }
+      if (route.roles && !route.roles.includes(p.rol)) {
         toast("No tenés permisos para esa sección.", "err");
-        go(isAdmin(session.profile.rol) ? "/admin" : "/home");
+        go(inicioSegunRol(p.rol));
         return;
       }
     }
@@ -95,7 +114,7 @@ async function render() {
     document.getElementById("app").innerHTML = `
       <div class="empty" style="min-height:100dvh;display:grid;place-content:center">
         <h3>Ups, algo salió mal</h3>
-        <p class="muted">${(err && err.message) ? String(err.message) : "Error inesperado."}</p>
+        <p class="muted">${esc((err && err.message) || "Error inesperado.")}</p>
         <button class="btn btn--primary mt-16" onclick="location.hash='#/home';location.reload()">Reintentar</button>
       </div>`;
   } finally {
@@ -108,10 +127,10 @@ async function render() {
 /* ------------------------------ Arranque --------------------------------- */
 window.addEventListener("hashchange", render);
 
-// Re-render ante cambios de autenticación (login/logout, refresh de token).
-// PASSWORD_RECOVERY llega al volver desde el enlace de "olvidé mi contraseña".
+// Re-render ante cambios de sesión o de perfil. La renovación periódica del
+// token no redibuja, para no perder lo que el usuario esté cargando.
 D.onAuthChange((event) => {
-  if (event === "PASSWORD_RECOVERY") { go("/restablecer"); return; }
+  if (event === "TOKEN_REFRESHED" || event === "INITIAL_SESSION") return;
   render();
 });
 

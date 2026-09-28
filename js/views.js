@@ -134,8 +134,16 @@ function wireAdmin(ctx) {
 }
 
 /* ============================================================================
- *  AUTENTICACIÓN
+ *  AUTENTICACIÓN · ingreso exclusivo con cuenta de Google
  * ========================================================================== */
+/* Logotipo "G" de Google, a color, según los lineamientos de marca. */
+const GOOGLE_G = `<svg class="g-logo" viewBox="0 0 48 48" width="20" height="20" aria-hidden="true">
+  <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+  <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+  <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+  <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+</svg>`;
+
 export async function viewLogin(ctx) {
   const demo = D.MODE === "demo";
   U.mount(`<div class="auth">
@@ -146,274 +154,169 @@ export async function viewLogin(ctx) {
     </div>
     <div class="auth__card-wrap">
       <div class="auth__card">
-        <h2>Iniciar sesión</h2>
-        <p class="sub">Ingresá con tu cuenta para reservar y gestionar tus permisos.</p>
-        <form id="f-login" novalidate>
-          <div class="field">
-            <label for="email">Email</label>
-            <input class="input" id="email" type="email" autocomplete="email" placeholder="tu@email.com" required />
-          </div>
-          <div class="field">
-            <label for="pwd">Contraseña</label>
-            <div class="input-group">
-              <input class="input" id="pwd" type="password" autocomplete="current-password" placeholder="Tu contraseña" required />
-              <button type="button" class="input-group__btn" data-toggle-pwd aria-label="Mostrar">${U.icon("eye", { size: 20 })}</button>
-            </div>
-            <div class="field__hint" style="text-align:right"><a href="#/recuperar" style="color:var(--blue-600);font-weight:700">¿Olvidaste tu contraseña?</a></div>
-          </div>
-          <div class="field__error hide" id="login-err"></div>
-          <button class="btn btn--primary btn--block btn--lg" type="submit" id="login-btn">Ingresar</button>
-        </form>
-        <p class="field__hint mt-8" style="text-align:center">${U.icon("lock", { size: 13 })} Por seguridad, la cuenta se bloquea ${D.BLOQUEO_MINUTOS} minutos tras ${D.MAX_INTENTOS} intentos fallidos consecutivos.</p>
+        <h2>Ingresá a tu cuenta</h2>
+        <p class="sub">Usá tu cuenta de Google para reservar lugares y gestionar tus permisos de pesca. Si es tu primer ingreso, la cuenta se crea en el momento.</p>
+        <button class="btn btn--google btn--block btn--lg" id="btn-google" type="button">${GOOGLE_G}<span>Continuar con Google</span></button>
+        <div class="field__error hide mt-12" id="login-err"></div>
+        <ul class="auth__points">
+          <li>${U.icon("shield", { size: 16 })}<span>PescaCorral no recibe ni guarda tu contraseña.</span></li>
+          <li>${U.icon("lock", { size: 16 })}<span>La verificación de tu identidad la realiza Google.</span></li>
+        </ul>
       </div>
       ${demo ? `<div class="auth__demo">
-        <b>Modo demo.</b> Probá con cuentas de ejemplo (contraseña <b>Demo1234!</b>):<br>
-        pescador@demo.com · dueno@demo.com · municipio@demo.com · admin@demo.com
+        <b>Modo demostración.</b> El ingreso con Google se simula: elegí una de las cuentas de ejemplo o usá otra para probar el primer ingreso.
       </div>` : ""}
     </div>
-    <div class="auth__foot">¿No tenés cuenta? <a href="#/registro">Registrate</a></div>
+    <div class="auth__foot">${U.esc(CFG.MUNICIPIO || "Municipio de Coronel Moldes")}</div>
   </div>`);
 
-  togglePwd();
-  if (demo) U.$("#email").value = "pescador@demo.com";
-  if (ctx.params.msg) showErr(U.$("#login-err"), ctx.params.msg);
-
-  U.$("#f-login").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const email = U.$("#email").value.trim();
-    const pwd = U.$("#pwd").value;
-    const errBox = U.$("#login-err");
+  const errBox = U.$("#login-err");
+  if (ctx.params.msg) showErr(errBox, ctx.params.msg);
+  const btn = U.$("#btn-google");
+  const label = btn.querySelector("span");
+  btn.addEventListener("click", async () => {
     errBox.classList.add("hide");
-    if (!email || !pwd) { showErr(errBox, "Completá email y contraseña."); return; }
-    const btn = U.$("#login-btn"); btn.disabled = true; btn.textContent = "Ingresando…";
+    if (demo) { selectorCuentasDemo(ctx); return; }
+    btn.disabled = true; label.textContent = "Conectando con Google…";
     try {
-      await D.signIn(email, pwd);
-      const s = await D.getSession();
-      ctx.go(isAdmin(s?.profile?.rol) ? "/admin" : "/home");
+      await D.signInWithGoogle();          // redirige a Google
     } catch (err) {
       showErr(errBox, err.message);
-      U.$("#pwd").value = "";
-      btn.disabled = false; btn.textContent = "Ingresar";
+      btn.disabled = false; label.textContent = "Continuar con Google";
     }
   });
 }
 
-/* ---- Recuperación de contraseña (Seguridad · "Recuperación mediante correo") ---- */
-export async function viewRecuperar(ctx) {
-  const demo = D.MODE === "demo";
-  U.mount(`<div class="auth">
-    <div class="auth__head" style="clip-path:polygon(0 0,100% 0,100% 86%,0 100%);padding-bottom:54px">
-      <span class="logo">${U.logoMark(48)}</span>
-      <h1>Recuperar contraseña</h1>
-      <p>Te enviamos un enlace a tu correo para crear una nueva.</p>
-    </div>
-    <div class="auth__card-wrap">
-      <div class="auth__card">
-        <h2>¿Cuál es tu email?</h2>
-        <p class="sub">Ingresá el correo con el que te registraste en PescaCorral.</p>
-        <form id="f-rec" novalidate>
-          <div class="field">
-            <label for="rec-email">Email</label>
-            <input class="input" id="rec-email" type="email" autocomplete="email" placeholder="tu@email.com" required />
-          </div>
-          <div class="field__error hide" id="rec-err"></div>
-          <div class="field__hint hide" id="rec-ok" style="color:var(--green-700);font-weight:600"></div>
-          <button class="btn btn--primary btn--block btn--lg" type="submit" id="rec-btn">${U.icon("mail", { size: 18 })} Enviar enlace</button>
-        </form>
-        ${demo ? `<p class="field__hint mt-8">Modo demo: no se envía un correo real; el enlace se simula y te lleva directamente a crear la nueva contraseña.</p>` : ""}
+/* Modo demostración: reproduce el selector de cuentas de Google. */
+async function selectorCuentasDemo(ctx) {
+  const cuentas = await D.listarCuentasDemo();
+  const m = U.modal({
+    title: "Elegí una cuenta",
+    body: `
+      <p class="muted" style="margin-top:-8px;font-size:.88rem">para continuar a PescaCorral · simulación del ingreso con Google</p>
+      <div class="acct-list">
+        ${cuentas.map((c) => `
+          <button class="acct" type="button" data-email="${U.esc(c.email)}">
+            <span class="acct__av">${U.esc(U.initials(c.nombre, c.apellido))}</span>
+            <span class="acct__txt"><b>${U.esc(`${c.nombre} ${c.apellido}`.trim())}</b><small>${U.esc(c.email)}</small></span>
+          </button>`).join("")}
+        <button class="acct" type="button" data-otra>
+          <span class="acct__av acct__av--plus">${U.icon("user", { size: 18 })}</span>
+          <span class="acct__txt"><b>Usar otra cuenta</b><small>Simula el primer ingreso de un usuario nuevo</small></span>
+        </button>
       </div>
-    </div>
-    <div class="auth__foot"><a href="#/login">${U.icon("chevron-left", { size: 14 })} Volver a iniciar sesión</a></div>
-  </div>`);
-
-  U.$("#f-rec").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const email = U.$("#rec-email").value.trim();
-    const errBox = U.$("#rec-err"), okBox = U.$("#rec-ok");
-    errBox.classList.add("hide"); okBox.classList.add("hide");
-    if (!email) { showErr(errBox, "Ingresá tu email."); return; }
-    const btn = U.$("#rec-btn"); btn.disabled = true; btn.textContent = "Enviando…";
-    try {
-      const res = await D.solicitarRecuperacion(email);
-      if (res.simulado) {
-        if (res.existe) { U.toast("Enlace simulado: creá tu nueva contraseña.", "info"); ctx.go("/restablecer"); return; }
-        okBox.textContent = "Si el email está registrado, recibirás un enlace para restablecer la contraseña."; okBox.classList.remove("hide");
-      } else {
-        okBox.textContent = "Listo. Revisá tu bandeja de entrada (y la carpeta de spam): el enlace vence a los 60 minutos."; okBox.classList.remove("hide");
-      }
-      btn.disabled = false; btn.innerHTML = `${U.icon("mail", { size: 18 })} Enviar enlace`;
-    } catch (err) {
-      showErr(errBox, err.message); btn.disabled = false; btn.innerHTML = `${U.icon("mail", { size: 18 })} Enviar enlace`;
-    }
+      <div class="hide" id="acct-nueva">
+        <div class="field mt-12"><label for="an-nombre">Nombre y apellido</label><input class="input" id="an-nombre" placeholder="Ana Ruiz"/></div>
+        <div class="field"><label for="an-email">Correo de la cuenta de Google</label><input class="input" id="an-email" type="email" placeholder="ana.ruiz@gmail.com"/></div>
+        <div class="field__error hide" id="an-err"></div>
+        <button class="btn btn--primary btn--block" type="button" id="an-ok">Continuar</button>
+      </div>`,
   });
-}
-
-export async function viewRestablecer(ctx) {
-  const rec = D.recuperacionPendiente();
-  const puede = D.MODE === "demo" ? Boolean(rec?.email) : Boolean(ctx.session);
-  U.mount(`<div class="auth">
-    <div class="auth__head" style="clip-path:polygon(0 0,100% 0,100% 86%,0 100%);padding-bottom:54px">
-      <span class="logo">${U.logoMark(48)}</span>
-      <h1>Nueva contraseña</h1>
-      <p>${puede ? "Elegí una contraseña segura para tu cuenta." : "El enlace no es válido."}</p>
-    </div>
-    <div class="auth__card-wrap">
-      <div class="auth__card">
-        ${puede ? `
-        <h2>Restablecer contraseña</h2>
-        <p class="sub">${U.esc(rec?.email || ctx.session?.user?.email || "")}</p>
-        <form id="f-rst" novalidate>
-          <div class="field">
-            <label>Nueva contraseña</label>
-            <div class="input-group">
-              <input class="input" id="rst-pwd" type="password" autocomplete="new-password" required placeholder="Creá una contraseña segura"/>
-              <button type="button" class="input-group__btn" data-toggle-pwd aria-label="Mostrar">${U.icon("eye", { size: 20 })}</button>
-            </div>
-            <div class="pwd-meter" id="pwd-meter">${"<span></span>".repeat(5)}</div>
-            <ul class="pwd-rules" id="pwd-rules"></ul>
-          </div>
-          <div class="field">
-            <label>Repetir contraseña</label>
-            <input class="input" id="rst-pwd2" type="password" autocomplete="new-password" required placeholder="Repetí la contraseña"/>
-          </div>
-          <div class="field__error hide" id="rst-err"></div>
-          <button class="btn btn--primary btn--block btn--lg" type="submit" id="rst-btn">${U.icon("check", { size: 18 })} Guardar nueva contraseña</button>
-        </form>
-        <button class="btn btn--soft btn--block mt-12" data-cancel>Cancelar</button>` : `
-        <h2>Enlace inválido o vencido</h2>
-        <p class="sub">Solicitá un nuevo enlace de recuperación para continuar.</p>
-        <a class="btn btn--primary btn--block btn--lg" href="#/recuperar">${U.icon("mail", { size: 18 })} Solicitar nuevo enlace</a>`}
-      </div>
-    </div>
-    <div class="auth__foot"><a href="#/login" data-cancel-link>${U.icon("chevron-left", { size: 14 })} Volver a iniciar sesión</a></div>
-  </div>`);
-
-  const cancelar = async () => { D.limpiarRecuperacion(); if (D.MODE === "supabase" && ctx.session) await D.signOut(); ctx.go("/login"); };
-  U.$("[data-cancel]")?.addEventListener("click", cancelar);
-  U.$("[data-cancel-link]")?.addEventListener("click", (e) => { e.preventDefault(); cancelar(); });
-  if (!puede) return;
-
-  togglePwd();
-  wirePasswordMeter(U.$("#rst-pwd"));
-  U.$("#f-rst").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const pass = U.$("#rst-pwd").value, pass2 = U.$("#rst-pwd2").value;
-    const errBox = U.$("#rst-err"); errBox.classList.add("hide");
-    if (!U.passwordStrength(pass).valid) { showErr(errBox, "La contraseña no cumple todos los requisitos de seguridad."); return; }
-    if (pass !== pass2) { showErr(errBox, "Las contraseñas no coinciden."); return; }
-    const btn = U.$("#rst-btn"); btn.disabled = true; btn.textContent = "Guardando…";
+  const entrar = async (datos) => {
     try {
-      await D.actualizarPassword(pass);
-      U.toast("Contraseña actualizada", "ok");
-      const s = await D.getSession();
-      ctx.go(isAdmin(s?.profile?.rol) ? "/admin" : "/home");
+      await D.signInDemo(datos);
+      U.closeModal();
+      ctx.go("/home");                     // el enrutador decide: alta, panel o inicio
     } catch (err) {
-      showErr(errBox, err.message); btn.disabled = false; btn.innerHTML = `${U.icon("check", { size: 18 })} Guardar nueva contraseña`;
+      showErr(U.$("#an-err", m.root), err.message);
+      U.$("#acct-nueva", m.root).classList.remove("hide");
     }
-  });
-}
-
-/* Medidor de fortaleza reutilizado por registro y restablecimiento. */
-function wirePasswordMeter(pwd) {
-  const render = () => {
-    const st = U.passwordStrength(pwd.value);
-    const colors = ["#e6ebf3", "#ef4444", "#f59e0b", "#f59e0b", "#22c55e", "#16a34a"];
-    U.$$("#pwd-meter span").forEach((s, i) => { s.style.background = i < st.score ? colors[st.score] : "var(--border)"; });
-    U.$("#pwd-rules").innerHTML = st.rules.map((r) =>
-      `<li class="${r.ok ? "ok" : ""}"><span class="tick">${r.ok ? "✓" : ""}</span>${r.label}</li>`
-    ).join("");
   };
-  render();
-  pwd.addEventListener("input", render);
+  U.$$(".acct[data-email]", m.root).forEach((b) => b.addEventListener("click", () => entrar({ email: b.dataset.email })));
+  U.$("[data-otra]", m.root).addEventListener("click", () => {
+    U.$("#acct-nueva", m.root).classList.remove("hide");
+    U.$("#an-nombre", m.root).focus();
+  });
+  U.$("#an-ok", m.root).addEventListener("click", () =>
+    entrar({ email: U.$("#an-email", m.root).value, nombre: U.$("#an-nombre", m.root).value }));
 }
+
+/* ---- Alta en el primer ingreso (HU-001): datos que Google no provee ---- */
+const soloDigitos = (s) => String(s || "").replace(/\D/g, "");
+const formatoDNI = (s) => soloDigitos(s).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 
 export async function viewRegistro(ctx) {
-  const especies = []; // no necesario aquí
+  const p = ctx.session.profile || {};
+  const admin = isAdmin(p.rol);
+  const avatar = ctx.session.user.avatar;
   U.mount(`<div class="auth">
     <div class="auth__head" style="clip-path:polygon(0 0,100% 0,100% 86%,0 100%);padding-bottom:54px">
-      <span class="logo">${U.logoMark(48)}</span>
-      <h1>Crear cuenta</h1>
-      <p>Sumate a PescaCorral en pocos pasos.</p>
+      <span class="logo">${avatar
+        ? `<img class="auth__avatar" src="${U.esc(avatar)}" alt="" referrerpolicy="no-referrer"/>`
+        : U.logoMark(48)}</span>
+      <h1>Completá tu perfil</h1>
+      <p>Un último paso para crear tu cuenta en PescaCorral.</p>
     </div>
     <div class="auth__card-wrap">
       <div class="auth__card">
         <h2>Datos personales</h2>
-        <p class="sub">Tus datos quedan protegidos y se usan sólo para tus reservas y permisos.</p>
+        <p class="sub">Se usan sólo para tus reservas y para emitir tus permisos de pesca.</p>
         <form id="f-reg" novalidate>
-          <div class="flex gap-12">
-            <div class="field grow"><label>Nombre</label><input class="input" id="r-nombre" required placeholder="Carlos"/></div>
-            <div class="field grow"><label>Apellido</label><input class="input" id="r-apellido" placeholder="Romero"/></div>
-          </div>
-          <div class="field"><label>Email</label><input class="input" id="r-email" type="email" autocomplete="email" required placeholder="tu@email.com"/></div>
-          <div class="flex gap-12">
-            <div class="field grow"><label>Teléfono</label><input class="input" id="r-tel" placeholder="+54 387 …"/></div>
-            <div class="field grow"><label>DNI</label><input class="input" id="r-dni" placeholder="24.356.789"/></div>
-          </div>
           <div class="field">
-            <label>Tipo de cuenta</label>
+            <label>Cuenta de Google</label>
+            <div class="input input--readonly">${GOOGLE_G}<span>${U.esc(ctx.session.user.email)}</span></div>
+          </div>
+          <div class="flex gap-12">
+            <div class="field grow"><label for="r-nombre">Nombre *</label><input class="input" id="r-nombre" autocomplete="given-name" value="${U.esc(p.nombre || "")}"/></div>
+            <div class="field grow"><label for="r-apellido">Apellido *</label><input class="input" id="r-apellido" autocomplete="family-name" value="${U.esc(p.apellido || "")}"/></div>
+          </div>
+          <div class="flex gap-12">
+            <div class="field grow"><label for="r-dni">DNI *</label><input class="input" id="r-dni" inputmode="numeric" placeholder="24.356.789" value="${U.esc(p.dni || "")}"/></div>
+            <div class="field grow"><label for="r-tel">Teléfono</label><input class="input" id="r-tel" inputmode="tel" autocomplete="tel" placeholder="+54 387 …" value="${U.esc(p.telefono || "")}"/></div>
+          </div>
+          ${admin ? "" : `<div class="field">
+            <label for="r-rol">Tipo de cuenta *</label>
             <select class="select" id="r-rol">
-              <option value="pescador">Pescador / Turista</option>
-              <option value="dueno">Dueño de catamarán</option>
+              <option value="pescador"${p.rol === "dueno" ? "" : " selected"}>Pescador / Turista</option>
+              <option value="dueno"${p.rol === "dueno" ? " selected" : ""}>Dueño de catamarán</option>
             </select>
-          </div>
-          <div class="field">
-            <label>Contraseña</label>
-            <div class="input-group">
-              <input class="input" id="r-pwd" type="password" autocomplete="new-password" required placeholder="Creá una contraseña segura"/>
-              <button type="button" class="input-group__btn" data-toggle-pwd aria-label="Mostrar">${U.icon("eye", { size: 20 })}</button>
-            </div>
-            <div class="pwd-meter" id="pwd-meter">${"<span></span>".repeat(5)}</div>
-            <ul class="pwd-rules" id="pwd-rules"></ul>
-          </div>
-          <div class="field">
-            <label>Repetir contraseña</label>
-            <input class="input" id="r-pwd2" type="password" autocomplete="new-password" required placeholder="Repetí la contraseña"/>
-            <div class="field__error hide" id="pwd2-err">Las contraseñas no coinciden.</div>
-          </div>
+            <div class="field__hint">Una vez creada la cuenta, el tipo sólo puede modificarlo la administración municipal.</div>
+          </div>`}
           <div class="field__error hide" id="reg-err"></div>
           <button class="btn btn--primary btn--block btn--lg" type="submit" id="reg-btn">Crear cuenta</button>
         </form>
+        <button class="btn btn--soft btn--block mt-12" type="button" data-cancel>Cancelar y salir</button>
       </div>
     </div>
-    <div class="auth__foot">¿Ya tenés cuenta? <a href="#/login">Iniciá sesión</a></div>
+    <div class="auth__foot">* Campos obligatorios</div>
   </div>`);
 
-  togglePwd();
-  wirePasswordMeter(U.$("#r-pwd"));
+  const dni = U.$("#r-dni");
+  dni.addEventListener("blur", () => { if (soloDigitos(dni.value)) dni.value = formatoDNI(dni.value); });
+  U.$("[data-cancel]").addEventListener("click", async () => { await D.signOut(); ctx.go("/login"); });
 
   U.$("#f-reg").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const v = (id) => U.$(id).value.trim();
-    const nombre = v("#r-nombre"), email = v("#r-email"), pass = U.$("#r-pwd").value, pass2 = U.$("#r-pwd2").value;
     const errBox = U.$("#reg-err"); errBox.classList.add("hide");
-    const st = U.passwordStrength(pass);
-    if (!nombre || !email) { showErr(errBox, "Completá nombre y email."); return; }
-    if (!st.valid) { showErr(errBox, "La contraseña no cumple todos los requisitos de seguridad."); return; }
-    if (pass !== pass2) { U.$("#pwd2-err").classList.remove("hide"); return; }
-    U.$("#pwd2-err").classList.add("hide");
-    const btn = U.$("#reg-btn"); btn.disabled = true; btn.textContent = "Creando…";
+    const campos = [["#r-nombre", "Nombre"], ["#r-apellido", "Apellido"], ["#r-dni", "DNI"]];
+    const faltan = [];
+    campos.forEach(([sel, nom]) => {
+      const el = U.$(sel); const vacio = !el.value.trim();
+      el.classList.toggle("input--error", vacio);
+      if (vacio) faltan.push(nom);
+    });
+    if (faltan.length) { showErr(errBox, `Completá los campos obligatorios: ${faltan.join(", ")}.`); return; }
+    const d = soloDigitos(dni.value);
+    if (d.length < 7 || d.length > 8) {
+      dni.classList.add("input--error");
+      showErr(errBox, "Ingresá un DNI válido, de 7 u 8 dígitos."); return;
+    }
+    const btn = U.$("#reg-btn"); btn.disabled = true; btn.textContent = "Creando cuenta…";
     try {
-      await D.signUp({ nombre, apellido: v("#r-apellido"), email, telefono: v("#r-tel"), dni: v("#r-dni"), rol: U.$("#r-rol").value, password: pass });
-      const s = await D.getSession();
-      if (s) { U.toast("¡Cuenta creada!", "ok"); ctx.go(isAdmin(s.profile.rol) ? "/admin" : "/home"); }
-      else { U.toast("Revisá tu email para confirmar la cuenta.", "info"); ctx.go("/login"); }
+      await D.completarPerfil({
+        nombre: U.$("#r-nombre").value.trim(), apellido: U.$("#r-apellido").value.trim(),
+        dni: formatoDNI(d), telefono: U.$("#r-tel").value.trim(),
+        rol: admin ? undefined : U.$("#r-rol").value,
+      });
+      U.toast("¡Cuenta creada! Te damos la bienvenida a PescaCorral.", "ok");
+      ctx.go("/home");
     } catch (err) {
       showErr(errBox, err.message); btn.disabled = false; btn.textContent = "Crear cuenta";
     }
   });
 }
 
-function togglePwd() {
-  U.$$("[data-toggle-pwd]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const input = btn.parentElement.querySelector("input");
-      const show = input.type === "password";
-      input.type = show ? "text" : "password";
-      btn.innerHTML = U.icon(show ? "eye-off" : "eye", { size: 20 });
-    });
-  });
-}
-function showErr(box, msg) { box.textContent = msg; box.classList.remove("hide"); }
+function showErr(box, msg) { if (!box) return; box.textContent = msg; box.classList.remove("hide"); }
 
 /* ============================================================================
  *  HOME
@@ -876,7 +779,9 @@ export async function viewPerfil(ctx) {
     topbarHtml: topbar({ title: "Perfil", bell: true, unread }),
     bodyHtml: `
       <div class="profile-hero">
-        <div class="avatar">${U.initials(p.nombre, p.apellido)}</div>
+        <div class="avatar">${ctx.session.user.avatar
+          ? `<img src="${U.esc(ctx.session.user.avatar)}" alt="" referrerpolicy="no-referrer"/>`
+          : U.initials(p.nombre, p.apellido)}</div>
         <div class="center">
           <h2>${U.esc(p.nombre)} ${U.esc(p.apellido || "")}</h2>
           <div class="muted" style="font-weight:600">${U.esc(p.email)}</div>
@@ -910,8 +815,11 @@ export async function viewPerfil(ctx) {
 
       <h2 class="section-title mt-24">Cuenta</h2>
       <div class="card card--flat">
+        <div class="permit__row"><span>Ingreso</span><b>${GOOGLE_G} Cuenta de Google</b></div>
+        <div class="permit__row"><span>Correo</span><b>${U.esc(ctx.session.user.email)}</b></div>
         <div class="permit__row"><span>Modo de datos</span><b>${D.MODE === "demo" ? "Demostración (local)" : "Supabase (en la nube)"}</b></div>
-        <a class="btn btn--outline btn--block mt-12" href="#/recuperar">${U.icon("lock", { size: 18 })} Cambiar contraseña</a>
+        <p class="field__hint mt-8">La contraseña y la verificación en dos pasos se administran desde tu cuenta de Google.</p>
+        ${D.MODE === "supabase" ? `<a class="btn btn--outline btn--block mt-12" href="https://myaccount.google.com/security" target="_blank" rel="noopener">${U.icon("shield", { size: 18 })} Seguridad de mi cuenta de Google</a>` : ""}
         ${D.MODE === "demo" ? `<button class="btn btn--soft btn--block mt-12" data-reset>${U.icon("refresh", { size: 18 })} Reiniciar datos de demo</button>` : ""}
       </div>
 
@@ -923,10 +831,17 @@ export async function viewPerfil(ctx) {
 
   U.$("#f-perfil").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const nombre = U.$("#pf-nombre").value.trim();
-    if (!nombre) { U.toast("El nombre es obligatorio.", "err"); U.$("#pf-nombre").classList.add("input--error"); return; }
+    const obligatorios = [["#pf-nombre", "nombre"], ["#pf-apellido", "apellido"], ["#pf-dni", "DNI"]];
+    const faltan = obligatorios.filter(([sel]) => !U.$(sel).value.trim());
+    obligatorios.forEach(([sel]) => U.$(sel).classList.toggle("input--error", !U.$(sel).value.trim()));
+    if (faltan.length) { U.toast(`Completá: ${faltan.map(([, n]) => n).join(", ")}.`, "err"); return; }
+    const dniDig = U.$("#pf-dni").value.replace(/\D/g, "");
+    if (dniDig.length < 7 || dniDig.length > 8) { U.toast("Ingresá un DNI válido, de 7 u 8 dígitos.", "err"); U.$("#pf-dni").classList.add("input--error"); return; }
     try {
-      await D.updateProfile({ nombre, apellido: U.$("#pf-apellido").value.trim(), telefono: U.$("#pf-tel").value.trim(), dni: U.$("#pf-dni").value.trim() });
+      await D.updateProfile({
+        nombre: U.$("#pf-nombre").value.trim(), apellido: U.$("#pf-apellido").value.trim(),
+        telefono: U.$("#pf-tel").value.trim(), dni: dniDig.replace(/\B(?=(\d{3})+(?!\d))/g, "."),
+      });
       U.toast("Perfil actualizado", "ok");
       ctx.rerender();
     } catch (err) { U.toast(err.message, "err"); }

@@ -13,14 +13,6 @@ const HAS_SUPABASE = Boolean(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY);
 export const MODE = HAS_SUPABASE ? "supabase" : "demo";
 
 const DEMO_KEY = "pescacorral.demo.v1";
-const DEMO_PASS = "Demo1234!";
-
-/* Política de acceso (TFG · sección Seguridad / HU-002):
- *   bloqueo temporal de la cuenta tras MAX_INTENTOS fallidos consecutivos. */
-export const MAX_INTENTOS = 3;
-export const BLOQUEO_MINUTOS = 15;
-const LOCK_KEY = "pescacorral.intentos.v1";      // fallback local (modo demo / sin migración)
-const RECOVERY_KEY = "pescacorral.recovery";      // recuperación de contraseña en curso (por pestaña)
 const PREF_RECORDATORIOS = "pescacorral.pref.recordatorios";
 
 let sb = null;                 // cliente supabase (lazy)
@@ -36,15 +28,13 @@ function ready() {
     if (MODE === "supabase") {
       const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
       sb = createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, {
-        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+        // Flujo PKCE: al volver de Google la sesión llega como ?code= en la URL
+        // (no como #token), lo que no interfiere con el enrutador por hash.
+        auth: { flowType: "pkce", persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
       });
+      // Se difiere el aviso para no llamar al cliente desde dentro de su propio evento.
       sb.auth.onAuthStateChange((event) => {
-        // El enlace de "olvidé mi contraseña" vuelve a la app con una sesión de
-        // recuperación: se marca para que el enrutador lleve a #/restablecer.
-        if (event === "PASSWORD_RECOVERY") {
-          try { sessionStorage.setItem(RECOVERY_KEY, JSON.stringify({ demo: false })); } catch {}
-        }
-        authListeners.forEach((fn) => fn(event));
+        setTimeout(() => authListeners.forEach((fn) => fn(event)), 0);
       });
     } else {
       seedDemo();
@@ -86,7 +76,7 @@ const todayISO = () => dateISO(new Date());
 
 function seedDemo() {
   DB = loadDB();
-  if (DB && DB.__v === 2) return;
+  if (DB && DB.__v === 3) return;
 
   const rnd = mulberry32(20260628);
   const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
@@ -101,10 +91,10 @@ function seedDemo() {
   const pejerrey = especies[0];
 
   /* --- Usuarios demo --- */
-  const uPescador = { id: uid(), nombre: "Carlos", apellido: "Romero", email: "pescador@demo.com", telefono: "+54 387 4123456", dni: "24.356.789", rol: "pescador", activo: true, created_at: isoFromOffset(-120).toISOString() };
-  const uDueno    = { id: uid(), nombre: "Juan", apellido: "Pérez", email: "dueno@demo.com", telefono: "+54 387 4998877", dni: "20.111.222", rol: "dueno", activo: true, created_at: isoFromOffset(-200).toISOString() };
-  const uMuni     = { id: uid(), nombre: "Laura", apellido: "Gómez", email: "municipio@demo.com", telefono: "+54 387 4100100", dni: "27.654.321", rol: "admin_municipal", activo: true, created_at: isoFromOffset(-300).toISOString() };
-  const uAdmin    = { id: uid(), nombre: "Sofía", apellido: "Díaz", email: "admin@demo.com", telefono: "+54 387 4555000", dni: "30.222.111", rol: "admin_sistema", activo: true, created_at: isoFromOffset(-300).toISOString() };
+  const uPescador = { id: uid(), nombre: "Carlos", apellido: "Romero", email: "pescador@demo.com", telefono: "+54 387 4123456", dni: "24.356.789", rol: "pescador", activo: true, perfil_completo: true, created_at: isoFromOffset(-120).toISOString() };
+  const uDueno    = { id: uid(), nombre: "Juan", apellido: "Pérez", email: "dueno@demo.com", telefono: "+54 387 4998877", dni: "20.111.222", rol: "dueno", activo: true, perfil_completo: true, created_at: isoFromOffset(-200).toISOString() };
+  const uMuni     = { id: uid(), nombre: "Laura", apellido: "Gómez", email: "municipio@demo.com", telefono: "+54 387 4100100", dni: "27.654.321", rol: "admin_municipal", activo: true, perfil_completo: true, created_at: isoFromOffset(-300).toISOString() };
+  const uAdmin    = { id: uid(), nombre: "Sofía", apellido: "Díaz", email: "admin@demo.com", telefono: "+54 387 4555000", dni: "30.222.111", rol: "admin_sistema", activo: true, perfil_completo: true, created_at: isoFromOffset(-300).toISOString() };
   const usuarios = [uPescador, uDueno, uMuni, uAdmin];
 
   /* --- Catamaranes (datos de los prototipos del TFG) --- */
@@ -202,7 +192,7 @@ function seedDemo() {
     { id: uid(), id_especie: especies[2].id, periodo, permisos_emitidos: 210, umbral: 300, estado: "activa", created_at: isoFromOffset(-5).toISOString() },
   ];
 
-  DB = { __v: 2, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, reportes: [], seq, passwords: {}, session: null };
+  DB = { __v: 3, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, reportes: [], seq, session: null };
   saveDB(DB);
 }
 
@@ -215,9 +205,6 @@ function demoSessionUser() {
   if (!DB?.session?.userId) return null;
   return byId(DB.usuarios, DB.session.userId) || null;
 }
-function demoPassword(email) {
-  return DB.passwords[email] || DEMO_PASS; // cuentas sembradas usan Demo1234!
-}
 function applyPermisoEstado(p) {
   if (p.estado === "anulado") return p;
   if (p.estado !== "vencido" && new Date(p.fecha_vencimiento).getTime() < Date.now())
@@ -226,7 +213,11 @@ function applyPermisoEstado(p) {
 }
 
 /* ============================================================================
- *  AUTENTICACIÓN
+ *  AUTENTICACIÓN · ingreso con cuenta de Google (OAuth 2.0 / OpenID Connect)
+ *  La aplicación no recibe ni almacena contraseñas: Google verifica la
+ *  identidad y Supabase Auth emite la sesión (JWT). En el primer ingreso el
+ *  perfil se crea automáticamente (trigger handle_new_user) y el usuario
+ *  completa los datos obligatorios en la pantalla #/registro.
  * ========================================================================== */
 export function onAuthChange(fn) {
   authListeners.add(fn);
@@ -238,11 +229,16 @@ export async function getSession() {
   if (MODE === "supabase") {
     const { data } = await sb.auth.getSession();
     if (!data.session) return null;
-    const profile = await fetchProfileSupabase(data.session.user.id);
-    return { user: { id: data.session.user.id, email: data.session.user.email }, profile };
+    const user = data.session.user;
+    const meta = user.user_metadata || {};
+    const profile = await fetchProfileSupabase(user.id);
+    return {
+      user: { id: user.id, email: user.email, avatar: meta.avatar_url || meta.picture || null },
+      profile,
+    };
   }
   const u = demoSessionUser();
-  return u ? { user: { id: u.id, email: u.email }, profile: u } : null;
+  return u ? { user: { id: u.id, email: u.email, avatar: null }, profile: u } : null;
 }
 
 async function fetchProfileSupabase(id) {
@@ -251,160 +247,107 @@ async function fetchProfileSupabase(id) {
   return data;
 }
 
-/* ---- Bloqueo temporal por intentos fallidos (HU-002 · criterio 3) ----
- * En modo Supabase el registro vive en la tabla intento_acceso (funciones
- * acceso_bloqueado / registrar_intento_acceso, ver database/migrations/002).
- * Si esas funciones no existen todavía, se usa un registro local por email. */
-function loadLocks() { try { return JSON.parse(localStorage.getItem(LOCK_KEY)) || {}; } catch { return {}; } }
-function saveLocks(l) { try { localStorage.setItem(LOCK_KEY, JSON.stringify(l)); } catch {} }
-function lockEstadoLocal(email) {
-  const l = loadLocks(); const e = l[email];
-  if (!e) return { bloqueado: false, intentos: 0, restantes: MAX_INTENTOS, minutos: 0 };
-  if (e.hasta && e.hasta > Date.now())
-    return { bloqueado: true, intentos: e.intentos, restantes: 0, minutos: Math.max(1, Math.ceil((e.hasta - Date.now()) / 60000)) };
-  if (e.hasta && e.hasta <= Date.now()) { delete l[email]; saveLocks(l); return { bloqueado: false, intentos: 0, restantes: MAX_INTENTOS, minutos: 0 }; }
-  return { bloqueado: false, intentos: e.intentos, restantes: Math.max(0, MAX_INTENTOS - e.intentos), minutos: 0 };
+/** Perfil incompleto = primer ingreso sin DNI ni tipo de cuenta confirmados. */
+export function perfilCompleto(profile) {
+  if (!profile) return false;
+  if (typeof profile.perfil_completo === "boolean") return profile.perfil_completo;
+  return Boolean(String(profile.dni || "").trim());
 }
-function registrarIntentoLocal(email, exitoso) {
-  const l = loadLocks();
-  if (exitoso) { delete l[email]; saveLocks(l); return lockEstadoLocal(email); }
-  const prev = l[email];
-  const e = prev && !(prev.hasta && prev.hasta <= Date.now()) ? prev : { intentos: 0, hasta: null };
-  e.intentos += 1;
-  if (e.intentos >= MAX_INTENTOS) e.hasta = Date.now() + BLOQUEO_MINUTOS * 60000;
-  l[email] = e; saveLocks(l);
-  return lockEstadoLocal(email);
-}
-function normalizarLock(d) {
-  const intentos = Number(d.intentos) || 0;
-  return { bloqueado: Boolean(d.bloqueado), intentos, restantes: Math.max(0, MAX_INTENTOS - intentos), minutos: Number(d.minutos_restantes) || 0 };
-}
+
 const esFuncionInexistente = (err) => /PGRST202|could not find the function|does not exist/i.test(String(err?.message || err?.code || ""));
 
-async function lockEstado(email) {
-  if (MODE === "supabase") {
-    const { data, error } = await sb.rpc("acceso_bloqueado", { p_email: email });
-    if (!error && data) return normalizarLock(data);
-    if (error && !esFuncionInexistente(error)) console.warn("acceso_bloqueado:", error.message);
-  }
-  return lockEstadoLocal(email);
-}
-async function registrarIntento(email, exitoso) {
-  if (MODE === "supabase") {
-    const { data, error } = await sb.rpc("registrar_intento_acceso", { p_email: email, p_exitoso: exitoso });
-    if (!error && data) return normalizarLock(data);
-    if (error && !esFuncionInexistente(error)) console.warn("registrar_intento_acceso:", error.message);
-  }
-  return registrarIntentoLocal(email, exitoso);
-}
-/** Estado de bloqueo de una cuenta (para mostrarlo en la pantalla de login). */
-export async function estadoBloqueo(email) {
-  await ready();
-  return lockEstado((email || "").trim().toLowerCase());
-}
-function msgBloqueo(estado) {
-  const min = estado.minutos || BLOQUEO_MINUTOS;
-  return `Cuenta bloqueada temporalmente por ${MAX_INTENTOS} intentos fallidos consecutivos. ` +
-         `Volvé a intentar en ${min} minuto${min === 1 ? "" : "s"} o recuperá tu contraseña.`;
-}
-const esCredencialInvalida = (msg = "") => /invalid login|invalid credentials|invalid_credentials/i.test(msg);
+/* Dirección a la que Google (a través de Supabase) devuelve al usuario. */
+const redirectURL = () => location.origin + location.pathname.replace(/index\.html$/, "");
 
-export async function signIn(email, password) {
+/* Consulta si el proveedor Google está habilitado, para no mandar al usuario
+ * a una página de error del servidor si todavía no se configuró. */
+let _googleHabilitado = null;
+async function googleHabilitado() {
+  if (_googleHabilitado !== null) return _googleHabilitado;
+  try {
+    const r = await fetch(`${CFG.SUPABASE_URL}/auth/v1/settings`, { headers: { apikey: CFG.SUPABASE_ANON_KEY } });
+    const s = await r.json();
+    _googleHabilitado = Boolean(s?.external?.google);
+  } catch {
+    _googleHabilitado = true;   // sin respuesta: se intenta igual y el servidor informa
+  }
+  return _googleHabilitado;
+}
+
+/** Inicia el ingreso con Google: redirige a la pantalla de Google y, al
+ *  autorizar, vuelve a la aplicación con la sesión iniciada. */
+export async function signInWithGoogle() {
   await ready();
+  if (MODE !== "supabase") throw new Error("En modo demostración elegí una de las cuentas de ejemplo.");
+  if (!(await googleHabilitado()))
+    throw new Error("El ingreso con Google todavía no está habilitado en el servidor. Intentá más tarde.");
+  const { error } = await sb.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: redirectURL(), queryParams: { prompt: "select_account" } },
+  });
+  if (error) throw new Error(traducirAuth(error.message));
+}
+
+/* ---- Modo demostración: simula el selector de cuentas de Google ---- */
+export async function listarCuentasDemo() {
+  await ready();
+  if (MODE !== "demo") return [];
+  return DB.usuarios
+    .filter((u) => u.activo !== false)
+    .map((u) => ({ email: u.email, nombre: u.nombre || "", apellido: u.apellido || "" }));
+}
+
+export async function signInDemo({ email, nombre = "" } = {}) {
+  await ready();
+  if (MODE !== "demo") throw new Error("Operación disponible sólo en modo demostración.");
   email = (email || "").trim().toLowerCase();
-  const previo = await lockEstado(email);
-  if (previo.bloqueado) throw new Error(msgBloqueo(previo));
-
-  let ok = false;
-  if (MODE === "supabase") {
-    const { error } = await sb.auth.signInWithPassword({ email, password });
-    ok = !error;
-    // Errores que no son "credencial incorrecta" (p. ej. email sin confirmar) no cuentan como intento.
-    if (error && !esCredencialInvalida(error.message)) throw new Error(traducirAuth(error.message));
-  } else {
-    const u = DB.usuarios.find((x) => x.email.toLowerCase() === email);
-    ok = Boolean(u && demoPassword(u.email) === password);
-    if (ok) { DB.session = { userId: u.id }; persist(); }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error("Ingresá un correo válido.");
+  let u = DB.usuarios.find((x) => x.email.toLowerCase() === email);
+  if (!u) {
+    // Igual que el trigger handle_new_user: el perfil se crea con los datos que
+    // entrega Google y queda pendiente de completar.
+    const partes = String(nombre).trim().split(/\s+/).filter(Boolean);
+    u = {
+      id: uid(), nombre: partes[0] || email.split("@")[0], apellido: partes.slice(1).join(" "),
+      email, telefono: "", dni: "", rol: "pescador", activo: true, perfil_completo: false,
+      created_at: new Date().toISOString(),
+    };
+    DB.usuarios.push(u);
   }
-
-  const estado = await registrarIntento(email, ok);
-  if (!ok) {
-    if (estado.bloqueado) throw new Error(msgBloqueo(estado));
-    const r = estado.restantes;
-    throw new Error(`Email o contraseña incorrectos. ${r === 1 ? "Te queda 1 intento" : `Te quedan ${r} intentos`} antes del bloqueo temporal.`);
-  }
-  if (MODE === "demo") emitAuth("SIGNED_IN");
+  if (u.activo === false) throw new Error("La cuenta está desactivada. Comunicate con el municipio.");
+  DB.session = { userId: u.id }; persist(); emitAuth("SIGNED_IN");
   return true;
 }
 
-/* ---- Recuperación de contraseña por correo electrónico (Seguridad) ---- */
-export async function solicitarRecuperacion(email) {
+/** Primer ingreso (HU-001): guarda los datos obligatorios y confirma el alta. */
+export async function completarPerfil({ nombre, apellido, telefono, dni, rol }) {
   await ready();
-  email = (email || "").trim().toLowerCase();
-  if (!email) throw new Error("Ingresá tu email.");
+  const patch = { nombre, apellido, telefono: telefono || "", dni, perfil_completo: true };
+  if (rol === "pescador" || rol === "dueno") patch.rol = rol;
   if (MODE === "supabase") {
-    // Supabase envía un enlace; al volver, la app detecta PASSWORD_RECOVERY y muestra #/restablecer.
-    const redirectTo = location.origin + location.pathname;
-    const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo });
-    if (error) throw new Error(traducirAuth(error.message));
-    return { simulado: false };
-  }
-  // Demo: no hay correo real; el "enlace" se simula habilitando el cambio de clave en esta pestaña.
-  const existe = DB.usuarios.some((x) => x.email.toLowerCase() === email);
-  if (existe) { try { sessionStorage.setItem(RECOVERY_KEY, JSON.stringify({ email, demo: true })); } catch {} }
-  return { simulado: true, existe };
-}
-export function recuperacionPendiente() {
-  try { return JSON.parse(sessionStorage.getItem(RECOVERY_KEY)); } catch { return null; }
-}
-export function limpiarRecuperacion() { try { sessionStorage.removeItem(RECOVERY_KEY); } catch {} }
-
-export async function actualizarPassword(nueva) {
-  await ready();
-  if (MODE === "supabase") {
-    const { error } = await sb.auth.updateUser({ password: nueva });
-    if (error) throw new Error(traducirAuth(error.message));
-    const { data } = await sb.auth.getSession();
-    if (data.session?.user?.email) await registrarIntento(data.session.user.email.toLowerCase(), true);
-    limpiarRecuperacion(); emitAuth("USER_UPDATED");
+    const { data: s } = await sb.auth.getSession();
+    const id = s.session?.user?.id;
+    if (!id) throw new Error("La sesión expiró. Volvé a ingresar con Google.");
+    let { error } = await sb.from("usuario").update(patch).eq("id", id);
+    if (error && /perfil_completo/.test(error.message)) {
+      // Base sin la migración 003: se guarda igual, sin la marca de perfil completo.
+      delete patch.perfil_completo;
+      ({ error } = await sb.from("usuario").update(patch).eq("id", id));
+    }
+    if (error) throw new Error(traducirDB(error.message));
+    emitAuth("USER_UPDATED");
     return true;
   }
-  const rec = recuperacionPendiente();
-  if (!rec?.email) throw new Error("No hay una recuperación de contraseña en curso.");
-  const u = DB.usuarios.find((x) => x.email.toLowerCase() === rec.email);
-  if (!u) throw new Error("La cuenta no existe.");
-  DB.passwords[u.email.toLowerCase()] = nueva;
-  registrarIntentoLocal(u.email.toLowerCase(), true);   // se levanta cualquier bloqueo
-  DB.session = { userId: u.id }; persist();
-  limpiarRecuperacion(); emitAuth("USER_UPDATED");
-  return true;
-}
-
-export async function signUp({ nombre, apellido, email, telefono, dni, rol = "pescador", password }) {
-  await ready();
-  email = (email || "").trim().toLowerCase();
-  if (MODE === "supabase") {
-    const { error } = await sb.auth.signUp({
-      email, password,
-      options: { data: { nombre, apellido, telefono, dni, rol } },
-    });
-    if (error) throw new Error(traducirAuth(error.message));
-    return true;
-  }
-  if (DB.usuarios.some((x) => x.email.toLowerCase() === email))
-    throw new Error("Ya existe una cuenta con ese email.");
-  const u = { id: uid(), nombre, apellido: apellido || "", email, telefono: telefono || "", dni: dni || "", rol, activo: true, created_at: new Date().toISOString() };
-  DB.usuarios.push(u);
-  DB.passwords[email] = password;
-  DB.session = { userId: u.id };
-  persist(); emitAuth();
+  const u = demoSessionUser();
+  if (!u) throw new Error("La sesión expiró. Volvé a ingresar.");
+  Object.assign(u, patch); persist(); emitAuth("USER_UPDATED");
   return true;
 }
 
 export async function signOut() {
   await ready();
   if (MODE === "supabase") { await sb.auth.signOut(); return; }
-  DB.session = null; persist(); emitAuth();
+  DB.session = null; persist(); emitAuth("SIGNED_OUT");
 }
 
 export async function updateProfile(patch) {
@@ -413,26 +356,29 @@ export async function updateProfile(patch) {
     const { data: s } = await sb.auth.getSession();
     const id = s.session?.user?.id;
     const { error } = await sb.from("usuario").update(patch).eq("id", id);
-    if (error) throw new Error(error.message);
-    emitAuth();
+    if (error) throw new Error(traducirDB(error.message));
+    emitAuth("USER_UPDATED");
     return true;
   }
   const u = demoSessionUser();
-  Object.assign(u, patch); persist(); emitAuth();
+  Object.assign(u, patch); persist(); emitAuth("USER_UPDATED");
   return true;
 }
 
 function traducirAuth(msg = "") {
   const m = msg.toLowerCase();
-  if (m.includes("invalid login") || m.includes("invalid credentials")) return "Email o contraseña incorrectos.";
-  if (m.includes("already registered") || m.includes("already exists")) return "Ya existe una cuenta con ese email.";
-  if (m.includes("not confirmed")) return "Tenés que confirmar tu email antes de ingresar.";
+  if (m.includes("provider is not enabled") || m.includes("unsupported provider"))
+    return "El ingreso con Google todavía no está habilitado en el servidor.";
+  if (m.includes("access_denied") || m.includes("cancel")) return "Cancelaste el ingreso con Google.";
   if (m.includes("rate limit") || m.includes("too many")) return "Demasiados intentos. Esperá unos minutos y volvé a probar.";
-  if (m.includes("same password") || m.includes("different from the old")) return "La nueva contraseña debe ser distinta de la anterior.";
-  if (m.includes("auth session missing") || m.includes("session")) return "El enlace de recuperación no es válido o expiró. Solicitá uno nuevo.";
-  if (m.includes("password")) return "La contraseña no cumple los requisitos mínimos.";
-  if (m.includes("email")) return "Revisá el email ingresado.";
-  return msg || "No se pudo completar la operación.";
+  return msg || "No se pudo completar el ingreso.";
+}
+
+function traducirDB(msg = "") {
+  if (/tipo de cuenta|no está permitido/i.test(msg)) return msg;
+  if (/duplicate key|unique/i.test(msg)) return "Ya existe un registro con esos datos.";
+  if (/row-level security|permission denied/i.test(msg)) return "No tenés permisos para realizar esa operación.";
+  return msg || "No se pudo guardar la información.";
 }
 
 /* ============================================================================
