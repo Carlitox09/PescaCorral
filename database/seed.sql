@@ -40,7 +40,7 @@ insert into public.catamaran (id, nombre, descripcion, capacidad, precio, habili
 
 -- ----------------------------------------------------------------------------
 -- Asientos (lugar): se generan automáticamente según la capacidad de cada
--- catamarán, con ubicación alternada (babor / estribor).
+-- catamarán, con su ubicación en el plano (ver ubicacion_lugar en schema.sql).
 -- ----------------------------------------------------------------------------
 do $$
 declare
@@ -50,7 +50,7 @@ declare
 begin
     for c in select id, capacidad from public.catamaran loop
         for i in 1..c.capacidad loop
-            ubi := case when i % 2 = 0 then 'estribor' else 'babor' end;
+            ubi := public.ubicacion_lugar(i, c.capacidad);
             insert into public.lugar (id_catamaran, numero, ubicacion)
             values (c.id, i, ubi);
         end loop;

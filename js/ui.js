@@ -79,6 +79,13 @@ const ICONS = {
   sun:         '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2.5 12H5M19 12h2.5M4.2 19.8 6 18M18 6l1.8-1.8"/>',
   moon:        '<path d="M20 14.5A8 8 0 0 1 9.5 4 7 7 0 1 0 20 14.5Z"/>',
   receipt:     '<path d="M5 3h14v18l-2.5-1.5L14 21l-2-1.5L10 21l-2.5-1.5L5 21V3Z"/><path d="M9 8h6M9 12h6"/>',
+  message:     '<path d="M20.5 12a8.5 8.5 0 0 1-12.6 7.4L3 21l1.6-4.6A8.5 8.5 0 1 1 20.5 12Z"/><path d="M8.5 10.5c.3 2 2.6 4.3 4.8 4.8l1.2-1.3 2 .9"/>',
+  send:        '<path d="M21 3 10.5 13.5M21 3l-6.5 18-4-7.5L3 9.5 21 3Z"/>',
+  copy:        '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
+  image:       '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.8"/><path d="m21 15-5-5L5 21"/>',
+  cash:        '<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6 10v4M18 10v4"/>',
+  steering:    '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.3"/><path d="M12 3.5v6.2M12 14.3v6.2M3.5 12h6.2M14.3 12h6.2"/>',
+  dots:        '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   logo:        '', // se usa el símbolo del index.html
 };
 
@@ -260,6 +267,164 @@ export function initials(nombre = "", apellido = "") {
   const a = (nombre || "").trim()[0] || "";
   const b = (apellido || "").trim()[0] || "";
   return (a + b).toUpperCase() || "U";
+}
+
+/* ------------------------ Imagen para compartir -------------------------- */
+/* Arma la tarjeta (permiso o comprobante) como SVG y la convierte en PNG, para
+ * enviarla por WhatsApp u otra aplicación. Sin dependencias: el navegador
+ * dibuja el SVG en un canvas. */
+const FUENTE_IMG = "Segoe UI, Roboto, Helvetica, Arial, sans-serif";
+const LOGO_IMG = `<defs>
+  <linearGradient id="ti-cielo" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#A12A3A"/><stop offset="1" stop-color="#5E1422"/></linearGradient>
+  <linearGradient id="ti-agua" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2C8AA8"/><stop offset="1" stop-color="#175A73"/></linearGradient>
+  <clipPath id="ti-clip"><rect x="2" y="2" width="60" height="60" rx="15"/></clipPath></defs>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#ti-cielo)"/>
+  <g clip-path="url(#ti-clip)"><circle cx="46" cy="18" r="6.5" fill="#F4C46A"/>
+  <path d="M2 40 L14 25 L22 32 L32 20 L44 33 L52 27 L62 34 L62 46 L2 46 Z" fill="#CF8A2E"/>
+  <path d="M2 44 L11 37 L21 42 L31 36 L41 42 L51 37 L62 42 L62 47 L2 47 Z" fill="#A9552B"/>
+  <rect x="2" y="45" width="60" height="17" fill="url(#ti-agua)"/><rect x="2" y="39.5" width="60" height="3.6" fill="#FFF6EA"/>
+  <rect x="10.5" y="42" width="2.8" height="10" fill="#FFF6EA"/><rect x="22.5" y="42" width="2.8" height="10" fill="#FFF6EA"/>
+  <rect x="34.5" y="42" width="2.8" height="10" fill="#FFF6EA"/><rect x="46.5" y="42" width="2.8" height="10" fill="#FFF6EA"/></g>`;
+
+function qrModulos(texto) {
+  const qr = window.qrcode(0, "M");
+  qr.addData(texto || "PCC");
+  qr.make();
+  const n = qr.getModuleCount();
+  let d = "";
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) d += `M${c} ${r}h1v1h-1z`;
+  return { n, d };
+}
+const recortar = (t, max) => { t = String(t ?? ""); return t.length > max ? t.slice(0, max - 1) + "…" : t; };
+
+/**
+ * Genera la imagen de una tarjeta. Devuelve una promesa con un Blob PNG.
+ *  banda: { texto, color }  · qr: texto a codificar (opcional)
+ *  titulo: número destacado · destacado: { label, valor } (opcional, p. ej. el total)
+ *  filas: [[etiqueta, valor], ...] · pie: texto final
+ */
+export function tarjetaImagen({ banda, qr = null, titulo = "", destacado = null, filas = [], pie = "", lugar = "", municipio = "" }) {
+  const W = 720, x0 = 48, x1 = 672;
+  let y = 164 + 56;
+  let cuerpo = "";
+  if (qr) {
+    try {
+      const { n, d } = qrModulos(qr);
+      cuerpo += `<rect x="${(W - 300) / 2}" y="${y + 26}" width="300" height="300" rx="20" fill="#fff" stroke="#EADFD3" stroke-width="2"/>
+        <svg x="${(W - 260) / 2}" y="${y + 46}" width="260" height="260" viewBox="0 0 ${n} ${n}" shape-rendering="crispEdges"><path d="${d}" fill="#1D1517"/></svg>`;
+      y += 26 + 300;
+    } catch { /* sin QR */ }
+  }
+  y += 62;
+  cuerpo += `<text x="${W / 2}" y="${y}" text-anchor="middle" font-size="38" font-weight="800" fill="#2A1B1C" letter-spacing="1">${esc(titulo)}</text>`;
+  if (destacado) {
+    y += 46;
+    cuerpo += `<text x="${W / 2}" y="${y}" text-anchor="middle" font-size="20" font-weight="600" fill="#7A6862">${esc(destacado.label)}</text>`;
+    y += 50;
+    cuerpo += `<text x="${W / 2}" y="${y}" text-anchor="middle" font-size="46" font-weight="800" fill="#741A2A">${esc(destacado.valor)}</text>`;
+  }
+  y += 26;
+  filas.forEach(([k, v], i) => {
+    y += 52;
+    cuerpo += `<text x="${x0}" y="${y}" font-size="21" font-weight="600" fill="#7A6862">${esc(k)}</text>
+      <text x="${x1}" y="${y}" text-anchor="end" font-size="22" font-weight="800" fill="#2A1B1C">${esc(recortar(v, 34))}</text>`;
+    if (i < filas.length - 1) cuerpo += `<rect x="${x0}" y="${y + 18}" width="${x1 - x0}" height="1.5" fill="#EFE5DA"/>`;
+  });
+  y += 60;
+  if (pie) { cuerpo += `<text x="${W / 2}" y="${y}" text-anchor="middle" font-size="18" font-weight="600" fill="#7A6862">${esc(pie)}</text>`; y += 30; }
+  y += 24;
+  const H = y;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="${FUENTE_IMG}">
+    <rect width="${W}" height="${H}" rx="36" fill="#FBF8F4"/>
+    <path d="M0 36a36 36 0 0 1 36-36h648a36 36 0 0 1 36 36v114H0Z" fill="#3B0D14"/>
+    <svg x="40" y="34" width="82" height="82" viewBox="0 0 64 64">${LOGO_IMG}</svg>
+    <text x="140" y="80" font-size="36" font-weight="800" fill="#fff">PescaCorral</text>
+    <text x="140" y="114" font-size="19" font-weight="600" fill="#F1D9CF">${esc(recortar(`${lugar} · ${municipio}`, 52))}</text>
+    <rect y="150" width="${W}" height="9" fill="#1D1517"/><rect y="159" width="${W}" height="5" fill="#D2912F"/>
+    <rect y="164" width="${W}" height="56" fill="${banda.color}"/>
+    <text x="${W / 2}" y="201" text-anchor="middle" font-size="23" font-weight="800" fill="#fff" letter-spacing="2">${esc(banda.texto)}</text>
+    ${cuerpo}
+  </svg>`;
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const k = 2, c = document.createElement("canvas");
+      c.width = W * k; c.height = H * k;
+      const ctx = c.getContext("2d");
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      c.toBlob((b) => (b ? resolve(b) : reject(new Error("No se pudo generar la imagen."))), "image/png");
+    };
+    img.onerror = () => reject(new Error("No se pudo generar la imagen."));
+    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  });
+}
+
+/* ------------------------------ Compartir -------------------------------- */
+/**
+ * Hoja para compartir, como en las redes sociales: WhatsApp, Telegram, correo,
+ * copiar el texto, guardar la imagen y "Más opciones" (la hoja del sistema,
+ * que envía la imagen a cualquier aplicación instalada).
+ *  titulo, texto: lo que se comparte · imagen: () => Promise<Blob> · archivo: nombre del PNG
+ */
+export function compartir({ titulo, texto, imagen = null, archivo = "pescacorral.png" }) {
+  const url = location.origin + location.pathname.replace(/index\.html$/, "");
+  const conSistema = typeof navigator.share === "function";
+  let blob = null, objUrl = null;
+  const opciones = [
+    ["wa", "message", "WhatsApp", "share-op--wa"],
+    ["tg", "send", "Telegram", "share-op--tg"],
+    ["mail", "mail", "Correo", "share-op--mail"],
+    ["copy", "copy", "Copiar texto", ""],
+    ...(imagen ? [["img", "download", "Guardar imagen", ""]] : []),
+    ...(conSistema ? [["more", "dots", "Más opciones", ""]] : []),
+  ];
+  const m = modal({
+    title: titulo,
+    body: `
+      ${imagen ? `<div class="share-preview" id="share-prev"><div class="skeleton" style="width:150px;height:200px"></div></div>` : ""}
+      <div class="share-grid">
+        ${opciones.map(([k, ic, label, cls]) => `<button class="share-op ${cls}" type="button" data-share-op="${k}">
+          <span class="share-op__ic">${icon(ic, { size: 22 })}</span><span>${esc(label)}</span></button>`).join("")}
+      </div>
+      <p class="field__hint center mt-12">WhatsApp, Telegram y correo envían el texto; con "Más opciones" o "Guardar imagen" se comparte la imagen con el código QR.</p>`,
+  });
+  const listo = imagen ? imagen().then((b) => {
+    blob = b; objUrl = URL.createObjectURL(b);
+    const prev = $("#share-prev", m.root);
+    if (prev) prev.innerHTML = `<img src="${objUrl}" alt="Vista previa de la imagen a compartir"/>`;
+    return b;
+  }).catch(() => { const prev = $("#share-prev", m.root); if (prev) prev.remove(); return null; }) : Promise.resolve(null);
+
+  const abrir = (href) => window.open(href, "_blank", "noopener");
+  $$("[data-share-op]", m.root).forEach((b) => b.addEventListener("click", async () => {
+    const op = b.dataset.shareOp;
+    if (op === "wa") abrir("https://wa.me/?text=" + encodeURIComponent(texto));
+    else if (op === "tg") abrir(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(texto)}`);
+    else if (op === "mail") location.href = `mailto:?subject=${encodeURIComponent(titulo)}&body=${encodeURIComponent(texto)}`;
+    else if (op === "copy") {
+      try { await navigator.clipboard.writeText(texto); toast("Texto copiado", "ok"); }
+      catch { toast("No se pudo copiar el texto", "err"); }
+    } else if (op === "img") {
+      const b2 = blob || await listo;
+      if (!b2) { toast("No se pudo generar la imagen", "err"); return; }
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(b2); a.download = archivo;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } else if (op === "more") {
+      const b2 = blob || await listo;
+      const data = { title: titulo, text: texto };
+      if (b2) {
+        const file = new File([b2], archivo, { type: "image/png" });
+        if (navigator.canShare?.({ files: [file] })) data.files = [file];
+      }
+      try { await navigator.share(data); closeModal(); }
+      catch (e) { if (e?.name !== "AbortError") toast("No se pudo abrir el menú para compartir", "err"); }
+    }
+  }));
+  const quitar = () => { if (objUrl) URL.revokeObjectURL(objUrl); };
+  const obs = new MutationObserver(() => { if (!document.body.contains(m.root)) { quitar(); obs.disconnect(); } });
+  obs.observe(document.body, { childList: true });
 }
 
 /* ---------------------------- Varios ------------------------------------- */

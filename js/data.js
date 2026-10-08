@@ -26,6 +26,26 @@ const CLAVES_DEMO = {
   admin:     { email: "admin@demo.com",     clave: "Admin.2026" },
 };
 
+/* Tarifas de los permisos en modo demo (en Supabase, tabla tarifa_permiso). */
+const TARIFAS_DEMO = { diario: 5000, semanal: 15000, anual: 45000 };
+const MSG_FALTA_006 = "Para usar un permiso propio falta actualizar la base de datos (migración 006).";
+
+/* Ubicación de un asiento en el plano del catamarán, vista desde arriba con la
+ * proa adelante (igual que public.ubicacion_lugar): numeración en sentido
+ * horario desde la proa, primero por estribor (derecha) y luego por babor. */
+export function posicionLugar(numero, total) {
+  const filas = Math.ceil(total / 2);
+  const estribor = numero <= filas;
+  const fila = estribor ? numero - 1 : 2 * filas - numero;
+  const zona = fila * 3 < filas ? "proa" : fila * 3 < filas * 2 ? "centro" : "popa";
+  return { lado: estribor ? "estribor" : "babor", fila, zona, filas };
+}
+export function ubicacionLugar(numero, total) {
+  const p = posicionLugar(numero, total);
+  return `${p.lado} · ${p.zona}`;
+}
+const numeroReserva = (seq) => "RES-" + String(seq).padStart(6, "0");
+
 let sb = null;                 // cliente supabase (lazy)
 const authListeners = new Set();
 
@@ -87,7 +107,7 @@ const todayISO = () => dateISO(new Date());
 
 function seedDemo() {
   DB = loadDB();
-  if (DB && DB.__v === 4) return;
+  if (DB && DB.__v === 5) return;
 
   const rnd = mulberry32(20260628);
   const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
@@ -120,16 +140,15 @@ function seedDemo() {
   for (const c of catData) {
     const id = uid();
     catamaranes.push({ id, id_propietario: c.prop, nombre: c.nombre, descripcion: c.desc, capacidad: c.capacidad, precio: c.precio, habilitacion: c.hab, estado: c.estado, created_at: isoFromOffset(-150).toISOString() });
-    const ubic = ["proa", "babor", "estribor", "popa"];
     for (let n = 1; n <= c.capacidad; n++)
-      lugares.push({ id: uid(), id_catamaran: id, numero: n, ubicacion: ubic[(n - 1) % 4], activo: true });
+      lugares.push({ id: uid(), id_catamaran: id, numero: n, ubicacion: ubicacionLugar(n, c.capacidad), activo: true });
   }
   const activos = catamaranes.filter((c) => c.estado === "activa");
 
   /* --- Reservas / asientos / pagos / permisos sintéticos --- */
   const reservas = [], reserva_lugar = [], pagos = [], permisos = [], notificaciones = [];
-  let seq = 215;
-  const metodos = ["tarjeta", "transferencia", "mercadopago", "efectivo"];
+  let seq = 215, seqReserva = 1001;
+  const metodos = ["tarjeta", "mercadopago", "efectivo"];
   const lugaresDe = (catId) => lugares.filter((l) => l.id_catamaran === catId);
   const ocupadoSet = new Set(); // `${lugarId}|${fecha}|${turno}`
 
@@ -143,13 +162,14 @@ function seedDemo() {
     }
     const monto = cat.precio * elegidos.length;
     const rId = uid();
-    reservas.push({ id: rId, id_usuario: titular.id, id_catamaran: cat.id, fecha, turno, estado: estadoReserva, cantidad_lugares: elegidos.length, monto_total: monto, created_at: new Date(fecha + "T10:00:00").toISOString() });
+    const pId = uid();
+    reservas.push({ id: rId, numero: numeroReserva(seqReserva++), id_usuario: titular.id, id_catamaran: cat.id, fecha, turno, estado: estadoReserva, cantidad_lugares: elegidos.length, monto_total: monto, monto_permiso: 0, id_permiso: pId, created_at: new Date(fecha + "T10:00:00").toISOString() });
     const cancel = estadoReserva === "cancelada";
     for (const l of elegidos) {
       reserva_lugar.push({ id: uid(), id_reserva: rId, id_lugar: l.id, fecha, turno, estado: cancel ? "cancelada" : "confirmada" });
       if (!cancel) ocupadoSet.add(`${l.id}|${fecha}|${turno}`);
     }
-    pagos.push({ id: uid(), id_reserva: rId, monto, metodo: pick(metodos), estado: cancel ? "rechazado" : "aprobado", comprobante: "CMP-" + rId.replace(/-/g, "").slice(0, 10).toUpperCase(), fecha_pago: new Date(fecha + "T10:05:00").toISOString() });
+    pagos.push({ id: uid(), id_reserva: rId, monto, metodo: pick(metodos), estado: cancel ? "rechazado" : "aprobado", comprobante: "CMP-" + rId.replace(/-/g, "").slice(0, 10).toUpperCase(), autorizacion: "AUT-" + Math.floor(rnd() * 1e6).toString(36).toUpperCase(), fecha_pago: new Date(fecha + "T10:05:00").toISOString() });
 
     const numero = "PCC-" + String(seq++).padStart(6, "0");
     const emision = new Date(fecha + "T10:05:00");
@@ -159,7 +179,7 @@ function seedDemo() {
     else vence.setHours(23, 59, 0, 0);
     let estadoP = cancel ? "anulado" : (vence.getTime() < Date.now() ? "vencido" : "vigente");
     permisos.push({
-      id: uid(), id_reserva: rId, id_usuario: titular.id, id_especie: especie.id,
+      id: pId, id_reserva: rId, id_usuario: titular.id, id_especie: especie.id,
       numero, tipo, codigo_qr: `${numero}|${titular.id}|${fecha}`,
       fecha_emision: emision.toISOString(), fecha_vencimiento: vence.toISOString(), estado: estadoP,
     });
@@ -203,7 +223,7 @@ function seedDemo() {
     { id: uid(), id_especie: especies[2].id, periodo, permisos_emitidos: 210, umbral: 300, estado: "activa", created_at: isoFromOffset(-5).toISOString() },
   ];
 
-  DB = { __v: 4, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, reportes: [], seq, session: null };
+  DB = { __v: 5, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, reportes: [], tarifas: { ...TARIFAS_DEMO }, seq, seqReserva, session: null };
   saveDB(DB);
 }
 
@@ -385,6 +405,8 @@ export function rutaIngreso() {
   return t ? `/acceso/${t}` : "/login";
 }
 export function usarIngresoPublico() { olvidarAcceso(); }
+/** Rol que corresponde a cada acceso del personal (municipio | admin). */
+export const rolDeAcceso = (tipo) => ROL_POR_ACCESO[tipo] || null;
 
 /** Primer ingreso (HU-001): guarda los datos obligatorios y confirma el alta. */
 export async function completarPerfil({ nombre, apellido, telefono, dni, rol }) {
@@ -510,6 +532,37 @@ export async function getOcupacion(catId, fecha, turno = null) {
   return (await ocupadosPorFecha(fecha, turno)).filter((r) => r.id_catamaran === catId).map((r) => r.id_lugar);
 }
 
+/** Ocupación de un catamarán en una fecha, separada por turno: { manana: [ids], tarde: [ids] }. */
+export async function ocupacionPorTurno(catId, fecha) {
+  await ready();
+  const rows = (await ocupadosPorFecha(fecha)).filter((r) => r.id_catamaran === catId);
+  return {
+    manana: rows.filter((r) => !r.turno || r.turno === "manana").map((r) => r.id_lugar),
+    tarde:  rows.filter((r) => !r.turno || r.turno === "tarde").map((r) => r.id_lugar),
+  };
+}
+
+/** Lugares que el usuario ya reservó en ese catamarán y fecha: [{ id_lugar, turno }]. */
+export async function misLugares(catId, fecha) {
+  await ready();
+  if (MODE === "supabase") {
+    const { data: s } = await sb.auth.getSession();
+    const id = s.session?.user?.id;
+    if (!id) return [];
+    const { data, error } = await sb.from("reserva_lugar")
+      .select("id_lugar, turno, reserva!inner(id_usuario, id_catamaran)")
+      .eq("fecha", fecha).eq("estado", "confirmada")
+      .eq("reserva.id_usuario", id).eq("reserva.id_catamaran", catId);
+    if (error) { console.warn(error); return []; }
+    return data.map((r) => ({ id_lugar: r.id_lugar, turno: r.turno || "manana" }));
+  }
+  const u = demoSessionUser();
+  if (!u) return [];
+  const mias = new Set(DB.reservas.filter((r) => r.id_usuario === u.id && r.id_catamaran === catId).map((r) => r.id));
+  return DB.reserva_lugar.filter((rl) => mias.has(rl.id_reserva) && rl.fecha === fecha && rl.estado === "confirmada")
+    .map((rl) => ({ id_lugar: rl.id_lugar, turno: rl.turno || "manana" }));
+}
+
 /** Catamaranes con lugares libres/ocupados para una fecha y turno (HU-004).
  *  Sin turno, la ocupación es la del día completo: "plazas" suma ambos turnos. */
 export async function disponibilidad(fecha, turno = null) {
@@ -527,14 +580,16 @@ export async function disponibilidad(fecha, turno = null) {
 /* ============================================================================
  *  PAGO (HU-007) · pasarela simulada
  *  El prototipo no se integra con una pasarela real: simula la autorización.
- *  Reglas de prueba: tarjeta/Mercado Pago requieren número (13-19 dígitos),
- *  vencimiento MM/AA vigente y CVV; un número terminado en 0000 se rechaza
- *  (escenario "pago fallido" de la matriz de casos de prueba).
+ *  Reglas de prueba: con tarjeta se piden número (13-19 dígitos), titular,
+ *  vencimiento MM/AA vigente y CVV, y un número terminado en 0000 se rechaza
+ *  (escenario "pago fallido" de la matriz de casos de prueba). Con Mercado Pago
+ *  se pide el correo de la cuenta. En efectivo se abona en la boletería del
+ *  muelle y queda registrado al confirmar.
  * ========================================================================== */
-export async function procesarPago({ metodo = "tarjeta", monto = 0, tarjeta = {} } = {}) {
+export async function procesarPago({ metodo = "tarjeta", monto = 0, tarjeta = {}, cuenta = "" } = {}) {
   await new Promise((r) => setTimeout(r, 700));   // latencia de la pasarela
   if (!(Number(monto) > 0)) return { aprobado: false, motivo: "El importe a pagar no es válido." };
-  if (metodo === "tarjeta" || metodo === "mercadopago") {
+  if (metodo === "tarjeta") {
     const num = String(tarjeta.numero || "").replace(/\s+/g, "");
     if (!/^\d{13,19}$/.test(num)) return { aprobado: false, motivo: "Número de tarjeta inválido." };
     if (!String(tarjeta.titular || "").trim()) return { aprobado: false, motivo: "Ingresá el nombre del titular." };
@@ -546,17 +601,72 @@ export async function procesarPago({ metodo = "tarjeta", monto = 0, tarjeta = {}
     if (!/^\d{3,4}$/.test(String(tarjeta.cvv || ""))) return { aprobado: false, motivo: "Código de seguridad inválido." };
     if (num.endsWith("0000")) return { aprobado: false, motivo: "Transacción rechazada por la entidad emisora. Probá con otro medio de pago." };
   }
+  if (metodo === "mercadopago" && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(cuenta).trim()))
+    return { aprobado: false, motivo: "Ingresá el correo de tu cuenta de Mercado Pago." };
   return { aprobado: true, autorizacion: "AUT-" + Math.random().toString(36).slice(2, 8).toUpperCase() };
 }
 
-export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo = "tarjeta", tipoPermiso = "diario", especieId = null }) {
+/** Tarifas de los permisos: { diario, semanal, anual }. Sin la migración 006 el
+ *  permiso no se cobra aparte, por eso las tarifas valen 0. */
+export async function listTarifasPermiso() {
   await ready();
   if (MODE === "supabase") {
-    const { data, error } = await sb.rpc("crear_reserva_completa", {
+    const { data, error } = await sb.from("tarifa_permiso").select("tipo, precio");
+    if (error) return { diario: 0, semanal: 0, anual: 0 };
+    const t = { diario: 0, semanal: 0, anual: 0 };
+    data.forEach((x) => (t[x.tipo] = Number(x.precio)));
+    return t;
+  }
+  return { ...TARIFAS_DEMO, ...(DB.tarifas || {}) };
+}
+
+/* "Ya tengo permiso": el permiso tiene que ser del mismo titular, no estar
+ * anulado y cubrir la fecha de la salida (igual que public.validar_permiso). */
+function validarPermisoDemo(u, numero, fecha) {
+  const n = String(numero || "").trim().toUpperCase();
+  if (!n) throw new Error("Ingresá el número de tu permiso.");
+  const p = DB.permisos.find((x) => x.numero.toUpperCase() === n && x.id_usuario === u.id);
+  if (!p) throw new Error("No encontramos un permiso con ese número a tu nombre.");
+  if (p.estado === "anulado") throw new Error(`El permiso ${p.numero} está anulado.`);
+  const r = byId(DB.reservas, p.id_reserva);
+  const desde = r?.fecha || dateISO(new Date(p.fecha_emision));
+  const hasta = dateISO(new Date(p.fecha_vencimiento));
+  const f = (iso) => iso.split("-").reverse().join("/");
+  if (fecha < desde || fecha > hasta)
+    throw new Error(`El permiso ${p.numero} no cubre el ${f(fecha)}: vale del ${f(desde)} al ${f(hasta)}.`);
+  return { id: p.id, numero: p.numero, tipo: p.tipo, especie: byId(DB.especies, p.id_especie)?.nombre || null, desde, hasta };
+}
+
+/** Verifica un permiso propio para la fecha de la salida. Devuelve { id, numero, tipo, especie, desde, hasta }. */
+export async function validarPermiso(numero, fecha) {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.rpc("validar_permiso", { p_numero: String(numero || "").trim(), p_fecha: fecha });
+    if (error) throw new Error(esFuncionInexistente(error) ? MSG_FALTA_006 : error.message);
+    return data;
+  }
+  return validarPermisoDemo(demoSessionUser(), numero, fecha);
+}
+
+/* Reserva completa (HU-005, HU-006 y HU-007). Con numeroPermiso, la salida queda
+ * amparada por ese permiso ("Ya tengo permiso"); sin él, se compra un permiso
+ * nuevo del tipo elegido y su tarifa se suma al total. */
+export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo = "tarjeta", tipoPermiso = "diario", especieId = null, numeroPermiso = null, autorizacion = null }) {
+  await ready();
+  const propio = String(numeroPermiso || "").trim();
+  if (MODE === "supabase") {
+    const args = {
       p_id_catamaran: catamaranId, p_fecha: fecha, p_turno: turno,
       p_lugares: lugares, p_metodo_pago: metodo, p_tipo_permiso: tipoPermiso, p_id_especie: especieId,
-    });
-    if (error) throw new Error(error.message);
+      p_numero_permiso: propio || null, p_autorizacion: autorizacion,
+    };
+    let { data, error } = await sb.rpc("crear_reserva_completa", args);
+    if (error && esFuncionInexistente(error) && !propio) {
+      // Base sin la migración 006: la reserva se hace igual, con permiso nuevo.
+      delete args.p_numero_permiso; delete args.p_autorizacion;
+      ({ data, error } = await sb.rpc("crear_reserva_completa", args));
+    }
+    if (error) throw new Error(esFuncionInexistente(error) ? MSG_FALTA_006 : error.message);
     return data;
   }
   // Demo: replica la lógica del RPC crear_reserva_completa.
@@ -567,30 +677,40 @@ export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo 
   if (cat.estado !== "activa") throw new Error("El catamarán no está disponible para reservas.");
   if (fecha < todayISO()) throw new Error("No se puede reservar una fecha pasada.");
   if (!lugares?.length) throw new Error("Elegí al menos un lugar.");
+  if (!["tarjeta", "transferencia", "mercadopago", "efectivo"].includes(metodo)) throw new Error("Medio de pago inválido.");
   for (const lid of lugares) {
     if ((byId(DB.lugares, lid) || {}).id_catamaran !== cat.id) throw new Error("Los lugares elegidos no pertenecen a ese catamarán.");
     const ocupado = DB.reserva_lugar.some((rl) => rl.id_lugar === lid && rl.fecha === fecha && (rl.turno || "manana") === turno && rl.estado === "confirmada");
     if (ocupado) throw new Error("Uno de los lugares ya fue reservado. Actualizá la grilla.");
   }
-  const monto = cat.precio * lugares.length;
+  const existente = propio ? validarPermisoDemo(u, propio, fecha) : null;
+  const tarifas = { ...TARIFAS_DEMO, ...(DB.tarifas || {}) };
+  const montoPermiso = existente ? 0 : Number(tarifas[tipoPermiso] || 0);
+  const monto = cat.precio * lugares.length + montoPermiso;
   const rId = uid();
-  DB.reservas.push({ id: rId, id_usuario: u.id, id_catamaran: cat.id, fecha, turno, estado: "confirmada", cantidad_lugares: lugares.length, monto_total: monto, created_at: new Date().toISOString() });
+  const nroReserva = numeroReserva(DB.seqReserva++);
+  const reserva = { id: rId, numero: nroReserva, id_usuario: u.id, id_catamaran: cat.id, fecha, turno, estado: "confirmada", cantidad_lugares: lugares.length, monto_total: monto, monto_permiso: montoPermiso, id_permiso: existente?.id || null, created_at: new Date().toISOString() };
+  DB.reservas.push(reserva);
   for (const lid of lugares)
     DB.reserva_lugar.push({ id: uid(), id_reserva: rId, id_lugar: lid, fecha, turno, estado: "confirmada" });
-  DB.pagos.push({ id: uid(), id_reserva: rId, monto, metodo, estado: "aprobado", comprobante: "CMP-" + rId.replace(/-/g, "").slice(0, 10).toUpperCase(), fecha_pago: new Date().toISOString() });
+  const comprobante = "CMP-" + rId.replace(/-/g, "").slice(0, 10).toUpperCase();
+  DB.pagos.push({ id: uid(), id_reserva: rId, monto, metodo, estado: "aprobado", comprobante, autorizacion, fecha_pago: new Date().toISOString() });
 
-  const numero = "PCC-" + String(DB.seq++).padStart(6, "0");
   const emision = new Date();
-  const vence = new Date(fecha + "T23:59:00");
-  if (tipoPermiso === "anual") { vence.setTime(new Date(fecha).getTime()); vence.setFullYear(vence.getFullYear() + 1); }
-  else if (tipoPermiso === "semanal") { vence.setTime(new Date(fecha).getTime()); vence.setDate(vence.getDate() + 7); }
-  const pId = uid();
-  const codigo = `${numero}|${u.id}|${fecha}`;
-  DB.permisos.push({ id: pId, id_reserva: rId, id_usuario: u.id, id_especie: especieId, numero, tipo: tipoPermiso, codigo_qr: codigo, fecha_emision: emision.toISOString(), fecha_vencimiento: vence.toISOString(), estado: "vigente" });
-  DB.notificaciones.unshift({ id: uid(), id_usuario: u.id, tipo: "reserva", titulo: "Reserva confirmada", mensaje: `Tu reserva del ${fecha.split("-").reverse().join("/")} fue confirmada. Permiso ${numero}.`, leida: false, created_at: emision.toISOString() });
-  actualizarAlertaFaunaDemo(especieId, emision);
+  let numero = existente?.numero, pId = existente?.id;
+  if (!existente) {
+    numero = "PCC-" + String(DB.seq++).padStart(6, "0");
+    const vence = new Date(fecha + "T23:59:00");
+    if (tipoPermiso === "anual") vence.setFullYear(vence.getFullYear() + 1);
+    else if (tipoPermiso === "semanal") vence.setDate(vence.getDate() + 7);
+    pId = uid();
+    DB.permisos.push({ id: pId, id_reserva: rId, id_usuario: u.id, id_especie: especieId, numero, tipo: tipoPermiso, codigo_qr: `${numero}|${u.id}|${fecha}`, fecha_emision: emision.toISOString(), fecha_vencimiento: vence.toISOString(), estado: "vigente" });
+    reserva.id_permiso = pId;
+    actualizarAlertaFaunaDemo(especieId, emision);
+  }
+  DB.notificaciones.unshift({ id: uid(), id_usuario: u.id, tipo: "reserva", titulo: "Reserva confirmada", mensaje: `Tu reserva ${nroReserva} para el ${fecha.split("-").reverse().join("/")} fue confirmada. Permiso ${numero} ${existente ? "asociado" : "emitido"}.`, leida: false, created_at: emision.toISOString() });
   persist();
-  return { reserva_id: rId, permiso_id: pId, numero_permiso: numero, monto_total: monto, codigo_qr: codigo, fecha_vencimiento: vence.toISOString() };
+  return { reserva_id: rId, numero_reserva: nroReserva, permiso_id: pId, numero_permiso: numero, permiso_nuevo: !existente, monto_total: monto, monto_permiso: montoPermiso, comprobante };
 }
 
 /* Demo: replica el disparador actualizar_alerta_fauna (HU-015). Si los permisos
@@ -623,7 +743,9 @@ export async function anularReserva(reservaId) {
   if (!r) throw new Error("La reserva no existe.");
   r.estado = "cancelada";
   DB.reserva_lugar.filter((rl) => rl.id_reserva === reservaId).forEach((rl) => (rl.estado = "cancelada"));
-  DB.permisos.filter((p) => p.id_reserva === reservaId).forEach((p) => (p.estado = "anulado"));
+  // El permiso emitido con la reserva se anula, salvo que ampare otra reserva activa.
+  const enUso = (pid) => DB.reservas.some((x) => x.id !== reservaId && x.id_permiso === pid && (x.estado === "confirmada" || x.estado === "completada"));
+  DB.permisos.filter((p) => p.id_reserva === reservaId && !enUso(p.id)).forEach((p) => (p.estado = "anulado"));
   persist();
   return true;
 }
@@ -644,7 +766,7 @@ export async function listReservas() {
   await ready();
   if (MODE === "supabase") {
     const { data, error } = await sb.from("reserva")
-      .select("*, catamaran(nombre), permiso(id,numero,estado)")
+      .select("*, catamaran(nombre), permiso!permiso_id_reserva_fkey(id,numero,estado)")
       .order("fecha", { ascending: false });
     if (error) throw error;
     return data.map((r) => {
@@ -652,7 +774,8 @@ export async function listReservas() {
       const per = Array.isArray(r.permiso) ? r.permiso[0] : r.permiso;
       return {
         ...r, catamaran_nombre: r.catamaran?.nombre || "",
-        permiso_id: per?.id || null, numero_permiso: per?.numero || null,
+        // La salida puede estar amparada por un permiso que el pescador ya tenía (id_permiso).
+        permiso_id: r.id_permiso || per?.id || null, numero_permiso: per?.numero || null,
       };
     });
   }
@@ -661,7 +784,7 @@ export async function listReservas() {
     .slice().sort((a, b) => (a.fecha < b.fecha ? 1 : -1))
     .map((r) => {
       const cat = byId(DB.catamaranes, r.id_catamaran);
-      const per = DB.permisos.find((p) => p.id_reserva === r.id);
+      const per = (r.id_permiso && byId(DB.permisos, r.id_permiso)) || DB.permisos.find((p) => p.id_reserva === r.id);
       return { ...r, catamaran_nombre: cat?.nombre || "", permiso_id: per?.id || null, numero_permiso: per?.numero || null };
     });
 }
@@ -680,7 +803,7 @@ export async function listPermisos() {
   await ready();
   if (MODE === "supabase") {
     const { data, error } = await sb.from("permiso")
-      .select("*, especie(nombre), reserva(fecha,turno,catamaran(nombre))")
+      .select("*, especie(nombre), reserva!permiso_id_reserva_fkey(fecha,turno,catamaran(nombre))")
       .order("fecha_emision", { ascending: false });
     if (error) throw error;
     return data.map(mapPermisoSupabase);
@@ -695,7 +818,7 @@ export async function getPermiso(id) {
   await ready();
   if (MODE === "supabase") {
     const { data, error } = await sb.from("permiso")
-      .select("*, especie(nombre,nombre_cientifico), reserva(fecha,turno,cantidad_lugares,monto_total,catamaran(nombre),pago(comprobante,metodo,estado)), usuario(nombre,apellido,dni)")
+      .select("*, especie(nombre,nombre_cientifico), reserva!permiso_id_reserva_fkey(id,fecha,turno,cantidad_lugares,monto_total,catamaran(nombre),pago(comprobante,metodo,estado)), usuario(nombre,apellido,dni)")
       .eq("id", id).single();
     if (error) throw error;
     return mapPermisoSupabase(data, true);
@@ -723,6 +846,7 @@ function enrichPermisoDemo(p, full = false) {
     base.monto_total = r?.monto_total || 0;
     base.pago_comprobante = pago?.comprobante || "";
     base.pago_metodo = pago?.metodo || "";
+    base.reserva_id = r?.id || null;
   }
   return base;
 }
@@ -743,8 +867,73 @@ function mapPermisoSupabase(p, full = false) {
     out.monto_total = r.monto_total || 0;
     out.pago_comprobante = pago?.comprobante || "";
     out.pago_metodo = pago?.metodo || "";
+    out.reserva_id = r.id || null;
   }
   return out;
+}
+
+/* ============================================================================
+ *  COMPROBANTE DE LA OPERACIÓN (reserva + pago + permiso)
+ *  Devuelve { numero, fecha, turno, estado, catamaran, capacidad, lugares[],
+ *  titular, monto_total, monto_permiso, monto_lugares, precio_lugar, pago,
+ *  permiso } o null si no existe o no es visible para el usuario.
+ * ========================================================================== */
+const numeroReservaDe = (r) => r.numero || "RES-" + String(r.id).replace(/-/g, "").slice(0, 8).toUpperCase();
+
+function armarComprobante(r, { cat, titular, lugares, pago, permiso, propio }) {
+  const montoPermiso = Number(r.monto_permiso || 0);
+  const montoLugares = Number(r.monto_total || 0) - montoPermiso;
+  const per = permiso ? applyPermisoEstado(permiso) : null;
+  return {
+    id: r.id, numero: numeroReservaDe(r), fecha: r.fecha, turno: r.turno, estado: r.estado, created_at: r.created_at,
+    catamaran: cat?.nombre || "—", habilitacion: cat?.habilitacion || "", capacidad: Number(cat?.capacidad || 0),
+    lugares: lugares.slice().sort((a, b) => a - b),
+    titular: titular ? { nombre: `${titular.nombre || ""} ${titular.apellido || ""}`.trim(), dni: titular.dni || "—", email: titular.email || "" } : null,
+    monto_total: Number(r.monto_total || 0), monto_permiso: montoPermiso, monto_lugares: montoLugares,
+    precio_lugar: r.cantidad_lugares ? montoLugares / r.cantidad_lugares : 0, cantidad_lugares: r.cantidad_lugares,
+    pago: pago ? { comprobante: pago.comprobante, metodo: pago.metodo, estado: pago.estado, monto: Number(pago.monto || 0), fecha_pago: pago.fecha_pago, autorizacion: pago.autorizacion || "" } : null,
+    permiso: per ? {
+      id: per.id, numero: per.numero, tipo: per.tipo, estado: per.estado, codigo_qr: per.codigo_qr,
+      fecha_emision: per.fecha_emision, fecha_vencimiento: per.fecha_vencimiento,
+      especie: per.especie?.nombre || per.especie_nombre || "—", propio,
+    } : null,
+  };
+}
+
+export async function getComprobante(reservaId) {
+  await ready();
+  if (MODE === "supabase") {
+    const camposPermiso = "id,numero,tipo,estado,codigo_qr,fecha_emision,fecha_vencimiento,especie(nombre)";
+    const { data: r, error } = await sb.from("reserva")
+      .select(`*, catamaran(nombre,habilitacion,capacidad), usuario(nombre,apellido,dni,email), reserva_lugar(lugar(numero)), pago(*), permiso!permiso_id_reserva_fkey(${camposPermiso})`)
+      .eq("id", reservaId).maybeSingle();
+    if (error) throw error;
+    if (!r) return null;
+    const pago = Array.isArray(r.pago) ? r.pago[0] : r.pago;
+    let permiso = Array.isArray(r.permiso) ? r.permiso[0] : r.permiso;
+    let propio = false;
+    if (r.id_permiso && r.id_permiso !== permiso?.id) {
+      const q = await sb.from("permiso").select(camposPermiso).eq("id", r.id_permiso).maybeSingle();
+      if (q.data) { permiso = q.data; propio = true; }
+    }
+    return armarComprobante(r, {
+      cat: r.catamaran, titular: r.usuario, pago, permiso, propio,
+      lugares: (r.reserva_lugar || []).map((x) => x.lugar?.numero).filter(Boolean),
+    });
+  }
+  const u = demoSessionUser();
+  const r = byId(DB.reservas, reservaId);
+  if (!r || !u || !scopeReservasDemo(u).includes(r)) return null;
+  const propia = DB.permisos.find((p) => p.id_reserva === r.id);
+  const permiso = (r.id_permiso && byId(DB.permisos, r.id_permiso)) || propia || null;
+  const esp = permiso?.id_especie ? byId(DB.especies, permiso.id_especie) : null;
+  return armarComprobante(r, {
+    cat: byId(DB.catamaranes, r.id_catamaran), titular: byId(DB.usuarios, r.id_usuario),
+    pago: DB.pagos.find((x) => x.id_reserva === r.id),
+    permiso: permiso ? { ...permiso, especie_nombre: esp?.nombre } : null,
+    propio: Boolean(permiso && propia?.id !== permiso.id),
+    lugares: DB.reserva_lugar.filter((x) => x.id_reserva === r.id).map((x) => byId(DB.lugares, x.id_lugar)?.numero).filter(Boolean),
+  });
 }
 
 /* ============================================================================
@@ -909,7 +1098,7 @@ export async function ultimosPermisos(limit = 6) {
   await ready();
   if (MODE === "supabase") {
     const { data, error } = await sb.from("permiso")
-      .select("id,numero,estado,fecha_emision,especie(nombre),usuario(nombre,apellido),reserva(fecha)")
+      .select("id,numero,estado,fecha_emision,especie(nombre),usuario(nombre,apellido),reserva!permiso_id_reserva_fkey(fecha)")
       .order("fecha_emision", { ascending: false }).limit(limit);
     if (error) throw error;
     return data.map((p) => ({
@@ -1060,7 +1249,7 @@ export async function crearCatamaran({ nombre, descripcion, capacidad, precio, h
       .select().single();
     if (error) throw new Error(error.message);
     // genera asientos
-    const filas = Array.from({ length: capacidad }, (_, i) => ({ id_catamaran: data.id, numero: i + 1, ubicacion: ["proa", "babor", "estribor", "popa"][i % 4] }));
+    const filas = Array.from({ length: capacidad }, (_, i) => ({ id_catamaran: data.id, numero: i + 1, ubicacion: ubicacionLugar(i + 1, capacidad) }));
     await sb.from("lugar").insert(filas);
     return data;
   }
@@ -1069,7 +1258,7 @@ export async function crearCatamaran({ nombre, descripcion, capacidad, precio, h
   const cat = { id, id_propietario: u.id, nombre, descripcion: descripcion || "", capacidad: +capacidad, precio: +precio, habilitacion: habilitacion || "", estado, created_at: new Date().toISOString() };
   DB.catamaranes.push(cat);
   for (let n = 1; n <= capacidad; n++)
-    DB.lugares.push({ id: uid(), id_catamaran: id, numero: n, ubicacion: ["proa", "babor", "estribor", "popa"][(n - 1) % 4], activo: true });
+    DB.lugares.push({ id: uid(), id_catamaran: id, numero: n, ubicacion: ubicacionLugar(n, +capacidad), activo: true });
   persist();
   return cat;
 }

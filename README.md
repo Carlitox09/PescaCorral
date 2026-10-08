@@ -35,9 +35,9 @@ No hay servidor propio ni proceso de compilación: el repositorio se sirve tal c
 | HU-002 | Inicio de sesión con Google para el público y con usuario y contraseña para el personal; mensaje de error si se cancela o las credenciales son incorrectas; redirección al ingreso sin sesión | `#/login`, `/Municipio`, `/Admin` |
 | HU-003 | Alta y edición de catamaranes (estado, precio, capacidad, habilitación) | `#/gestion` |
 | HU-004 | Disponibilidad por fecha y turno con **lugares libres por catamarán** (cada asiento se reserva por fecha y turno) | `#/catamaranes` |
-| HU-005 | Reserva con selección visual de asientos; sin doble reserva (índice único por asiento, fecha y turno) | `#/reserva/:id` |
-| HU-006 | Permiso digital con QR, vencimiento y estado (vigente / vencido / anulado) | `#/permiso/:id` |
-| HU-007 | **Pasarela de pago simulada** con escenario de rechazo y comprobante digital | modal de pago en la reserva |
+| HU-005 | Reserva sobre el **plano del catamarán** visto desde arriba (proa, popa, babor y estribor; numeración en sentido horario desde la proa); marca los lugares propios y avisa si ya hay una reserva en el otro turno; sin doble reserva (índice único por asiento, fecha y turno) | `#/reserva/:id` |
+| HU-006 | Permiso digital con QR, vencimiento y estado (vigente / vencido / anulado). En la reserva se elige **"Comprar permiso"** (diario, semanal o anual, con su tarifa) o **"Ya tengo permiso"** (se valida el número: mismo titular, no anulado y vigente para la fecha). Se comparte como imagen por WhatsApp u otras aplicaciones | `#/permiso/:id` |
+| HU-007 | **Pasarela de pago simulada** (tarjeta, Mercado Pago o efectivo en la boletería) con escenario de rechazo. Al pagar se muestra el **comprobante**: número de reserva, comprobante de pago y permiso | `#/comprobante/:id` |
 | HU-008 | Reportes con gráficos, exportación CSV (Excel) y PDF | `#/reportes` |
 | HU-009 | **Envío de reportes al municipio** (manual y cierre mensual automático) con registro de fecha, destinatario y origen | `#/reportes` |
 | HU-010 | Historial de reservas y permisos | `#/historial` |
@@ -77,7 +77,8 @@ PescaCorral/
         ├── 002_seguridad_reportes_recordatorios.sql
         ├── 003_ingreso_con_google.sql
         ├── 004_turnos_alertas_reportes.sql
-        └── 005_acceso_personal.sql
+        ├── 005_acceso_personal.sql
+        └── 006_permiso_propio_comprobante.sql
 ```
 
 ---
@@ -101,7 +102,7 @@ Abrir `http://localhost:8080`.
 
 1. Crear un proyecto en https://supabase.com.
 2. **SQL Editor → New query**: pegar y ejecutar `database/schema.sql` completo, y luego `database/seed.sql`.
-3. Si la base ya existía con una versión anterior del esquema, ejecutar en cambio las migraciones de `database/migrations/` en orden (son idempotentes): 002, 003 y 004.
+3. Si la base ya existía con una versión anterior del esquema, ejecutar en cambio las migraciones de `database/migrations/` en orden (son idempotentes): 002 a 006.
 4. (Opcional) **Database → Extensions**: habilitar `pg_cron` para que el reporte mensual y los recordatorios diarios se generen sin intervención. Si no está habilitado, la app los genera al ingresar a Reportes y a la pantalla principal.
 
 ### Ingreso con Google
@@ -206,8 +207,8 @@ Tras cada cambio en `service-worker.js` se incrementa la constante `VERSION` par
 
 Definido en `database/schema.sql`:
 
-* **usuario** (extiende `auth.users`; rol, perfil completo, foto de Google), **especie**, **catamaran**, **lugar**, **reserva**, **reserva_lugar** (asiento por fecha y turno), **permiso**, **pago**, **reporte** (con destinatario, origen y estado de envío), **notificacion** (con `id_reserva` para recordatorios), **alerta_fauna**.
-* Funciones: `crear_reserva_completa` (valida catamarán, asientos, fecha y turno, y crea reserva + asientos + pago + permiso + notificación en una transacción), `anular_reserva`, `generar_reporte_municipal` (el automático resume el mes que cerró), `generar_recordatorios`, `handle_new_user` (alta del perfil con los datos de Google) y `proteger_perfil` (protección de rol, correo y estado).
+* **usuario** (extiende `auth.users`; rol, perfil completo, foto de Google), **especie**, **catamaran**, **lugar** (con su ubicación en el plano), **reserva** (número `RES-`, permiso que ampara la salida e importe del permiso), **reserva_lugar** (asiento por fecha y turno), **permiso**, **tarifa_permiso**, **pago** (con código de autorización), **reporte** (con destinatario, origen y estado de envío), **notificacion** (con `id_reserva` para recordatorios), **alerta_fauna**.
+* Funciones: `crear_reserva_completa` (valida catamarán, asientos, fecha, turno, medio de pago y permiso propio, y crea reserva + asientos + pago + permiso nuevo + notificación en una transacción), `validar_permiso`, `ubicacion_lugar`, `anular_reserva` (no anula un permiso que ampara otra reserva activa), `generar_reporte_municipal` (el automático resume el mes que cerró), `generar_recordatorios`, `handle_new_user` (alta del perfil con los datos de Google) y `proteger_perfil` (protección de rol, correo y estado).
 * Disparador `actualizar_alerta_fauna`: al emitirse un permiso, si los permisos del mes de la especie alcanzan el 80 % del umbral, registra la alerta y avisa a la administración municipal.
 * Vistas: `v_dashboard_resumen`, `v_reservas_por_dia`, `v_ocupacion_catamaran`, `v_permisos_por_especie`, `v_lugares_ocupados`.
 

@@ -207,6 +207,7 @@ export async function viewAcceso(ctx) {
       <form class="auth__card" id="acc-form" novalidate>
         <h2>${titulo}</h2>
         <p class="sub">${sub} Usá el usuario y la contraseña que te asignó la administración.</p>
+        ${ctx.session ? `<div class="nota mt-8" style="margin-bottom:14px">${U.icon("info", { size: 18 })}<span>Tenés abierta la sesión de <b>${U.esc(ctx.session.user.email || "otra cuenta")}</b>${ctx.session.profile ? ` (${U.esc(U.rolLabel(ctx.session.profile.rol))})` : ""}. Al ingresar con el usuario del personal, esa sesión se cierra.</span></div>` : ""}
         <div class="field"><label for="acc-user">Usuario</label>
           <input class="input" id="acc-user" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="${tipo}" value="${U.esc(ctx.params.u || "")}"/></div>
         <div class="field"><label for="acc-pass">Contraseña</label>
@@ -518,20 +519,35 @@ function wireBoatCards() { /* navegación por href; sin JS extra */ }
 
 /* ============================================================================
  *  RESERVA DE LUGARES
+ *  1. Lugares en el plano del catamarán · 2. Permiso de pesca (comprar uno o
+ *  usar el que ya tiene) · 3. Medio de pago. Al pagar se muestra el comprobante.
  * ========================================================================== */
+const MEDIOS_PAGO = [
+  ["tarjeta", "credit-card", "Tarjeta", "Crédito o débito"],
+  ["mercadopago", "wallet", "Mercado Pago", "Con tu cuenta"],
+  ["efectivo", "cash", "Efectivo", "En la boletería del muelle"],
+];
+const TIPOS_PERMISO = [["diario", "Diario"], ["semanal", "Semanal"], ["anual", "Anual"]];
+const lugaresTexto = (nums) => nums.slice().sort((a, b) => a - b).join(", ");
+
 export async function viewReserva(ctx) {
   const p = ctx.session.profile;
   const catId = ctx.params.id;
   let fecha = ctx.params.fecha || U.todayISO();
-  let turno = ctx.params.turno || "manana";
+  let turno = ctx.params.turno === "tarde" ? "tarde" : "manana";
 
-  const [cat, lugares, especies] = await Promise.all([
-    D.getCatamaran(catId), D.getLugares(catId), D.listEspecies(),
+  const [cat, lugares, especies, tarifas, permisos] = await Promise.all([
+    D.getCatamaran(catId), D.getLugares(catId), D.listEspecies(), D.listTarifasPermiso(), D.listPermisos(),
   ]);
   if (!cat) { U.mount(appShell({ active: null, rol: p.rol, topbarHtml: topbar({ title: "Reservar", back: true, bell: false }), bodyHtml: emptyState("Catamarán no encontrado", "Volvé a la lista de catamaranes.", "boat") })); wireChrome(ctx); return; }
 
   const seleccion = new Set();
-  let ocupados = new Set(await D.getOcupacion(catId, fecha, turno));
+  let ocupacion = { manana: [], tarde: [] };
+  let mios = [];
+  let modoPermiso = "comprar";        // comprar | propio
+  let permisoValido = null;           // resultado de D.validarPermiso
+  let metodo = "tarjeta";
+  const numeroDe = (id) => lugares.find((l) => l.id === id)?.numero;
 
   U.mount(appShell({
     active: null, rol: p.rol,
@@ -545,41 +561,55 @@ export async function viewReserva(ctx) {
           </div>
           <div class="boat__img" style="width:54px;height:54px">${U.icon("boat", { size: 30, stroke: 1.6 })}</div>
         </div>
-        <div class="filters mt-12">
-          <input class="input" type="date" id="r-fecha" value="${fecha}" min="${U.todayISO()}"/>
-          <select class="select turno" id="r-turno">
-            <option value="manana"${turno === "manana" ? " selected" : ""}>Mañana</option>
-            <option value="tarde"${turno === "tarde" ? " selected" : ""}>Tarde</option>
-          </select>
-        </div>
+        <div class="field mt-12" style="margin-bottom:10px"><label for="r-fecha">Fecha de la salida</label>
+          <input class="input" type="date" id="r-fecha" value="${fecha}" min="${U.todayISO()}"/></div>
+        <label class="field-label">Turno</label>
+        <div class="segmented" id="r-turno" role="radiogroup" aria-label="Turno"></div>
+        <div id="r-mios"></div>
       </div>
 
-      <h2 class="section-title mt-16">Elegí tus lugares</h2>
-      <div class="seatmap" id="seatmap">${seatGrid(lugares, ocupados, seleccion)}</div>
+      <h2 class="section-title mt-16"><span><span class="paso">1</span>Elegí tus lugares</span></h2>
+      <p class="muted" style="font-size:.84rem;margin:-6px 2px 10px">Vista desde arriba, con la proa adelante. Los números siguen el sentido de las agujas del reloj desde la proa, por estribor.</p>
+      <div id="seatmap"></div>
       <div class="seat-legend">
         <span><i class="lg-free"></i>Libre</span>
         <span><i class="lg-sel"></i>Elegido</span>
         <span><i class="lg-occ"></i>Ocupado</span>
+        <span><i class="lg-mio"></i>Tuyo</span>
       </div>
 
-      <h2 class="section-title mt-16">Permiso y pago</h2>
-      <div class="card card--flat">
-        <div class="field"><label>Especie a pescar</label>
+      <h2 class="section-title mt-24"><span><span class="paso">2</span>Permiso de pesca</span></h2>
+      <div class="opciones opciones--2" role="radiogroup" aria-label="Permiso de pesca">
+        <button type="button" class="opcion is-on" role="radio" aria-checked="true" data-permiso="comprar">
+          ${U.icon("plus-circle", { size: 22 })}<b>Comprar permiso</b><small>Se emite con la reserva</small></button>
+        <button type="button" class="opcion" role="radio" aria-checked="false" data-permiso="propio">
+          ${U.icon("ticket", { size: 22 })}<b>Ya tengo permiso</b><small>Ingresá su número</small></button>
+      </div>
+      <div class="card card--flat mt-12" id="permiso-comprar">
+        <div class="field"><label for="r-especie">Especie a pescar</label>
           <select class="select" id="r-especie">${especies.map((e) => `<option value="${e.id}">${U.esc(e.nombre)}</option>`).join("")}</select>
         </div>
-        <div class="flex gap-12">
-          <div class="field grow"><label>Tipo de permiso</label>
-            <select class="select" id="r-tipo">
-              <option value="diario">Diario</option><option value="semanal">Semanal</option><option value="anual">Anual</option>
-            </select>
-          </div>
-          <div class="field grow"><label>Medio de pago</label>
-            <select class="select" id="r-metodo">
-              <option value="tarjeta">Tarjeta</option><option value="transferencia">Transferencia</option>
-              <option value="mercadopago">Mercado Pago</option><option value="efectivo">Efectivo</option>
-            </select>
+        <label class="field-label">Tipo de permiso</label>
+        <div class="opciones opciones--3" role="radiogroup" aria-label="Tipo de permiso">
+          ${TIPOS_PERMISO.map(([k, label], i) => `<button type="button" class="opcion opcion--sm${i === 0 ? " is-on" : ""}" role="radio" aria-checked="${i === 0}" data-tipo="${k}">
+            <b>${label}</b><small>${tarifas[k] ? U.fmtMoney(tarifas[k]) : "Sin cargo"}</small></button>`).join("")}
+        </div>
+      </div>
+      <div class="card card--flat mt-12 hide" id="permiso-propio">
+        <div class="field" style="margin-bottom:8px"><label for="r-numperm">Número de permiso</label>
+          <div class="flex gap-8">
+            <input class="input grow" id="r-numperm" placeholder="PCC-000215" autocapitalize="characters" spellcheck="false"/>
+            <button class="btn btn--outline" type="button" id="r-verificar">Verificar</button>
           </div>
         </div>
+        <div id="r-misperm"></div>
+        <div id="r-permres" class="mt-8"></div>
+      </div>
+
+      <h2 class="section-title mt-24"><span><span class="paso">3</span>Medio de pago</span></h2>
+      <div class="opciones opciones--3" role="radiogroup" aria-label="Medio de pago">
+        ${MEDIOS_PAGO.map(([k, ic, label, sub], i) => `<button type="button" class="opcion opcion--sm${i === 0 ? " is-on" : ""}" role="radio" aria-checked="${i === 0}" data-metodo="${k}">
+          ${U.icon(ic, { size: 22 })}<b>${label}</b><small>${sub}</small></button>`).join("")}
       </div>
 
       <div class="summary mt-16" id="summary"></div>
@@ -597,47 +627,137 @@ export async function viewReserva(ctx) {
 
   const summaryEl = U.$("#summary");
   const confirmBtn = U.$("#confirm-btn");
+  const tipoActual = () => U.$("[data-tipo].is-on")?.dataset.tipo || "diario";
+  const marcar = (grupo, btn) => U.$$(grupo).forEach((b) => { const on = b === btn; b.classList.toggle("is-on", on); b.setAttribute("aria-checked", String(on)); });
+
   const refreshSummary = () => {
     const n = seleccion.size;
-    const total = n * cat.precio;
+    const montoLugares = n * cat.precio;
+    const montoPermiso = modoPermiso === "comprar" ? Number(tarifas[tipoActual()] || 0) : 0;
+    const total = n ? montoLugares + montoPermiso : 0;
+    const nums = [...seleccion].map(numeroDe);
     summaryEl.innerHTML = `
-      <div class="flex between"><span>Lugares seleccionados</span><b>${n}</b></div>
-      <div class="flex between mt-8"><span>Precio por lugar</span><b>${U.fmtMoney(cat.precio)}</b></div>
+      <div class="flex between"><span>Lugares${n ? ` (${n} × ${U.fmtMoney(cat.precio)})` : ""}</span><b>${U.fmtMoney(montoLugares)}</b></div>
+      ${modoPermiso === "comprar"
+        ? `<div class="flex between mt-8"><span>Permiso ${U.tipoPermisoLabel(tipoActual()).toLowerCase()}</span><b>${montoPermiso ? U.fmtMoney(montoPermiso) : "Sin cargo"}</b></div>`
+        : `<div class="flex between mt-8"><span>Permiso propio${permisoValido ? " " + U.esc(permisoValido.numero) : ""}</span><b>${permisoValido ? "Sin cargo" : "Sin verificar"}</b></div>`}
       <div class="flex between mt-8 total"><span><b>Total a pagar</b></span><b>${U.fmtMoney(total)}</b></div>
-      ${n ? `<div class="muted mt-8" style="font-size:.8rem">Lugares: ${[...seleccion].map((id) => lugares.find((l) => l.id === id).numero).sort((a, b) => a - b).join(", ")}</div>` : ""}`;
+      ${n ? `<div class="muted mt-8" style="font-size:.8rem">Lugares: ${nums.sort((a, b) => a - b).map((x) => `${x} (${D.ubicacionLugar(x, lugares.length)})`).join(", ")} · Turno ${U.turnoLabel(turno).toLowerCase()} · ${U.fmtDate(fecha)}</div>` : ""}`;
     U.$("#paybar-total").textContent = U.fmtMoney(total);
-    U.$("#paybar-cant").textContent = n ? `${n} lugar${n > 1 ? "es" : ""} · ${turno === "tarde" ? "turno tarde" : "turno mañana"}` : "Elegí tus lugares";
-    confirmBtn.disabled = n === 0;
+    const falta = !n ? "Elegí tus lugares" : modoPermiso === "propio" && !permisoValido ? "Verificá tu permiso" : null;
+    U.$("#paybar-cant").textContent = falta || `${n} lugar${n > 1 ? "es" : ""} · ${U.turnoLabel(turno).toLowerCase()}`;
+    confirmBtn.disabled = Boolean(falta);
   };
-  refreshSummary();
+
+  const pintarTurnos = () => {
+    const total = lugares.length;
+    U.$("#r-turno").innerHTML = ["manana", "tarde"].map((t) => {
+      const libres = Math.max(0, total - ocupacion[t].length);
+      const on = t === turno;
+      return `<button type="button" role="radio" aria-checked="${on}" class="${on ? "is-on" : ""}" data-turno="${t}">
+        <b>${U.turnoLabel(t)}</b><small>${libres ? `${libres} libre${libres > 1 ? "s" : ""}` : "Completo"}</small></button>`;
+    }).join("");
+  };
+
+  const pintarMios = () => {
+    const box = U.$("#r-mios");
+    const aca = mios.filter((m) => m.turno === turno).map((m) => numeroDe(m.id_lugar));
+    const otro = mios.filter((m) => m.turno !== turno).map((m) => numeroDe(m.id_lugar));
+    const otroTurno = turno === "manana" ? "tarde" : "manana";
+    box.innerHTML = [
+      aca.length ? `<div class="nota nota--agua mt-12">${U.icon("check-circle", { size: 18 })}<span>Ya tenés ${aca.length > 1 ? "los lugares" : "el lugar"} <b>${lugaresTexto(aca)}</b> en este turno. ${aca.length > 1 ? "Están marcados" : "Está marcado"} como "Tuyo".</span></div>` : "",
+      otro.length ? `<div class="nota mt-12">${U.icon("info", { size: 18 })}<span>Ya tenés ${otro.length > 1 ? "los lugares" : "el lugar"} <b>${lugaresTexto(otro)}</b> reservado${otro.length > 1 ? "s" : ""} en el turno <b>${U.turnoLabel(otroTurno).toLowerCase()}</b> de este día.</span><button type="button" class="btn btn--soft btn--sm" data-ir-turno="${otroTurno}">Ver turno ${U.turnoLabel(otroTurno).toLowerCase()}</button></div>` : "",
+    ].join("");
+  };
+
+  const pintarAsientos = () => {
+    const ocup = new Set(ocupacion[turno]);
+    const propios = new Set(mios.filter((m) => m.turno === turno).map((m) => m.id_lugar));
+    U.$("#seatmap").innerHTML = planoCatamaran(lugares, ocup, seleccion, propios);
+  };
+
+  const cargar = async () => {
+    [ocupacion, mios] = await Promise.all([D.ocupacionPorTurno(catId, fecha), D.misLugares(catId, fecha)]);
+    pintarTurnos(); pintarMios(); pintarAsientos(); refreshSummary();
+  };
+  await cargar();
 
   U.$("#seatmap").addEventListener("click", (e) => {
     const btn = e.target.closest(".seat");
-    if (!btn || btn.classList.contains("seat--occupied")) return;
+    if (!btn || btn.disabled) return;
     const id = btn.dataset.lugar;
-    if (seleccion.has(id)) { seleccion.delete(id); btn.classList.remove("seat--selected"); }
-    else { seleccion.add(id); btn.classList.add("seat--selected"); }
+    if (seleccion.has(id)) seleccion.delete(id); else seleccion.add(id);
+    btn.classList.toggle("seat--selected", seleccion.has(id));
+    btn.setAttribute("aria-pressed", String(seleccion.has(id)));
     refreshSummary();
   });
 
-  const reloadSeats = async () => {
-    fecha = U.$("#r-fecha").value || U.todayISO();
-    turno = U.$("#r-turno").value;
-    seleccion.clear();
-    ocupados = new Set(await D.getOcupacion(catId, fecha, turno));
-    U.$("#seatmap").innerHTML = seatGrid(lugares, ocupados, seleccion);
-    refreshSummary();
+  const cambiarTurno = async (t) => {
+    if (t === turno) return;
+    turno = t; seleccion.clear();
+    pintarTurnos(); pintarMios(); pintarAsientos(); refreshSummary();
   };
-  U.$("#r-fecha").addEventListener("change", reloadSeats);
-  U.$("#r-turno").addEventListener("change", reloadSeats);
+  U.$("#r-turno").addEventListener("click", (e) => { const b = e.target.closest("[data-turno]"); if (b) cambiarTurno(b.dataset.turno); });
+  U.$("#r-mios").addEventListener("click", (e) => { const b = e.target.closest("[data-ir-turno]"); if (b) cambiarTurno(b.dataset.irTurno); });
+  U.$("#r-fecha").addEventListener("change", async () => {
+    fecha = U.$("#r-fecha").value || U.todayISO();
+    seleccion.clear();
+    if (permisoValido) { permisoValido = null; U.$("#r-permres").innerHTML = ""; }
+    pintarMisPermisos();
+    await cargar();
+  });
+
+  /* --- Permiso: comprar o usar uno propio --- */
+  const resPermiso = U.$("#r-permres");
+  const pintarMisPermisos = () => {
+    // Permisos propios vigentes que cubren la fecha elegida (desde la salida para la que se emitieron hasta su vencimiento).
+    const dia = (ts) => { const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+    const sirven = permisos.filter((x) => x.id_usuario === ctx.session.user.id && x.estado === "vigente"
+      && (x.fecha || dia(x.fecha_emision)) <= fecha && dia(x.fecha_vencimiento) >= fecha);
+    U.$("#r-misperm").innerHTML = sirven.length
+      ? `<div class="field__hint" style="margin-top:0">Tus permisos vigentes para esta fecha:</div><div class="chips">${sirven.slice(0, 6).map((x) => `<button type="button" class="chip" data-usar="${U.esc(x.numero)}">${U.esc(x.numero)} · ${U.tipoPermisoLabel(x.tipo)}</button>`).join("")}</div>`
+      : "";
+  };
+  pintarMisPermisos();
+  const verificar = async () => {
+    const num = U.$("#r-numperm").value.trim();
+    permisoValido = null; refreshSummary();
+    if (!num) { resPermiso.innerHTML = `<div class="nota nota--error">${U.icon("alert-triangle", { size: 18 })}<span>Ingresá el número de tu permiso.</span></div>`; return; }
+    const b = U.$("#r-verificar"); b.disabled = true; b.textContent = "Verificando…";
+    try {
+      permisoValido = await D.validarPermiso(num, fecha);
+      U.$("#r-numperm").value = permisoValido.numero;
+      resPermiso.innerHTML = `<div class="nota nota--ok">${U.icon("check-circle", { size: 18 })}<span>Permiso <b>${U.esc(permisoValido.numero)}</b> válido · ${U.tipoPermisoLabel(permisoValido.tipo)}${permisoValido.especie ? " · " + U.esc(permisoValido.especie) : ""} · vale hasta el ${U.fmtDate(permisoValido.hasta)}.</span></div>`;
+    } catch (err) {
+      resPermiso.innerHTML = `<div class="nota nota--error">${U.icon("alert-triangle", { size: 18 })}<span>${U.esc(err.message)}</span></div>`;
+    } finally {
+      b.disabled = false; b.textContent = "Verificar"; refreshSummary();
+    }
+  };
+  U.$("#r-verificar").addEventListener("click", verificar);
+  U.$("#r-numperm").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); verificar(); } });
+  U.$("#r-numperm").addEventListener("input", () => { if (permisoValido) { permisoValido = null; resPermiso.innerHTML = ""; refreshSummary(); } });
+  U.$("#r-misperm").addEventListener("click", (e) => { const b = e.target.closest("[data-usar]"); if (b) { U.$("#r-numperm").value = b.dataset.usar; verificar(); } });
+
+  U.$$("[data-permiso]").forEach((b) => b.addEventListener("click", () => {
+    modoPermiso = b.dataset.permiso;
+    marcar("[data-permiso]", b);
+    U.$("#permiso-comprar").classList.toggle("hide", modoPermiso !== "comprar");
+    U.$("#permiso-propio").classList.toggle("hide", modoPermiso !== "propio");
+    if (modoPermiso === "propio" && !U.$("#r-numperm").value) U.$("#r-numperm").focus();
+    refreshSummary();
+  }));
+  U.$$("[data-tipo]").forEach((b) => b.addEventListener("click", () => { marcar("[data-tipo]", b); refreshSummary(); }));
+  U.$$("[data-metodo]").forEach((b) => b.addEventListener("click", () => { metodo = b.dataset.metodo; marcar("[data-metodo]", b); }));
 
   const labelBtn = `${U.icon("credit-card", { size: 20 })} Pagar y confirmar`;
   confirmBtn.addEventListener("click", async () => {
     if (!seleccion.size) return;
-    const metodo = U.$("#r-metodo").value;
-    const monto = seleccion.size * cat.precio;
+    if (modoPermiso === "propio" && !permisoValido) { await verificar(); if (!permisoValido) return; }
+    const montoPermiso = modoPermiso === "comprar" ? Number(tarifas[tipoActual()] || 0) : 0;
+    const monto = seleccion.size * cat.precio + montoPermiso;
     // 1) Pago (pasarela simulada, HU-007). Si se rechaza, no se reserva ni se emite permiso.
-    const pago = await pagoModal({ metodo, monto, lugares: seleccion.size, catamaran: cat.nombre });
+    const pago = await pagoModal({ metodo, monto, lugares: seleccion.size, catamaran: cat.nombre, permiso: modoPermiso === "comprar" ? `Permiso ${U.tipoPermisoLabel(tipoActual()).toLowerCase()}` : null, montoPermiso, email: ctx.session.user.email });
     if (!pago) return;                              // canceló
     confirmBtn.disabled = true; confirmBtn.innerHTML = "Procesando…";
     try {
@@ -645,57 +765,70 @@ export async function viewReserva(ctx) {
         catamaranId: catId, fecha, turno,
         lugares: [...seleccion],
         metodo,
-        tipoPermiso: U.$("#r-tipo").value,
+        tipoPermiso: tipoActual(),
         especieId: U.$("#r-especie").value,
+        numeroPermiso: modoPermiso === "propio" ? permisoValido.numero : null,
+        autorizacion: pago.autorizacion,
       });
-      U.toast("Pago aprobado · Reserva confirmada · " + res.numero_permiso, "ok");
-      ctx.go("/permiso/" + res.permiso_id);
+      U.toast("Pago aprobado · Reserva confirmada", "ok");
+      ctx.go(`/comprobante/${res.reserva_id}?nuevo=1`);
     } catch (err) {
       U.toast(err.message || "No se pudo completar la reserva.", "err");
       confirmBtn.disabled = false;
       confirmBtn.innerHTML = labelBtn;
-      await reloadSeats();
+      seleccion.clear();
+      await cargar();
     }
   });
 }
 
 /* Modal de pago simulado. Resuelve con el resultado aprobado o null si se cancela.
  * Permite reintentar dentro del mismo modal cuando la pasarela rechaza. */
-function pagoModal({ metodo, monto, lugares, catamaran }) {
-  const conTarjeta = metodo === "tarjeta" || metodo === "mercadopago";
+function pagoModal({ metodo, monto, lugares, catamaran, permiso = null, montoPermiso = 0, email = "" }) {
   return new Promise((resolve) => {
     let resolved = false;
     const done = (v) => { if (!resolved) { resolved = true; resolve(v); } };
+    const campos = {
+      tarjeta: `
+        <div class="field mt-12"><label for="pg-num">Número de tarjeta</label><input class="input" id="pg-num" inputmode="numeric" autocomplete="cc-number" placeholder="4111 1111 1111 1111" value="4111 1111 1111 1111"/></div>
+        <div class="field"><label for="pg-tit">Titular</label><input class="input" id="pg-tit" autocomplete="cc-name" placeholder="Como figura en la tarjeta"/></div>
+        <div class="flex gap-12">
+          <div class="field grow"><label for="pg-ven">Vencimiento</label><input class="input" id="pg-ven" autocomplete="cc-exp" placeholder="MM/AA"/></div>
+          <div class="field grow"><label for="pg-cvv">CVV</label><input class="input" id="pg-cvv" inputmode="numeric" autocomplete="cc-csc" placeholder="123" maxlength="4"/></div>
+        </div>
+        <p class="field__hint">Pasarela simulada. Tarjeta de prueba aprobada: 4111 1111 1111 1111 · rechazada: cualquier número terminado en 0000.</p>`,
+      mercadopago: `
+        <div class="pago-mp mt-12">${U.icon("wallet", { size: 22 })}<span>Vas a confirmar el pago con tu cuenta de Mercado Pago.</span></div>
+        <div class="field mt-12"><label for="pg-mp">Correo de tu cuenta de Mercado Pago</label><input class="input" id="pg-mp" type="email" autocomplete="email" value="${U.esc(email)}"/></div>
+        <p class="field__hint">Pasarela simulada: el pago se aprueba al confirmar.</p>`,
+      efectivo: `
+        <div class="pago-mp mt-12">${U.icon("cash", { size: 22 })}<span>Abonás en efectivo en la boletería municipal del muelle. Al confirmar, el cobro queda registrado y se emite el comprobante.</span></div>
+        <p class="field__hint">Simulación del cobro en boletería.</p>`,
+    };
     const m = U.modal({
       title: `Pago · ${U.metodoPagoLabel(metodo)}`,
       dismissable: false,
       body: `
         <div class="summary" style="margin-top:0">
           <div class="flex between"><span>${U.esc(catamaran)}</span><b>${lugares} lugar${lugares > 1 ? "es" : ""}</b></div>
+          ${permiso ? `<div class="flex between mt-8"><span>${U.esc(permiso)}</span><b>${montoPermiso ? U.fmtMoney(montoPermiso) : "Sin cargo"}</b></div>` : ""}
           <div class="flex between mt-8 total"><span><b>Total</b></span><b>${U.fmtMoney(monto)}</b></div>
         </div>
-        ${conTarjeta ? `
-        <div class="field mt-12"><label>Número de tarjeta</label><input class="input" id="pg-num" inputmode="numeric" autocomplete="cc-number" placeholder="4111 1111 1111 1111" value="4111 1111 1111 1111"/></div>
-        <div class="field"><label>Titular</label><input class="input" id="pg-tit" autocomplete="cc-name" placeholder="Como figura en la tarjeta"/></div>
-        <div class="flex gap-12">
-          <div class="field grow"><label>Vencimiento</label><input class="input" id="pg-ven" autocomplete="cc-exp" placeholder="MM/AA"/></div>
-          <div class="field grow"><label>CVV</label><input class="input" id="pg-cvv" inputmode="numeric" autocomplete="cc-csc" placeholder="123" maxlength="4"/></div>
-        </div>
-        <p class="field__hint">Pasarela simulada. Tarjeta de prueba aprobada: 4111 1111 1111 1111 · rechazada: cualquier número terminado en 0000.</p>`
-        : `<p class="field__hint mt-12">Pasarela simulada: al confirmar, el pago por ${U.esc(U.metodoPagoLabel(metodo).toLowerCase())} se registra como aprobado y se emite el comprobante digital.</p>`}
+        ${campos[metodo] || campos.efectivo}
         <div class="field__error hide" id="pg-err"></div>`,
       actions: [
         { label: "Cancelar", variant: "btn--soft", onClick: () => done(null) },
         {
-          label: "Confirmar pago", variant: "btn--cta", close: false,
+          label: metodo === "efectivo" ? "Registrar pago" : "Confirmar pago", variant: "btn--cta", close: false,
           onClick: async () => {
             const errBox = U.$("#pg-err"); errBox.classList.add("hide");
             const btn = U.$('[data-act="1"]', m.root); btn.disabled = true; btn.textContent = "Autorizando…";
-            const tarjeta = conTarjeta ? {
+            const tarjeta = metodo === "tarjeta" ? {
               numero: U.$("#pg-num").value, titular: U.$("#pg-tit").value,
               vencimiento: U.$("#pg-ven").value, cvv: U.$("#pg-cvv").value,
             } : {};
-            const res = await D.procesarPago({ metodo, monto, tarjeta });
+            const cuenta = metodo === "mercadopago" ? U.$("#pg-mp").value : "";
+            const res = await D.procesarPago({ metodo, monto, tarjeta, cuenta });
             if (res.aprobado) { U.closeModal(); done(res); return false; }
             // Pago fallido (HU-007 · criterio 2): se informa y se permite reintentar.
             showErr(errBox, res.motivo || "Pago rechazado.");
@@ -705,7 +838,7 @@ function pagoModal({ metodo, monto, lugares, catamaran }) {
         },
       ],
     });
-    if (conTarjeta) {
+    if (metodo === "tarjeta") {
       const num = U.$("#pg-num");
       num.addEventListener("input", () => { num.value = num.value.replace(/\D/g, "").slice(0, 19).replace(/(\d{4})(?=\d)/g, "$1 "); });
       const ven = U.$("#pg-ven");
@@ -714,18 +847,194 @@ function pagoModal({ metodo, monto, lugares, catamaran }) {
   });
 }
 
-function seatGrid(lugares, ocupados, seleccion) {
-  return lugares.map((l) => {
+/* Plano del catamarán visto desde arriba: proa arriba, popa abajo, estribor a
+ * la derecha y babor a la izquierda. Los asientos siguen el sentido horario
+ * desde la proa (ver D.posicionLugar): con 20 lugares, el 6 queda en el centro
+ * del lado derecho. */
+function planoCatamaran(lugares, ocupados, seleccion, propios = new Set()) {
+  const total = lugares.length;
+  const filas = Math.ceil(total / 2);
+  const zonas = { proa: [], centro: [], popa: [] };
+  for (let f = 0; f < filas; f++) zonas[f * 3 < filas ? "proa" : f * 3 < filas * 2 ? "centro" : "popa"].push(f);
+  const asientos = lugares.map((l, i) => {
+    const pos = D.posicionLugar(i + 1, total);
     const occ = ocupados.has(l.id);
+    const mio = propios.has(l.id);
     const sel = seleccion.has(l.id);
-    const cls = occ ? "seat seat--occupied" : sel ? "seat seat--selected" : "seat";
-    return `<button class="${cls}" data-lugar="${l.id}" ${occ ? "disabled" : ""} title="Lugar ${l.numero} · ${U.esc(l.ubicacion || "")}">${l.numero}</button>`;
+    const estado = mio ? "tu lugar" : occ ? "ocupado" : "libre";
+    const cls = mio ? "seat seat--mio" : occ ? "seat seat--occupied" : sel ? "seat seat--selected" : "seat";
+    return `<button type="button" class="${cls}" data-lugar="${l.id}" ${occ || mio ? "disabled" : `aria-pressed="${sel}"`}
+      style="grid-row:${pos.fila + 1};grid-column:${pos.lado === "estribor" ? 3 : 1}"
+      title="Lugar ${l.numero} · ${pos.lado}, ${pos.zona}" aria-label="Lugar ${l.numero}, ${pos.lado}, ${pos.zona}, ${estado}">${mio ? U.icon("check", { size: 16, stroke: 3 }) : ""}${l.numero}</button>`;
   }).join("");
+  const centro = Object.entries(zonas).filter(([, fs]) => fs.length).map(([zona, fs]) => `
+    <div class="barco__zona barco__zona--${zona}" style="grid-row:${fs[0] + 1} / span ${fs.length}">
+      ${zona === "proa" ? `<span class="barco__cabina">${U.icon("steering", { size: 22 })}<small>Cabina</small></span>` : ""}
+      <span class="barco__zona-nombre">${zona === "proa" ? "Proa" : zona === "centro" ? "Centro" : "Popa"}</span>
+    </div>`).join("");
+  return `<div class="barco">
+    <div class="barco__rotulo">${U.icon("chevron-left", { size: 14, stroke: 2.6, cls: "barco__flecha" })}Proa · adelante</div>
+    <svg class="barco__proa" viewBox="0 0 300 74" preserveAspectRatio="none" aria-hidden="true">
+      <path d="M0 74 V40 C0 22 10 8 26 0 C42 8 52 22 52 40 V74 Z" class="casco"/>
+      <path d="M300 74 V40 C300 22 290 8 274 0 C258 8 248 22 248 40 V74 Z" class="casco"/>
+      <path d="M52 74 V52 Q150 30 248 52 V74 Z" class="cubierta"/>
+      <path d="M52 52 Q150 30 248 52" class="baranda"/>
+      <path d="M26 6 V60 M274 6 V60" class="quilla"/>
+    </svg>
+    <div class="barco__cubierta">
+      <span class="barco__lado barco__lado--babor">Babor · izquierda</span>
+      <span class="barco__lado barco__lado--estribor">Estribor · derecha</span>
+      <div class="barco__grilla" style="grid-template-rows:repeat(${filas}, 44px)">${centro}${asientos}</div>
+    </div>
+    <svg class="barco__popa" viewBox="0 0 300 58" preserveAspectRatio="none" aria-hidden="true">
+      <path d="M0 0 H300 V14 H0 Z" class="cubierta"/>
+      <path d="M0 0 H52 V24 Q52 30 46 30 H6 Q0 30 0 24 Z M248 0 H300 V24 Q300 30 294 30 H254 Q248 30 248 24 Z" class="casco"/>
+      <rect x="14" y="30" width="24" height="18" rx="5" class="motor"/>
+      <rect x="262" y="30" width="24" height="18" rx="5" class="motor"/>
+      <path d="M8 54 Q26 48 44 54 M256 54 Q274 48 292 54" class="estela"/>
+    </svg>
+    <div class="barco__rotulo barco__rotulo--popa">Popa · motores</div>
+  </div>`;
+}
+
+/* ============================================================================
+ *  COMPROBANTE (reserva + pago + permiso)
+ * ========================================================================== */
+function textoComprobante(c) {
+  return [
+    `*Reserva ${c.numero}* · ${CFG.LUGAR || "Dique Cabra Corral"}`,
+    `Catamarán: ${c.catamaran}`,
+    `Salida: ${U.fmtDate(c.fecha)} · turno ${U.turnoLabel(c.turno).toLowerCase()}`,
+    `Lugares: ${c.lugares.map((n) => `${n} (${D.ubicacionLugar(n, c.capacidad || c.lugares.length)})`).join(", ")}`,
+    c.permiso ? `Permiso de pesca: ${c.permiso.numero} (${U.tipoPermisoLabel(c.permiso.tipo).toLowerCase()})` : "",
+    c.pago ? `Pago: ${c.pago.comprobante} · ${U.metodoPagoLabel(c.pago.metodo)} · ${U.fmtMoney(c.monto_total)}` : "",
+    CFG.MUNICIPIO || "Municipio de Coronel Moldes",
+  ].filter(Boolean).join("\n");
+}
+
+function imagenComprobante(c) {
+  const filas = [
+    ["Catamarán", c.catamaran],
+    ["Salida", `${U.fmtDate(c.fecha)} · ${U.turnoLabel(c.turno)}`],
+    ["Lugares", lugaresTexto(c.lugares)],
+    ["Titular", c.titular?.nombre || "—"],
+    ["Permiso", c.permiso ? `${c.permiso.numero} · ${U.tipoPermisoLabel(c.permiso.tipo)}` : "—"],
+    ["Comprobante", c.pago?.comprobante || "—"],
+    ["Medio de pago", c.pago ? U.metodoPagoLabel(c.pago.metodo) : "—"],
+    ["Fecha de pago", c.pago ? U.fmtDateTime(c.pago.fecha_pago) : "—"],
+  ];
+  return U.tarjetaImagen({
+    banda: { texto: c.estado === "cancelada" ? "RESERVA CANCELADA" : "RESERVA CONFIRMADA", color: c.estado === "cancelada" ? "#B42318" : "#2E7D4F" },
+    titulo: c.numero, destacado: { label: "Total abonado", valor: U.fmtMoney(c.monto_total) }, filas,
+    pie: "Presentá este comprobante al embarcar.",
+    lugar: CFG.LUGAR || "Dique Cabra Corral", municipio: CFG.MUNICIPIO || "Municipio de Coronel Moldes",
+  });
+}
+
+export async function viewComprobante(ctx) {
+  const p = ctx.session.profile;
+  const c = await D.getComprobante(ctx.params.id);
+  if (!c) { U.mount(appShell({ active: null, rol: p.rol, topbarHtml: topbar({ title: "Comprobante", back: true, bell: false }), bodyHtml: emptyState("Comprobante no encontrado", "Revisá tus reservas en el historial.", "receipt") })); wireChrome(ctx); return; }
+  const nuevo = ctx.params.nuevo === "1";
+  const per = c.permiso;
+  const perBadge = per ? U.estadoPermisoBadge(per.estado) : null;
+  const resBadge = U.estadoReservaBadge(c.estado);
+  const fila = (k, v) => `<div class="permit__row"><span>${U.esc(k)}</span><b>${v}</b></div>`;
+
+  U.mount(appShell({
+    active: null, rol: p.rol,
+    topbarHtml: topbar({ title: "Comprobante", back: !nuevo, bell: false }),
+    bodyHtml: `
+      ${nuevo ? `<div class="exito">
+        <span class="exito__ic">${U.icon("check", { size: 34, stroke: 3 })}</span>
+        <h2>¡Listo! Tu reserva está confirmada</h2>
+        <p>Guardá o compartí este comprobante: lo vas a presentar al embarcar junto con tu permiso.</p>
+      </div>` : ""}
+
+      <section class="doc" id="comprobante">
+        <div class="doc__head">${U.icon("boat", { size: 18 })}<span>Reserva de catamarán</span><span class="badge ${resBadge.cls}">${resBadge.label}</span></div>
+        <div class="doc__numero"><small>N° de reserva</small><b>${U.esc(c.numero)}</b></div>
+        <div class="permit__body">
+          ${fila("Catamarán", U.esc(c.catamaran))}
+          ${fila("Fecha de salida", U.fmtDate(c.fecha))}
+          ${fila("Turno", U.turnoLabel(c.turno))}
+          ${fila("Titular", U.esc(c.titular?.nombre || "—"))}
+          <div class="permit__row permit__row--col"><span>Lugares</span>
+            <div class="chips">${c.lugares.map((n) => `<span class="chip chip--lugar"><b>${n}</b> ${U.esc(D.ubicacionLugar(n, c.capacidad || c.lugares.length))}</span>`).join("")}</div></div>
+        </div>
+      </section>
+
+      <section class="doc mt-16">
+        <div class="doc__head">${U.icon("receipt", { size: 18 })}<span>Comprobante de pago</span>${c.pago ? `<span class="badge ${c.pago.estado === "aprobado" ? "badge--ok" : "badge--warn"}">${c.pago.estado === "aprobado" ? "Aprobado" : U.esc(c.pago.estado)}</span>` : ""}</div>
+        <div class="doc__numero"><small>N° de comprobante</small><b>${U.esc(c.pago?.comprobante || "—")}</b></div>
+        <div class="permit__body">
+          ${c.pago ? fila("Fecha y hora", U.fmtDateTime(c.pago.fecha_pago)) : ""}
+          ${c.pago ? fila("Medio de pago", U.esc(U.metodoPagoLabel(c.pago.metodo))) : ""}
+          ${c.pago?.autorizacion ? fila("Autorización", U.esc(c.pago.autorizacion)) : ""}
+          ${fila(`Lugares (${c.cantidad_lugares} × ${U.fmtMoney(c.precio_lugar)})`, U.fmtMoney(c.monto_lugares))}
+          ${per ? fila(per.propio ? `Permiso propio ${per.numero}` : `Permiso ${U.tipoPermisoLabel(per.tipo).toLowerCase()}`, c.monto_permiso ? U.fmtMoney(c.monto_permiso) : "Sin cargo") : ""}
+          <div class="permit__row doc__total"><span>Total abonado</span><b>${U.fmtMoney(c.monto_total)}</b></div>
+        </div>
+      </section>
+
+      ${per ? `<section class="doc mt-16">
+        <div class="doc__head">${U.icon("ticket", { size: 18 })}<span>Permiso de pesca</span><span class="badge ${perBadge.cls}">${perBadge.label}</span></div>
+        <div class="doc__numero"><small>N° de permiso</small><b>${U.esc(per.numero)}</b></div>
+        <div class="permit__body">
+          ${fila("Tipo", U.tipoPermisoLabel(per.tipo))}
+          ${fila("Especie", U.esc(per.especie))}
+          ${fila("Vence", U.fmtDate(per.fecha_vencimiento))}
+          ${fila("Origen", per.propio ? "Permiso que ya tenías" : "Emitido con esta reserva")}
+        </div>
+        <div class="permit__actions"><a class="btn btn--outline btn--block" href="#/permiso/${per.id}">${U.icon("qr", { size: 18 })} Ver permiso con código QR</a></div>
+      </section>` : ""}
+
+      <div class="stack mt-16">
+        <button class="btn btn--primary btn--block" data-share>${U.icon("share", { size: 18 })} Compartir comprobante</button>
+        <button class="btn btn--soft btn--block" data-print>${U.icon("download", { size: 18 })} Descargar PDF</button>
+        ${nuevo ? `<a class="btn btn--outline btn--block" href="#/home">${U.icon("home", { size: 18 })} Volver al inicio</a>` : ""}
+      </div>
+    `,
+  }));
+  wireChrome(ctx);
+  U.$("[data-print]").addEventListener("click", () => window.print());
+  U.$("[data-share]").addEventListener("click", () => U.compartir({
+    titulo: `Reserva ${c.numero}`, texto: textoComprobante(c),
+    imagen: () => imagenComprobante(c), archivo: `reserva-${c.numero}.png`,
+  }));
 }
 
 /* ============================================================================
  *  PERMISO DIGITAL
  * ========================================================================== */
+function textoPermiso(permiso) {
+  return [
+    `*Permiso de pesca ${permiso.numero}* · ${U.estadoPermisoBadge(permiso.estado).label}`,
+    `Titular: ${permiso.titular_nombre} (DNI ${permiso.titular_dni})`,
+    `Especie: ${permiso.especie_nombre} · ${U.tipoPermisoLabel(permiso.tipo)}`,
+    permiso.fecha ? `Salida: ${U.fmtDate(permiso.fecha)}${permiso.turno ? " · turno " + U.turnoLabel(permiso.turno).toLowerCase() : ""} · ${permiso.catamaran_nombre}` : "",
+    `Vence: ${U.fmtDate(permiso.fecha_vencimiento)}`,
+    `${CFG.LUGAR || "Dique Cabra Corral"} · ${CFG.MUNICIPIO || "Municipio de Coronel Moldes"}`,
+  ].filter(Boolean).join("\n");
+}
+
+function imagenPermiso(permiso) {
+  const banda = permiso.estado === "vencido" ? { texto: "PERMISO VENCIDO", color: "#8E827C" }
+    : permiso.estado === "anulado" ? { texto: "PERMISO ANULADO", color: "#B42318" }
+    : { texto: "PERMISO VIGENTE", color: "#2E7D4F" };
+  return U.tarjetaImagen({
+    banda, qr: permiso.codigo_qr, titulo: permiso.numero,
+    filas: [
+      ["Titular", permiso.titular_nombre], ["DNI", permiso.titular_dni],
+      ["Especie", permiso.especie_nombre], ["Catamarán", permiso.catamaran_nombre],
+      ["Fecha de salida", permiso.fecha ? U.fmtDate(permiso.fecha) : "—"],
+      ["Tipo", U.tipoPermisoLabel(permiso.tipo)], ["Vencimiento", U.fmtDate(permiso.fecha_vencimiento)],
+    ],
+    pie: "Presentá este permiso al personal de control.",
+    lugar: CFG.LUGAR || "Dique Cabra Corral", municipio: CFG.MUNICIPIO || "Municipio de Coronel Moldes",
+  });
+}
+
 export async function viewPermiso(ctx) {
   const p = ctx.session.profile;
   const permiso = await D.getPermiso(ctx.params.id);
@@ -756,8 +1065,9 @@ export async function viewPermiso(ctx) {
           ${permiso.pago_comprobante ? permitRow("Comprobante de pago", `${permiso.pago_comprobante} · ${U.metodoPagoLabel(permiso.pago_metodo)}`) : ""}
         </div>
         <div class="permit__actions stack">
-          <button class="btn btn--primary btn--block" data-print>${U.icon("download", { size: 18 })} Descargar PDF</button>
-          <button class="btn btn--soft btn--block" data-share>${U.icon("share", { size: 18 })} Compartir</button>
+          <button class="btn btn--primary btn--block" data-share>${U.icon("share", { size: 18 })} Compartir</button>
+          <button class="btn btn--soft btn--block" data-print>${U.icon("download", { size: 18 })} Descargar PDF</button>
+          ${permiso.reserva_id ? `<a class="btn btn--outline btn--block" href="#/comprobante/${permiso.reserva_id}">${U.icon("receipt", { size: 18 })} Ver comprobante de la reserva</a>` : ""}
         </div>
       </div>
       <p class="muted center mt-12" style="font-size:.8rem">${U.icon("shield", { size: 14 })} Presentá este permiso al personal de control. El código QR permite validar su autenticidad.</p>
@@ -766,12 +1076,10 @@ export async function viewPermiso(ctx) {
   wireChrome(ctx);
 
   U.$("[data-print]")?.addEventListener("click", () => window.print());
-  U.$("[data-share]")?.addEventListener("click", async () => {
-    const txt = `Permiso de pesca ${permiso.numero} · ${permiso.titular_nombre} · ${CFG.MUNICIPIO || "Municipio de Coronel Moldes"}`;
-    if (navigator.share) { try { await navigator.share({ title: "Permiso PescaCorral", text: txt }); } catch {} }
-    else if (navigator.clipboard) { await navigator.clipboard.writeText(txt); U.toast("Datos copiados al portapapeles", "ok"); }
-    else U.toast("Compartir no disponible en este dispositivo", "info");
-  });
+  U.$("[data-share]")?.addEventListener("click", () => U.compartir({
+    titulo: `Permiso ${permiso.numero}`, texto: textoPermiso(permiso),
+    imagen: () => imagenPermiso(permiso), archivo: `permiso-${permiso.numero}.png`,
+  }));
 }
 function permitRow(label, value) {
   return `<div class="permit__row"><span>${U.esc(label)}</span><b>${U.esc(value)}</b></div>`;
@@ -794,13 +1102,15 @@ export async function viewHistorial(ctx) {
       <div class="row-item__ic">${U.icon("boat", { size: 20 })}</div>
       <div class="row-item__main">
         <h4>${U.esc(r.catamaran_nombre)}</h4>
+        ${r.numero ? `<small>${U.esc(r.numero)}</small>` : ""}
         <small>${U.fmtDate(r.fecha)} · ${U.turnoLabel(r.turno)} · ${r.cantidad_lugares} lugar${r.cantidad_lugares > 1 ? "es" : ""} · ${U.fmtMoney(r.monto_total)}</small>
       </div>
       <span class="badge ${b.cls}">${b.label}</span>
-      ${r.permiso_id || cancelable ? `<div class="row-item__actions">
-          ${r.permiso_id ? `<a class="btn btn--soft btn--sm" href="#/permiso/${r.permiso_id}">${U.icon("ticket", { size: 16 })} Ver permiso</a>` : ""}
+      <div class="row-item__actions">
+          <a class="btn btn--soft btn--sm" href="#/comprobante/${r.id}">Comprobante</a>
+          ${r.permiso_id ? `<a class="btn btn--soft btn--sm" href="#/permiso/${r.permiso_id}">Permiso</a>` : ""}
           ${cancelable ? `<button class="btn btn--danger btn--sm" data-anular="${r.id}">Anular</button>` : ""}
-        </div>` : ""}
+        </div>
     </div>`;
   }).join("") : emptyState("Sin reservas todavía", "Cuando reserves una salida, aparecerá acá.", "calendar");
 

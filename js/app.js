@@ -19,6 +19,7 @@ const ROUTES = {
   catamaranes: { view: V.viewCatamaranes, auth: true },
   reserva:     { view: V.viewReserva,     auth: true },
   permiso:     { view: V.viewPermiso,     auth: true },
+  comprobante: { view: V.viewComprobante, auth: true },
   historial:   { view: V.viewHistorial,   auth: true },
   perfil:      { view: V.viewPerfil,      auth: true },
   gestion:     { view: V.viewGestion,     auth: true, roles: ["dueno", "admin_municipal", "admin_sistema"] },
@@ -35,7 +36,7 @@ function parseHash() {
   const base = segs[0] || "home";
   const params = {};
   new URLSearchParams(qs).forEach((v, k) => (params[k] = v));
-  if (base === "reserva" || base === "permiso") params.id = segs[1] || "";
+  if (base === "reserva" || base === "permiso" || base === "comprobante") params.id = segs[1] || "";
   if (base === "acceso") params.tipo = segs[1] || "municipio";
   return { base, params };
 }
@@ -87,7 +88,10 @@ async function render() {
 
     // --- Guardas de acceso ---
     if (!route.auth) {
-      if (session) { go(D.perfilCompleto(session.profile) ? inicioSegunRol(session.profile.rol) : "/registro"); return; }
+      // El acceso del personal se muestra aunque haya otra sesión abierta (por
+      // ejemplo, la de Google de un pescador): al ingresar, esa sesión se reemplaza.
+      const otraCuenta = base === "acceso" && session?.profile?.rol !== D.rolDeAcceso(params.tipo);
+      if (session && !otraCuenta) { go(D.perfilCompleto(session.profile) ? inicioSegunRol(session.profile.rol) : "/registro"); return; }
     } else {
       if (!session) { go(D.rutaIngreso()); return; }
       const p = session.profile;
