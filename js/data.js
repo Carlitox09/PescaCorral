@@ -76,7 +76,7 @@ const todayISO = () => dateISO(new Date());
 
 function seedDemo() {
   DB = loadDB();
-  if (DB && DB.__v === 3) return;
+  if (DB && DB.__v === 4) return;
 
   const rnd = mulberry32(20260628);
   const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
@@ -120,10 +120,10 @@ function seedDemo() {
   let seq = 215;
   const metodos = ["tarjeta", "transferencia", "mercadopago", "efectivo"];
   const lugaresDe = (catId) => lugares.filter((l) => l.id_catamaran === catId);
-  const ocupadoSet = new Set(); // `${lugarId}|${fecha}`
+  const ocupadoSet = new Set(); // `${lugarId}|${fecha}|${turno}`
 
   function crearReservaDemo({ cat, fecha, turno, nLugares, especie, estadoReserva, tipo, titular }) {
-    const libres = lugaresDe(cat.id).filter((l) => !ocupadoSet.has(`${l.id}|${fecha}`));
+    const libres = lugaresDe(cat.id).filter((l) => !ocupadoSet.has(`${l.id}|${fecha}|${turno}`));
     if (!libres.length) return;
     const elegidos = [];
     for (let k = 0; k < nLugares && libres.length; k++) {
@@ -135,8 +135,8 @@ function seedDemo() {
     reservas.push({ id: rId, id_usuario: titular.id, id_catamaran: cat.id, fecha, turno, estado: estadoReserva, cantidad_lugares: elegidos.length, monto_total: monto, created_at: new Date(fecha + "T10:00:00").toISOString() });
     const cancel = estadoReserva === "cancelada";
     for (const l of elegidos) {
-      reserva_lugar.push({ id: uid(), id_reserva: rId, id_lugar: l.id, fecha, estado: cancel ? "cancelada" : "confirmada" });
-      if (!cancel) ocupadoSet.add(`${l.id}|${fecha}`);
+      reserva_lugar.push({ id: uid(), id_reserva: rId, id_lugar: l.id, fecha, turno, estado: cancel ? "cancelada" : "confirmada" });
+      if (!cancel) ocupadoSet.add(`${l.id}|${fecha}|${turno}`);
     }
     pagos.push({ id: uid(), id_reserva: rId, monto, metodo: pick(metodos), estado: cancel ? "rechazado" : "aprobado", comprobante: "CMP-" + rId.replace(/-/g, "").slice(0, 10).toUpperCase(), fecha_pago: new Date(fecha + "T10:05:00").toISOString() });
 
@@ -192,7 +192,7 @@ function seedDemo() {
     { id: uid(), id_especie: especies[2].id, periodo, permisos_emitidos: 210, umbral: 300, estado: "activa", created_at: isoFromOffset(-5).toISOString() },
   ];
 
-  DB = { __v: 3, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, reportes: [], seq, session: null };
+  DB = { __v: 4, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, reportes: [], seq, session: null };
   saveDB(DB);
 }
 
@@ -411,42 +411,46 @@ export async function getLugares(catId) {
   return DB.lugares.filter((l) => l.id_catamaran === catId).sort((a, b) => a.numero - b.numero);
 }
 
-/* Lugares ocupados (confirmados) en una fecha, para todos los catamaranes.
- * En Supabase se lee la vista v_lugares_ocupados (migración 002), que muestra
- * la ocupación sin revelar quién reservó; si no existe, se consulta la tabla
- * (limitada por RLS a lo que el usuario puede ver). */
-async function ocupadosPorFecha(fecha) {
+/* Lugares ocupados (confirmados) en una fecha y, si se indica, en un turno,
+ * para todos los catamaranes. En Supabase se lee la vista v_lugares_ocupados,
+ * que muestra la ocupación sin revelar quién reservó; si no existe, se consulta
+ * la tabla (limitada por RLS a lo que el usuario puede ver). Sin la columna
+ * "turno" (base anterior a la migración 004) la ocupación se toma por día. */
+async function ocupadosPorFecha(fecha, turno = null) {
+  let rows;
   if (MODE === "supabase") {
-    let rows = null;
-    const v = await sb.from("v_lugares_ocupados").select("id_lugar, id_catamaran").eq("fecha", fecha);
+    const v = await sb.from("v_lugares_ocupados").select("*").eq("fecha", fecha);
     if (!v.error) rows = v.data;
     else {
-      const t = await sb.from("reserva_lugar").select("id_lugar, lugar!inner(id_catamaran)").eq("fecha", fecha).eq("estado", "confirmada");
+      const t = await sb.from("reserva_lugar").select("*, lugar!inner(id_catamaran)").eq("fecha", fecha).eq("estado", "confirmada");
       if (t.error) throw t.error;
-      rows = t.data.map((r) => ({ id_lugar: r.id_lugar, id_catamaran: r.lugar?.id_catamaran }));
+      rows = t.data.map((r) => ({ id_lugar: r.id_lugar, id_catamaran: r.lugar?.id_catamaran, turno: r.turno }));
     }
-    return rows;
+  } else {
+    const lugarCat = new Map(DB.lugares.map((l) => [l.id, l.id_catamaran]));
+    rows = DB.reserva_lugar.filter((rl) => rl.fecha === fecha && rl.estado === "confirmada")
+      .map((rl) => ({ id_lugar: rl.id_lugar, id_catamaran: lugarCat.get(rl.id_lugar), turno: rl.turno }));
   }
-  const lugarCat = new Map(DB.lugares.map((l) => [l.id, l.id_catamaran]));
-  return DB.reserva_lugar.filter((rl) => rl.fecha === fecha && rl.estado === "confirmada")
-    .map((rl) => ({ id_lugar: rl.id_lugar, id_catamaran: lugarCat.get(rl.id_lugar) }));
+  return turno ? rows.filter((r) => !r.turno || r.turno === turno) : rows;
 }
 
-/** Devuelve un array con los IDs de lugar ocupados para esa fecha. */
-export async function getOcupacion(catId, fecha) {
+/** Devuelve un array con los IDs de lugar ocupados para esa fecha y turno. */
+export async function getOcupacion(catId, fecha, turno = null) {
   await ready();
-  return (await ocupadosPorFecha(fecha)).filter((r) => r.id_catamaran === catId).map((r) => r.id_lugar);
+  return (await ocupadosPorFecha(fecha, turno)).filter((r) => r.id_catamaran === catId).map((r) => r.id_lugar);
 }
 
-/** Catamaranes con lugares libres/ocupados para una fecha (HU-004). */
-export async function disponibilidad(fecha) {
+/** Catamaranes con lugares libres/ocupados para una fecha y turno (HU-004).
+ *  Sin turno, la ocupación es la del día completo: "plazas" suma ambos turnos. */
+export async function disponibilidad(fecha, turno = null) {
   await ready();
-  const [cats, ocupados] = await Promise.all([listCatamaranes(), ocupadosPorFecha(fecha)]);
+  const [cats, ocupados] = await Promise.all([listCatamaranes(), ocupadosPorFecha(fecha, turno)]);
   const porCat = new Map();
   ocupados.forEach((r) => porCat.set(r.id_catamaran, (porCat.get(r.id_catamaran) || 0) + 1));
   return cats.map((c) => {
     const ocup = porCat.get(c.id) || 0;
-    return { ...c, ocupados: ocup, libres: Math.max(0, Number(c.capacidad) - ocup) };
+    const plazas = Number(c.capacidad) * (turno ? 1 : 2);
+    return { ...c, ocupados: ocup, plazas, libres: Math.max(0, plazas - ocup) };
   });
 }
 
@@ -488,17 +492,21 @@ export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo 
   // Demo: replica la lógica del RPC crear_reserva_completa.
   const u = demoSessionUser();
   const cat = byId(DB.catamaranes, catamaranId);
+  turno = turno === "tarde" ? "tarde" : "manana";
   if (!cat) throw new Error("El catamarán no existe.");
+  if (cat.estado !== "activa") throw new Error("El catamarán no está disponible para reservas.");
+  if (fecha < todayISO()) throw new Error("No se puede reservar una fecha pasada.");
   if (!lugares?.length) throw new Error("Elegí al menos un lugar.");
   for (const lid of lugares) {
-    const ocupado = DB.reserva_lugar.some((rl) => rl.id_lugar === lid && rl.fecha === fecha && rl.estado === "confirmada");
+    if ((byId(DB.lugares, lid) || {}).id_catamaran !== cat.id) throw new Error("Los lugares elegidos no pertenecen a ese catamarán.");
+    const ocupado = DB.reserva_lugar.some((rl) => rl.id_lugar === lid && rl.fecha === fecha && (rl.turno || "manana") === turno && rl.estado === "confirmada");
     if (ocupado) throw new Error("Uno de los lugares ya fue reservado. Actualizá la grilla.");
   }
   const monto = cat.precio * lugares.length;
   const rId = uid();
-  DB.reservas.push({ id: rId, id_usuario: u.id, id_catamaran: cat.id, fecha, turno: turno || "manana", estado: "confirmada", cantidad_lugares: lugares.length, monto_total: monto, created_at: new Date().toISOString() });
+  DB.reservas.push({ id: rId, id_usuario: u.id, id_catamaran: cat.id, fecha, turno, estado: "confirmada", cantidad_lugares: lugares.length, monto_total: monto, created_at: new Date().toISOString() });
   for (const lid of lugares)
-    DB.reserva_lugar.push({ id: uid(), id_reserva: rId, id_lugar: lid, fecha, estado: "confirmada" });
+    DB.reserva_lugar.push({ id: uid(), id_reserva: rId, id_lugar: lid, fecha, turno, estado: "confirmada" });
   DB.pagos.push({ id: uid(), id_reserva: rId, monto, metodo, estado: "aprobado", comprobante: "CMP-" + rId.replace(/-/g, "").slice(0, 10).toUpperCase(), fecha_pago: new Date().toISOString() });
 
   const numero = "PCC-" + String(DB.seq++).padStart(6, "0");
@@ -510,8 +518,28 @@ export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo 
   const codigo = `${numero}|${u.id}|${fecha}`;
   DB.permisos.push({ id: pId, id_reserva: rId, id_usuario: u.id, id_especie: especieId, numero, tipo: tipoPermiso, codigo_qr: codigo, fecha_emision: emision.toISOString(), fecha_vencimiento: vence.toISOString(), estado: "vigente" });
   DB.notificaciones.unshift({ id: uid(), id_usuario: u.id, tipo: "reserva", titulo: "Reserva confirmada", mensaje: `Tu reserva del ${fecha.split("-").reverse().join("/")} fue confirmada. Permiso ${numero}.`, leida: false, created_at: emision.toISOString() });
+  actualizarAlertaFaunaDemo(especieId, emision);
   persist();
   return { reserva_id: rId, permiso_id: pId, numero_permiso: numero, monto_total: monto, codigo_qr: codigo, fecha_vencimiento: vence.toISOString() };
+}
+
+/* Demo: replica el disparador actualizar_alerta_fauna (HU-015). Si los permisos
+ * del mes de la especie alcanzan el 80 % del umbral, se registra la alerta y se
+ * avisa a la administración municipal; si ya existe, se actualiza el conteo. */
+function actualizarAlertaFaunaDemo(especieId, emision) {
+  const esp = byId(DB.especies, especieId);
+  if (!esp || !(esp.umbral_permisos > 0)) return;
+  const periodo = dateISO(emision).slice(0, 7);
+  const cant = DB.permisos.filter((p) => p.id_especie === esp.id && p.estado !== "anulado" && dateISO(new Date(p.fecha_emision)).slice(0, 7) === periodo).length;
+  const alerta = DB.alertas.find((a) => a.id_especie === esp.id && a.periodo === periodo && a.estado === "activa");
+  if (alerta) { alerta.permisos_emitidos = Math.max(alerta.permisos_emitidos, cant); alerta.umbral = esp.umbral_permisos; return; }
+  if (cant * 100 < esp.umbral_permisos * 80) return;
+  DB.alertas.unshift({ id: uid(), id_especie: esp.id, periodo, permisos_emitidos: cant, umbral: esp.umbral_permisos, estado: "activa", created_at: emision.toISOString() });
+  DB.usuarios.filter((x) => x.rol === "admin_municipal" && x.activo !== false).forEach((adm) => DB.notificaciones.unshift({
+    id: uid(), id_usuario: adm.id, tipo: "sistema", titulo: "Alerta de fauna",
+    mensaje: `Los permisos de ${esp.nombre} del período ${periodo} llegaron a ${cant} sobre un umbral de ${esp.umbral_permisos}.`,
+    leida: false, created_at: emision.toISOString(),
+  }));
 }
 
 export async function anularReserva(reservaId) {
@@ -840,14 +868,17 @@ export async function ultimosPermisos(limit = 6) {
  * ========================================================================== */
 const DESTINATARIO = () => CFG.MUNICIPIO || "Municipio de Coronel Moldes";
 const periodoActual = () => todayISO().slice(0, 7);
-const tituloReporte = (tipo) => ({
+/* Mes anterior (YYYY-MM): el reporte automático resume el mes que cerró. */
+const periodoAnterior = () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return dateISO(d).slice(0, 7); };
+const finDeMes = (periodo) => { const [y, m] = periodo.split("-").map(Number); return dateISO(new Date(y, m, 0)); };
+const tituloReporte = (tipo, periodo) => ({
   ocupacion: "Reporte de ocupación de catamaranes", permisos: "Reporte de permisos emitidos",
   fauna: "Reporte de presión pesquera por especie", ingresos: "Reporte de ingresos",
-}[tipo] || "Reporte general de actividad pesquera") + " · " + periodoActual();
+}[tipo] || "Reporte general de actividad pesquera") + " · " + periodo;
 
-async function snapshotReporte() {
+async function snapshotReporte(periodo) {
   const [resumen, permisos_por_especie, ocupacion_catamaranes, reservas_por_dia] = await Promise.all([
-    dashboardResumen(), permisosPorEspecie(), ocupacionCatamaranes(), reservasPorDia({ from: periodoActual() + "-01" }),
+    dashboardResumen(), permisosPorEspecie(), ocupacionCatamaranes(), reservasPorDia({ from: periodo + "-01", to: finDeMes(periodo) }),
   ]);
   return { resumen, permisos_por_especie, ocupacion_catamaranes, reservas_por_dia, generado_en: new Date().toISOString() };
 }
@@ -855,25 +886,26 @@ async function snapshotReporte() {
 export async function enviarReporteMunicipio(tipo = "general", origen = "manual") {
   await ready();
   const destinatario = DESTINATARIO();
+  const periodo = origen === "automatico" ? periodoAnterior() : periodoActual();
   if (MODE === "supabase") {
     const { data, error } = await sb.rpc("generar_reporte_municipal", { p_tipo: tipo, p_origen: origen });
     if (!error) return data;
     if (!esFuncionInexistente(error)) throw new Error(error.message);
-    const datos = await snapshotReporte();
+    const datos = await snapshotReporte(periodo);
     const { data: s } = await sb.auth.getSession();
     const { data: row, error: e2 } = await sb.from("reporte").insert({
-      tipo, titulo: tituloReporte(tipo), fecha: todayISO(),
-      parametros: { periodo: periodoActual(), origen, destinatario },
+      tipo, titulo: tituloReporte(tipo, periodo), fecha: todayISO(),
+      parametros: { periodo, origen, destinatario },
       datos, generado_por: s.session?.user?.id || null,
     }).select().single();
     if (e2) throw new Error(e2.message);
     return row;
   }
   const u = demoSessionUser();
-  const datos = await snapshotReporte();
+  const datos = await snapshotReporte(periodo);
   const rep = {
-    id: uid(), tipo, titulo: tituloReporte(tipo), fecha: todayISO(),
-    parametros: { periodo: periodoActual(), origen, destinatario }, destinatario, origen, estado_envio: "enviado",
+    id: uid(), tipo, titulo: tituloReporte(tipo, periodo), fecha: todayISO(),
+    parametros: { periodo, origen, destinatario }, destinatario, origen, estado_envio: "enviado",
     datos, generado_por: u?.id || null, created_at: new Date().toISOString(),
   };
   DB.reportes = DB.reportes || [];
@@ -905,12 +937,12 @@ export async function listReportes(limit = 12) {
   }));
 }
 
-/* Cierre de período: si el mes en curso todavía no tiene reporte automático,
+/* Cierre de período: si el mes que cerró todavía no tiene reporte automático,
  * lo genera. Cubre el caso en que pg_cron no esté habilitado. */
 export async function asegurarReporteMensual() {
   await ready();
   const existentes = await listReportes(50);
-  const periodo = periodoActual();
+  const periodo = periodoAnterior();
   if (existentes.some((r) => r.origen === "automatico" && r.periodo === periodo)) return null;
   return enviarReporteMunicipio("general", "automatico");
 }
@@ -934,6 +966,18 @@ export async function setRol(userId, rol) {
     if (error) throw new Error(error.message); return true;
   }
   const u = byId(DB.usuarios, userId); if (u) u.rol = rol; persist();
+  return true;
+}
+
+/* Activa o desactiva una cuenta (plan de contingencia: cuentas comprometidas).
+ * Una cuenta desactivada no puede ingresar: el enrutador cierra su sesión. */
+export async function setActivo(userId, activo) {
+  await ready();
+  if (MODE === "supabase") {
+    const { error } = await sb.from("usuario").update({ activo: Boolean(activo) }).eq("id", userId);
+    if (error) throw new Error(error.message); return true;
+  }
+  const u = byId(DB.usuarios, userId); if (u) u.activo = Boolean(activo); persist();
   return true;
 }
 

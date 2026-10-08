@@ -34,18 +34,18 @@ No hay servidor propio ni proceso de compilación: el repositorio se sirve tal c
 | HU-001 | Registro en el primer ingreso con Google: se crea la cuenta con los datos de Google y se solicitan DNI, teléfono y tipo de cuenta | `#/registro` |
 | HU-002 | Inicio de sesión exclusivo con Google; mensaje de error si se cancela; redirección al ingreso sin sesión | `#/login` |
 | HU-003 | Alta y edición de catamaranes (estado, precio, capacidad, habilitación) | `#/gestion` |
-| HU-004 | Disponibilidad por fecha y turno con **lugares libres por catamarán** | `#/catamaranes` |
-| HU-005 | Reserva con selección visual de asientos; sin doble reserva (índice único) | `#/reserva/:id` |
+| HU-004 | Disponibilidad por fecha y turno con **lugares libres por catamarán** (cada asiento se reserva por fecha y turno) | `#/catamaranes` |
+| HU-005 | Reserva con selección visual de asientos; sin doble reserva (índice único por asiento, fecha y turno) | `#/reserva/:id` |
 | HU-006 | Permiso digital con QR, vencimiento y estado (vigente / vencido / anulado) | `#/permiso/:id` |
 | HU-007 | **Pasarela de pago simulada** con escenario de rechazo y comprobante digital | modal de pago en la reserva |
 | HU-008 | Reportes con gráficos, exportación CSV (Excel) y PDF | `#/reportes` |
 | HU-009 | **Envío de reportes al municipio** (manual y cierre mensual automático) con registro de fecha, destinatario y origen | `#/reportes` |
 | HU-010 | Historial de reservas y permisos | `#/historial` |
 | HU-011 | Centro de notificaciones y **recordatorios de salida** (día previo y día de la reserva), con preferencia del usuario | campana / `#/perfil` |
-| HU-012 | Gestión de roles | `#/usuarios` |
-| HU-013 | Panel municipal con **filtros por rango de fechas y embarcación** | `#/admin` |
+| HU-012 | Gestión de roles y activación o desactivación de cuentas | `#/usuarios` |
+| HU-013 | Panel municipal con **filtros por rango de fechas y embarcación** y exportación PDF | `#/admin` |
 | HU-014 | Perfil de usuario | `#/perfil` |
-| HU-015 | Monitoreo de fauna: permisos por especie y alertas por umbral | `#/reportes` |
+| HU-015 | Monitoreo de fauna: permisos por especie y **alertas automáticas** cuando los permisos del mes alcanzan el 80 % del umbral | `#/reportes` |
 
 ---
 
@@ -72,7 +72,8 @@ PescaCorral/
     ├── seed_actividad_demo.sql   # Reservas, permisos y alertas para presentar el panel
     └── migrations/         # Para bases creadas con versiones anteriores del esquema
         ├── 002_seguridad_reportes_recordatorios.sql
-        └── 003_ingreso_con_google.sql
+        ├── 003_ingreso_con_google.sql
+        └── 004_turnos_alertas_reportes.sql
 ```
 
 ---
@@ -96,7 +97,7 @@ Abrir `http://localhost:8080`.
 
 1. Crear un proyecto en https://supabase.com.
 2. **SQL Editor → New query**: pegar y ejecutar `database/schema.sql` completo, y luego `database/seed.sql`.
-3. Si la base ya existía con una versión anterior del esquema, ejecutar en cambio las migraciones de `database/migrations/` en orden (son idempotentes).
+3. Si la base ya existía con una versión anterior del esquema, ejecutar en cambio las migraciones de `database/migrations/` en orden (son idempotentes): 002, 003 y 004.
 4. (Opcional) **Database → Extensions**: habilitar `pg_cron` para que el reporte mensual y los recordatorios diarios se generen sin intervención. Si no está habilitado, la app los genera al ingresar a Reportes y a la pantalla principal.
 
 ### Ingreso con Google
@@ -141,7 +142,7 @@ update public.usuario set rol = 'admin_municipal', perfil_completo = true where 
 * **Sesiones JWT** emitidas por Supabase Auth, con renovación automática. El flujo PKCE devuelve un código de un solo uso (`?code=`) que la aplicación intercambia por la sesión.
 * **Primer ingreso controlado**: sin DNI y tipo de cuenta confirmados, el enrutador solo permite la pantalla de alta.
 * **Protección del perfil** (trigger `proteger_perfil`): un usuario no puede cambiar su rol, su correo ni el estado de su cuenta; el tipo de cuenta se elige una sola vez.
-* **Cuentas desactivadas**: con `activo = false`, la aplicación cierra la sesión y rechaza el ingreso.
+* **Cuentas desactivadas**: la administración puede desactivar una cuenta desde `#/usuarios`; con `activo = false`, la aplicación cierra la sesión y rechaza el ingreso.
 * **RLS**: cada perfil (pescador, dueño, administración municipal, administrador del sistema) solo puede leer y modificar los registros que le corresponden, aun consultando la API directamente.
 
 ---
@@ -189,8 +190,9 @@ Tras cada cambio en `service-worker.js` se incrementa la constante `VERSION` par
 
 Definido en `database/schema.sql`:
 
-* **usuario** (extiende `auth.users`; rol, perfil completo, foto de Google), **especie**, **catamaran**, **lugar**, **reserva**, **reserva_lugar**, **permiso**, **pago**, **reporte** (con destinatario, origen y estado de envío), **notificacion** (con `id_reserva` para recordatorios), **alerta_fauna**.
-* Funciones: `crear_reserva_completa` (reserva + asientos + pago + permiso + notificación en una transacción), `anular_reserva`, `generar_reporte_municipal`, `generar_recordatorios`, `handle_new_user` (alta del perfil con los datos de Google) y `proteger_perfil` (protección de rol, correo y estado).
+* **usuario** (extiende `auth.users`; rol, perfil completo, foto de Google), **especie**, **catamaran**, **lugar**, **reserva**, **reserva_lugar** (asiento por fecha y turno), **permiso**, **pago**, **reporte** (con destinatario, origen y estado de envío), **notificacion** (con `id_reserva` para recordatorios), **alerta_fauna**.
+* Funciones: `crear_reserva_completa` (valida catamarán, asientos, fecha y turno, y crea reserva + asientos + pago + permiso + notificación en una transacción), `anular_reserva`, `generar_reporte_municipal` (el automático resume el mes que cerró), `generar_recordatorios`, `handle_new_user` (alta del perfil con los datos de Google) y `proteger_perfil` (protección de rol, correo y estado).
+* Disparador `actualizar_alerta_fauna`: al emitirse un permiso, si los permisos del mes de la especie alcanzan el 80 % del umbral, registra la alerta y avisa a la administración municipal.
 * Vistas: `v_dashboard_resumen`, `v_reservas_por_dia`, `v_ocupacion_catamaran`, `v_permisos_por_especie`, `v_lugares_ocupados`.
 
 ---

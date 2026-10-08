@@ -392,7 +392,7 @@ export async function viewCatamaranes(ctx) {
   const p = ctx.session.profile;
   const fecha = ctx.params.fecha || U.todayISO();
   const turno = ctx.params.turno || "manana";
-  const [cats, notifs] = await Promise.all([D.disponibilidad(fecha), D.listNotificaciones()]);
+  const [cats, notifs] = await Promise.all([D.disponibilidad(fecha, turno), D.listNotificaciones()]);
   const unread = notifs.filter((n) => !n.leida).length;
 
   U.mount(appShell({
@@ -465,7 +465,7 @@ export async function viewReserva(ctx) {
   if (!cat) { U.mount(appShell({ active: null, rol: p.rol, topbarHtml: topbar({ title: "Reservar", back: true, bell: false }), bodyHtml: emptyState("Catamarán no encontrado", "Volvé a la lista de catamaranes.", "boat") })); wireChrome(ctx); return; }
 
   const seleccion = new Set();
-  let ocupados = new Set(await D.getOcupacion(catId, fecha));
+  let ocupados = new Set(await D.getOcupacion(catId, fecha, turno));
 
   U.mount(appShell({
     active: null, rol: p.rol,
@@ -552,12 +552,12 @@ export async function viewReserva(ctx) {
     fecha = U.$("#r-fecha").value || U.todayISO();
     turno = U.$("#r-turno").value;
     seleccion.clear();
-    ocupados = new Set(await D.getOcupacion(catId, fecha));
+    ocupados = new Set(await D.getOcupacion(catId, fecha, turno));
     U.$("#seatmap").innerHTML = seatGrid(lugares, ocupados, seleccion);
     refreshSummary();
   };
   U.$("#r-fecha").addEventListener("change", reloadSeats);
-  U.$("#r-turno").addEventListener("change", () => { turno = U.$("#r-turno").value; });
+  U.$("#r-turno").addEventListener("change", reloadSeats);
 
   const labelBtn = `${U.icon("credit-card", { size: 20 })} Pagar y confirmar reserva`;
   confirmBtn.addEventListener("click", async () => {
@@ -895,7 +895,7 @@ export async function viewAdmin(ctx) {
     D.permisosPorEspecie(), D.disponibilidad(to), D.ultimosPermisos(6),
   ]);
   // Ocupación "en tiempo real" del día seleccionado (fin del rango), por embarcación.
-  const ocupacionAll = dispo.map((c) => ({ id: c.id, nombre: c.nombre, capacidad: Number(c.capacidad), lugares_ocupados: c.ocupados }));
+  const ocupacionAll = dispo.map((c) => ({ id: c.id, nombre: c.nombre, capacidad: Number(c.plazas), lugares_ocupados: c.ocupados }));
   const ocupacion = catSel ? ocupacionAll.filter((o) => o.id === catSel) : ocupacionAll;
 
   // Serie diaria del período (rellena ceros; agrupa por semana si el rango es largo)
@@ -924,7 +924,8 @@ export async function viewAdmin(ctx) {
       <select class="select" id="pa-cat" style="width:auto;padding:8px 10px;font-size:.85rem" aria-label="Embarcación">
         <option value="">Todas las embarcaciones</option>
         ${ocupacionAll.map((o) => `<option value="${o.id}"${o.id === catSel ? " selected" : ""}>${U.esc(o.nombre)}</option>`).join("")}
-      </select>`,
+      </select>
+      <button class="btn btn--soft btn--sm" data-pdf>${U.icon("file-text", { size: 16 })} PDF</button>`,
     body: `
       <div class="kpis">
         ${kpi("Reservas hoy", resumen.reservas_hoy, `${reservasPeriodo} en el período`, "up")}
@@ -943,7 +944,7 @@ export async function viewAdmin(ctx) {
       </div>
       <div class="grid-2">
         <div class="panel">
-          <h3>Ocupación por catamarán · ${U.fmtDate(to)}</h3>
+          <h3>Ocupación por catamarán · ${U.fmtDate(to)} (mañana y tarde)</h3>
           <table class="table">
             <thead><tr><th>Catamarán</th><th>Ocupación</th><th style="text-align:right">Lugares</th></tr></thead>
             <tbody>${ocupacion.map((o) => {
@@ -974,6 +975,7 @@ export async function viewAdmin(ctx) {
     ctx.go(`/admin?from=${f}&to=${t}${c ? "&cat=" + c : ""}`);
   };
   ["#pa-from", "#pa-to", "#pa-cat"].forEach((s) => U.$(s)?.addEventListener("change", applyFilters));
+  U.$("[data-pdf]")?.addEventListener("click", () => window.print());
 }
 
 function kpi(label, value, delta, dir) {
@@ -1038,7 +1040,7 @@ export async function viewReportes(ctx) {
             ${progressBar(a.permisos_emitidos, a.umbral)}
           </div>`;
         }).join("") : `<p class="muted">No hay alertas activas. La presión pesquera está dentro de los umbrales.</p>`}
-        <p class="panel__foot">El umbral de permisos por especie se configura según los estudios de la dirección de fauna.</p>
+        <p class="panel__foot">La alerta se genera automáticamente cuando los permisos del mes de una especie alcanzan el 80 % del umbral, que se configura según los estudios de la dirección de fauna.</p>
       </div>
       <div class="panel">
         <h3>${U.icon("mail", { size: 18 })} Reportes enviados al municipio</h3>
@@ -1087,7 +1089,7 @@ export async function viewUsuarios(ctx) {
     subtitle: `${usuarios.length} cuentas registradas`,
     body: `<div class="panel">
       <table class="table">
-        <thead><tr><th>Usuario</th><th>Contacto</th><th>DNI</th><th>Rol</th></tr></thead>
+        <thead><tr><th>Usuario</th><th>Contacto</th><th>DNI</th><th>Rol</th><th>Cuenta</th></tr></thead>
         <tbody>${usuarios.map((u) => `<tr>
           <td><b>${U.esc(u.nombre)} ${U.esc(u.apellido || "")}</b></td>
           <td><small class="muted">${U.esc(u.email)}<br>${U.esc(u.telefono || "—")}</small></td>
@@ -1097,15 +1099,26 @@ export async function viewUsuarios(ctx) {
               ${roles.map((r) => `<option value="${r}"${u.rol === r ? " selected" : ""}>${U.rolLabel(r)}</option>`).join("")}
             </select>
           </td>
+          <td>
+            <select class="select" data-activo="${u.id}" style="padding:8px 10px;font-size:.85rem" ${u.id === yo ? "disabled" : ""}>
+              <option value="1"${u.activo !== false ? " selected" : ""}>Activa</option>
+              <option value="0"${u.activo === false ? " selected" : ""}>Desactivada</option>
+            </select>
+          </td>
         </tr>`).join("")}</tbody>
       </table>
-      <p class="panel__foot">No podés cambiar tu propio rol. Los cambios se aplican al instante.</p>
+      <p class="panel__foot">No podés cambiar tu propio rol ni desactivar tu cuenta. Una cuenta desactivada no puede ingresar. Los cambios se aplican al instante.</p>
     </div>`,
   }, ctx));
   wireAdmin(ctx);
 
   U.$$("[data-rol]").forEach((sel) => sel.addEventListener("change", async () => {
     try { await D.setRol(sel.dataset.rol, sel.value); U.toast("Rol actualizado", "ok"); }
+    catch (err) { U.toast(err.message, "err"); }
+  }));
+  U.$$("[data-activo]").forEach((sel) => sel.addEventListener("change", async () => {
+    const activo = sel.value === "1";
+    try { await D.setActivo(sel.dataset.activo, activo); U.toast(activo ? "Cuenta activada" : "Cuenta desactivada", "ok"); }
     catch (err) { U.toast(err.message, "err"); }
   }));
 }
@@ -1185,10 +1198,15 @@ function catamaranModal(ctx, cat) {
             habilitacion: U.$("#c-hab").value.trim(),
             estado: U.$("#c-estado").value,
           };
-          if (!data.nombre) { U.toast("Poné un nombre", "err"); return false; }
+          // HU-003 · criterio 1: formulario incompleto o con datos inválidos.
+          const capacidad = Number(U.$("#c-cap").value);
+          if (!data.nombre) { U.toast("Ingresá el nombre del catamarán.", "err"); return false; }
+          if (!edit && !(Number.isInteger(capacidad) && capacidad >= 1 && capacidad <= 60)) { U.toast("La capacidad debe ser un número entero entre 1 y 60.", "err"); return false; }
+          if (!(data.precio >= 0) || U.$("#c-precio").value === "") { U.toast("Ingresá un precio por lugar válido.", "err"); return false; }
+          if (!data.habilitacion) { U.toast("Ingresá el número de habilitación municipal.", "err"); return false; }
           try {
             if (edit) await D.updateCatamaran(cat.id, data);
-            else await D.crearCatamaran({ ...data, capacidad: Number(U.$("#c-cap").value) });
+            else await D.crearCatamaran({ ...data, capacidad });
             U.closeModal(); U.toast(edit ? "Catamarán actualizado" : "Catamarán creado", "ok"); ctx.rerender();
           } catch (err) { U.toast(err.message, "err"); return false; }
         },

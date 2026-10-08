@@ -147,14 +147,16 @@ create index idx_reserva_fecha     on public.reserva (fecha);
 
 -- ---------------------------------------------------------------------------
 -- RESERVA_LUGAR  (asientos concretos de una reserva · normaliza reserva.lugares)
---   Incluye "fecha" (denormalizada) para impedir doble reserva del mismo
---   asiento en la misma fecha mediante un índice único parcial.
+--   Incluye "fecha" y "turno" (denormalizados) para impedir la doble reserva
+--   del mismo asiento en la misma salida mediante un índice único parcial.
 -- ---------------------------------------------------------------------------
 create table public.reserva_lugar (
     id          uuid primary key default gen_random_uuid(),
     id_reserva  uuid not null references public.reserva (id) on delete cascade,
     id_lugar    uuid not null references public.lugar (id)   on delete restrict,
     fecha       date not null,
+    turno       text not null default 'manana'
+                    constraint reserva_lugar_turno_check check (turno in ('manana','tarde')),
     estado      text not null default 'confirmada'
                     check (estado in ('confirmada','cancelada')),
     created_at  timestamptz not null default now()
@@ -162,9 +164,9 @@ create table public.reserva_lugar (
 create index idx_reserva_lugar_reserva on public.reserva_lugar (id_reserva);
 create index idx_reserva_lugar_lugar   on public.reserva_lugar (id_lugar);
 
--- Un asiento sólo puede estar reservado una vez por fecha (si no está cancelado).
-create unique index uq_lugar_fecha_activa
-    on public.reserva_lugar (id_lugar, fecha)
+-- Un asiento sólo puede estar reservado una vez por fecha y turno (si no está cancelado).
+create unique index uq_lugar_fecha_turno_activa
+    on public.reserva_lugar (id_lugar, fecha, turno)
     where (estado = 'confirmada');
 
 -- ---------------------------------------------------------------------------
@@ -399,7 +401,8 @@ create trigger trg_usuario_proteger
 -- ----------------------------------------------------------------------------
 -- crear_reserva_completa
 --   Operación atómica que implementa el flujo del TFG (HU-005 + HU-006 + HU-007):
---     1. Verifica que los asientos estén libres para la fecha.
+--     1. Valida el catamarán (activo), los asientos (de esa embarcación) y la
+--        fecha, y verifica que los asientos estén libres en esa fecha y turno.
 --     2. Crea la reserva.
 --     3. Registra los asientos (reserva_lugar).
 --     4. Registra el pago (aprobado).
@@ -425,7 +428,10 @@ set search_path = public
 as $$
 declare
     v_uid         uuid := auth.uid();
+    v_turno       text := coalesce(p_turno, 'manana');
+    v_hoy         date := (now() at time zone 'America/Argentina/Salta')::date;
     v_precio      numeric(12,2);
+    v_estado_cat  text;
     v_cant        integer := coalesce(array_length(p_lugares, 1), 0);
     v_total       numeric(12,2);
     v_reserva     uuid;
@@ -435,7 +441,6 @@ declare
     v_codigo      text;
     v_vence       timestamptz;
     v_permiso     uuid;
-    v_nombre      text;
 begin
     if v_uid is null then
         raise exception 'No autenticado';
@@ -443,45 +448,55 @@ begin
     if v_cant = 0 then
         raise exception 'Debe seleccionar al menos un lugar';
     end if;
+    if v_turno not in ('manana', 'tarde') then
+        raise exception 'Turno inválido';
+    end if;
+    if p_fecha < v_hoy then
+        raise exception 'No se puede reservar una fecha pasada';
+    end if;
 
-    select precio into v_precio from public.catamaran where id = p_id_catamaran;
+    select precio, estado into v_precio, v_estado_cat from public.catamaran where id = p_id_catamaran;
     if v_precio is null then
         raise exception 'El catamarán no existe';
     end if;
+    if v_estado_cat <> 'activa' then
+        raise exception 'El catamarán no está disponible para reservas';
+    end if;
+    if exists (select 1 from unnest(p_lugares) as x(id)
+               left join public.lugar l on l.id = x.id
+               where l.id is null or l.id_catamaran <> p_id_catamaran) then
+        raise exception 'Los lugares elegidos no pertenecen a ese catamarán';
+    end if;
 
-    -- Verificar disponibilidad de cada asiento en la fecha pedida.
+    -- Disponibilidad de cada asiento en la fecha y el turno pedidos.
     foreach v_lugar in array p_lugares loop
         select count(*) into v_ocupado
         from public.reserva_lugar
         where id_lugar = v_lugar
           and fecha    = p_fecha
+          and turno    = v_turno
           and estado   = 'confirmada';
         if v_ocupado > 0 then
-            raise exception 'El lugar % ya está ocupado para esa fecha', v_lugar;
+            raise exception 'Uno de los lugares ya está ocupado en ese turno';
         end if;
     end loop;
 
     v_total := v_precio * v_cant;
 
-    -- 2. Reserva
     insert into public.reserva (id_usuario, id_catamaran, fecha, turno,
                                 estado, cantidad_lugares, monto_total)
-    values (v_uid, p_id_catamaran, p_fecha, coalesce(p_turno,'manana'),
-            'confirmada', v_cant, v_total)
+    values (v_uid, p_id_catamaran, p_fecha, v_turno, 'confirmada', v_cant, v_total)
     returning id into v_reserva;
 
-    -- 3. Asientos
     foreach v_lugar in array p_lugares loop
-        insert into public.reserva_lugar (id_reserva, id_lugar, fecha, estado)
-        values (v_reserva, v_lugar, p_fecha, 'confirmada');
+        insert into public.reserva_lugar (id_reserva, id_lugar, fecha, turno, estado)
+        values (v_reserva, v_lugar, p_fecha, v_turno, 'confirmada');
     end loop;
 
-    -- 4. Pago
     insert into public.pago (id_reserva, monto, metodo, estado, comprobante)
     values (v_reserva, v_total, coalesce(p_metodo_pago,'tarjeta'), 'aprobado',
             'CMP-' || upper(substr(replace(v_reserva::text,'-',''), 1, 10)));
 
-    -- 5. Permiso digital
     v_numero := public.generar_numero_permiso();
     v_vence  := case coalesce(p_tipo_permiso,'diario')
                     when 'anual'   then (p_fecha + interval '1 year')
@@ -496,10 +511,8 @@ begin
             v_codigo, v_vence, 'vigente')
     returning id into v_permiso;
 
-    -- 6. Notificación
-    select nombre into v_nombre from public.usuario where id = v_uid;
-    insert into public.notificacion (id_usuario, tipo, titulo, mensaje)
-    values (v_uid, 'reserva', 'Reserva confirmada',
+    insert into public.notificacion (id_usuario, id_reserva, tipo, titulo, mensaje)
+    values (v_uid, v_reserva, 'reserva', 'Reserva confirmada',
             'Tu reserva para el ' || to_char(p_fecha,'DD/MM/YYYY') ||
             ' fue confirmada. Permiso ' || v_numero || '.');
 
@@ -582,7 +595,7 @@ order by permisos_emitidos desc;
 -- (HU-004). Sin security_invoker: se ejecuta como propietario y por eso no la
 -- limita RLS; expone sólo id_lugar, id_catamaran y fecha, nunca quién reservó.
 create or replace view public.v_lugares_ocupados as
-select rl.id_lugar, l.id_catamaran, rl.fecha
+select rl.id_lugar, l.id_catamaran, rl.fecha, rl.turno
 from public.reserva_lugar rl
 join public.lugar l on l.id = rl.id_lugar
 where rl.estado = 'confirmada';
@@ -749,8 +762,8 @@ grant select on public.v_lugares_ocupados to anon, authenticated;
 -- alter publication supabase_realtime add table public.notificacion;
 
 -- ============================================================================
--- 8. REPORTES AL MUNICIPIO Y RECORDATORIOS
---    (mismo contenido que las migraciones 002 y 003)
+-- 8. REPORTES, RECORDATORIOS Y ALERTAS DE FAUNA
+--    (mismo contenido que las migraciones 002 a 004)
 -- ============================================================================
 
 -- ---- 8.1 Envío de reportes al municipio (HU-009) ----------------------------
@@ -761,7 +774,10 @@ security definer
 set search_path = public
 as $$
 declare
-    v_periodo text := to_char(current_date, 'YYYY-MM');
+    v_hoy     date := (now() at time zone 'America/Argentina/Salta')::date;
+    v_desde   date;
+    v_hasta   date;
+    v_periodo text;
     v_dest    text := 'Municipio de Coronel Moldes';
     v_titulo  text;
     v_datos   jsonb;
@@ -773,6 +789,15 @@ begin
         raise exception 'Sólo un administrador puede enviar reportes al municipio';
     end if;
     if p_origen not in ('manual', 'automatico') then p_origen := 'manual'; end if;
+
+    -- Automático: mes anterior completo. Manual: mes en curso hasta hoy.
+    if p_origen = 'automatico' then
+        v_desde := (date_trunc('month', v_hoy) - interval '1 month')::date;
+    else
+        v_desde := date_trunc('month', v_hoy)::date;
+    end if;
+    v_hasta   := (v_desde + interval '1 month')::date;
+    v_periodo := to_char(v_desde, 'YYYY-MM');
 
     v_titulo := case p_tipo
                     when 'ocupacion' then 'Reporte de ocupación de catamaranes'
@@ -787,13 +812,13 @@ begin
         'permisos_por_especie',  (select coalesce(jsonb_agg(to_jsonb(e)), '[]'::jsonb) from public.v_permisos_por_especie e),
         'ocupacion_catamaranes', (select coalesce(jsonb_agg(to_jsonb(o)), '[]'::jsonb) from public.v_ocupacion_catamaran o),
         'reservas_por_dia',      (select coalesce(jsonb_agg(to_jsonb(r)), '[]'::jsonb) from public.v_reservas_por_dia r
-                                   where r.fecha >= date_trunc('month', current_date)),
+                                   where r.fecha >= v_desde and r.fecha < v_hasta),
         'generado_en',           now()
     ) into v_datos;
 
     insert into public.reporte (tipo, titulo, fecha, parametros, datos, generado_por, destinatario, origen, estado_envio)
     values (case when p_tipo in ('ocupacion','permisos','ingresos','fauna','general') then p_tipo else 'general' end,
-            v_titulo, current_date,
+            v_titulo, v_hoy,
             jsonb_build_object('periodo', v_periodo, 'origen', p_origen, 'destinatario', v_dest),
             v_datos, auth.uid(), v_dest, p_origen, 'enviado')
     returning id into v_id;
@@ -844,7 +869,67 @@ end;
 $$;
 grant execute on function public.generar_recordatorios(boolean) to authenticated;
 
--- ---- 8.3 Automatización con pg_cron (opcional) ------------------------------
+-- ---- 8.3 Alertas de fauna automáticas (HU-015) ---------------------------
+-- Al emitirse un permiso, si los permisos del mes de esa especie alcanzan el
+-- 80 % del umbral, se registra la alerta y se avisa a la administración municipal.
+create or replace function public.actualizar_alerta_fauna()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_periodo text := to_char(new.fecha_emision at time zone 'America/Argentina/Salta', 'YYYY-MM');
+    v_umbral  integer;
+    v_especie text;
+    v_cant    integer;
+    v_alerta  uuid;
+    adm       record;
+begin
+    if new.id_especie is null then
+        return new;
+    end if;
+    select umbral_permisos, nombre into v_umbral, v_especie
+    from public.especie where id = new.id_especie;
+    if coalesce(v_umbral, 0) = 0 then
+        return new;
+    end if;
+
+    select count(*) into v_cant
+    from public.permiso p
+    where p.id_especie = new.id_especie
+      and p.estado <> 'anulado'
+      and to_char(p.fecha_emision at time zone 'America/Argentina/Salta', 'YYYY-MM') = v_periodo;
+
+    select id into v_alerta
+    from public.alerta_fauna
+    where id_especie = new.id_especie and periodo = v_periodo and estado = 'activa'
+    limit 1;
+
+    if v_alerta is not null then
+        update public.alerta_fauna
+        set permisos_emitidos = greatest(permisos_emitidos, v_cant), umbral = v_umbral
+        where id = v_alerta;
+    elsif v_cant * 100 >= v_umbral * 80 then
+        insert into public.alerta_fauna (id_especie, periodo, permisos_emitidos, umbral, estado)
+        values (new.id_especie, v_periodo, v_cant, v_umbral, 'activa');
+        for adm in select id from public.usuario where rol = 'admin_municipal' and activo loop
+            insert into public.notificacion (id_usuario, tipo, titulo, mensaje)
+            values (adm.id, 'sistema', 'Alerta de fauna',
+                    'Los permisos de ' || v_especie || ' del período ' || v_periodo ||
+                    ' llegaron a ' || v_cant || ' sobre un umbral de ' || v_umbral || '.');
+        end loop;
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists trg_permiso_alerta_fauna on public.permiso;
+create trigger trg_permiso_alerta_fauna
+    after insert on public.permiso
+    for each row execute function public.actualizar_alerta_fauna();
+
+-- ---- 8.4 Automatización con pg_cron (opcional) ------------------------------
 -- Requiere habilitar la extensión en Supabase -> Database -> Extensions. Si no
 -- está disponible, la app genera el reporte mensual al ingresar a Reportes y
 -- los recordatorios al ingresar a la pantalla principal.

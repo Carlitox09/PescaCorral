@@ -6,7 +6,7 @@
 --  presentación del prototipo.
 --
 --  REQUISITOS
---    1. Haber ejecutado schema.sql y seed.sql (o las migraciones 002 y 003).
+--    1. Haber ejecutado schema.sql y seed.sql (o las migraciones 002 a 004).
 --    2. Haber ingresado al menos una vez a la aplicación con la cuenta de
 --       Google que se usará en la demostración y completado el perfil.
 --
@@ -59,6 +59,7 @@ begin
 
     for i in 0..33 loop
         v_fecha := current_date - (30 - i);
+        v_turno := case when i % 3 = 0 then 'tarde' else 'manana' end;
 
         -- Catamarán activo, rotando entre los disponibles.
         select c.id, c.precio into v_cat_id, v_precio
@@ -68,7 +69,7 @@ begin
         offset (i % v_activos)
         limit 1;
 
-        -- Entre 1 y 4 lugares que sigan libres en esa fecha.
+        -- Entre 1 y 4 lugares que sigan libres en esa fecha y turno.
         v_cant := 1 + (i % 4);
         select array_agg(l.id) into v_lugares
         from (
@@ -81,6 +82,7 @@ begin
                   from public.reserva_lugar rl
                   where rl.id_lugar = lu.id
                     and rl.fecha = v_fecha
+                    and rl.turno = v_turno
                     and rl.estado = 'confirmada')
             order by lu.numero
             limit v_cant
@@ -102,7 +104,6 @@ begin
             v_estado := 'confirmada';
         end if;
 
-        v_turno  := case when i % 3 = 0 then 'tarde' else 'manana' end;
         v_tipo   := case when i % 9 = 0 then 'semanal'
                          when i % 17 = 0 then 'anual'
                          else 'diario' end;
@@ -125,8 +126,8 @@ begin
         returning id into v_reserva;
 
         foreach v_lugar in array v_lugares loop
-            insert into public.reserva_lugar (id_reserva, id_lugar, fecha, estado)
-            values (v_reserva, v_lugar, v_fecha,
+            insert into public.reserva_lugar (id_reserva, id_lugar, fecha, turno, estado)
+            values (v_reserva, v_lugar, v_fecha, v_turno,
                     case when v_estado = 'cancelada' then 'cancelada' else 'confirmada' end);
         end loop;
 
