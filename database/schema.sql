@@ -50,6 +50,11 @@ drop table if exists public.usuario        cascade;
 drop sequence if exists public.seq_numero_permiso cascade;
 drop sequence if exists public.seq_numero_reserva cascade;
 
+-- Funciones de versiones anteriores (otra firma u objetos que ya no se usan).
+drop function if exists public.crear_reserva_completa(uuid, date, text, uuid[], text, text, uuid);
+drop function if exists public.registrar_intento_acceso(text, boolean);
+drop function if exists public.acceso_bloqueado(text);
+
 -- ============================================================================
 -- 1. TABLAS
 -- ============================================================================
@@ -123,7 +128,7 @@ create table public.lugar (
     id            uuid primary key default gen_random_uuid(),
     id_catamaran  uuid not null references public.catamaran (id) on delete cascade,
     numero        integer not null check (numero > 0),
-    ubicacion     text,                          -- proa | popa | babor | estribor...
+    ubicacion     text,                          -- lugar en el plano, p. ej. 'estribor · centro' (ver ubicacion_lugar)
     activo        boolean not null default true, -- false = asiento fuera de servicio
     created_at    timestamptz not null default now(),
     unique (id_catamaran, numero)
@@ -139,7 +144,7 @@ create sequence public.seq_numero_reserva start 1001 increment 1;
 
 create table public.reserva (
     id              uuid primary key default gen_random_uuid(),
-    numero          text not null unique
+    numero          text not null
                         default ('RES-' || lpad(nextval('public.seq_numero_reserva')::text, 6, '0')),
     id_usuario      uuid not null references public.usuario (id)   on delete cascade,
     id_catamaran    uuid not null references public.catamaran (id) on delete restrict,
@@ -155,6 +160,7 @@ create table public.reserva (
     created_at      timestamptz not null default now(),
     updated_at      timestamptz not null default now()
 );
+create unique index uq_reserva_numero on public.reserva (numero);
 create index idx_reserva_usuario   on public.reserva (id_usuario);
 create index idx_reserva_catamaran on public.reserva (id_catamaran);
 create index idx_reserva_fecha     on public.reserva (fecha);
@@ -664,11 +670,12 @@ begin
 
     if v_nuevo then
         v_numero := public.generar_numero_permiso();
+        -- Vencimiento en hora de Salta (el diario vale hasta las 23:59 del día de la salida).
         v_vence  := case v_tipo
                         when 'anual'   then (p_fecha + interval '1 year')
                         when 'semanal' then (p_fecha + interval '7 day')
                         else (p_fecha + time '23:59')
-                    end;
+                    end at time zone 'America/Argentina/Salta';
         v_codigo := v_numero || '|' || v_uid::text || '|' || p_fecha::text;
 
         insert into public.permiso (id_reserva, id_usuario, id_especie, numero, tipo,
@@ -780,11 +787,12 @@ where rl.estado = 'confirmada';
 create or replace view public.v_dashboard_resumen with (security_invoker = true) as
 select
     (select count(*) from public.reserva
-        where fecha = current_date and estado <> 'cancelada')              as reservas_hoy,
+        where fecha = (now() at time zone 'America/Argentina/Salta')::date
+          and estado <> 'cancelada')                                       as reservas_hoy,
     (select count(*) from public.reserva
         where estado <> 'cancelada')                                       as reservas_total,
     (select count(*) from public.permiso
-        where estado = 'vigente')                                          as permisos_vigentes,
+        where estado = 'vigente' and fecha_vencimiento >= now())           as permisos_vigentes,
     (select count(*) from public.permiso)                                  as permisos_total,
     (select coalesce(sum(monto),0) from public.pago where estado='aprobado') as ingresos_total,
     (select count(*) from public.usuario where rol = 'pescador')           as usuarios_pescadores,
@@ -1021,6 +1029,32 @@ $$;
 grant execute on function public.generar_reporte_municipal(text, text) to authenticated;
 
 -- ---- 8.2 Recordatorios de salida (HU-011) -----------------------------------
+-- Estados al día: permisos vencidos y salidas ya realizadas (completadas).
+-- La llama generar_recordatorios, que corre a diario y al abrir la app.
+create or replace function public.actualizar_estados()
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_hoy      date := (now() at time zone 'America/Argentina/Salta')::date;
+    v_permisos integer;
+    v_reservas integer;
+begin
+    update public.permiso set estado = 'vencido'
+    where estado = 'vigente' and fecha_vencimiento < now();
+    get diagnostics v_permisos = row_count;
+
+    update public.reserva set estado = 'completada'
+    where estado = 'confirmada' and fecha < v_hoy;
+    get diagnostics v_reservas = row_count;
+
+    return jsonb_build_object('permisos_vencidos', v_permisos, 'reservas_completadas', v_reservas);
+end;
+$$;
+revoke execute on function public.actualizar_estados() from public, anon, authenticated;
+
 create or replace function public.generar_recordatorios(p_solo_usuario boolean default true)
 returns integer
 language plpgsql
@@ -1028,15 +1062,17 @@ security definer
 set search_path = public
 as $$
 declare
+    v_hoy date := (now() at time zone 'America/Argentina/Salta')::date;
     n integer := 0;
     r record;
 begin
+    perform public.actualizar_estados();
     for r in
         select res.id, res.id_usuario, res.fecha, res.turno, c.nombre as catamaran
         from public.reserva res
         join public.catamaran c on c.id = res.id_catamaran
         where res.estado = 'confirmada'
-          and res.fecha between current_date and current_date + 1
+          and res.fecha between v_hoy and v_hoy + 1
           and (not p_solo_usuario or res.id_usuario = auth.uid())
           and not exists (select 1 from public.notificacion n
                           where n.id_reserva = res.id and n.tipo = 'recordatorio')
@@ -1044,7 +1080,7 @@ begin
         insert into public.notificacion (id_usuario, id_reserva, tipo, titulo, mensaje)
         values (r.id_usuario, r.id, 'recordatorio', 'Recordatorio de salida',
                 'Tu salida en ' || r.catamaran || ' es ' ||
-                case when r.fecha = current_date then 'hoy' else 'mañana' end ||
+                case when r.fecha = v_hoy then 'hoy' else 'mañana' end ||
                 ' (' || to_char(r.fecha, 'DD/MM/YYYY') || '), turno ' ||
                 case when r.turno = 'tarde' then 'tarde' else 'mañana' end ||
                 '. Recordá presentar tu permiso digital al embarcar.');

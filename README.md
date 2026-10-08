@@ -73,12 +73,14 @@ PescaCorral/
     ├── schema.sql          # Esquema completo (tablas, funciones, vistas, RLS, pg_cron)
     ├── seed.sql            # Datos iniciales (especies, catamaranes, alertas)
     ├── seed_actividad_demo.sql   # Reservas, permisos y alertas para presentar el panel
+    ├── verificar_base.sql  # Chequeo de sólo lectura: compara la base con schema.sql y revisa los datos
     └── migrations/         # Para bases creadas con versiones anteriores del esquema
         ├── 002_seguridad_reportes_recordatorios.sql
         ├── 003_ingreso_con_google.sql
         ├── 004_turnos_alertas_reportes.sql
         ├── 005_acceso_personal.sql
-        └── 006_permiso_propio_comprobante.sql
+        ├── 006_permiso_propio_comprobante.sql
+        └── 007_mantenimiento_datos_al_dia.sql
 ```
 
 ---
@@ -102,8 +104,9 @@ Abrir `http://localhost:8080`.
 
 1. Crear un proyecto en https://supabase.com.
 2. **SQL Editor → New query**: pegar y ejecutar `database/schema.sql` completo, y luego `database/seed.sql`.
-3. Si la base ya existía con una versión anterior del esquema, ejecutar en cambio las migraciones de `database/migrations/` en orden (son idempotentes): 002 a 006.
-4. (Opcional) **Database → Extensions**: habilitar `pg_cron` para que el reporte mensual y los recordatorios diarios se generen sin intervención. Si no está habilitado, la app los genera al ingresar a Reportes y a la pantalla principal.
+3. Si la base ya existía con una versión anterior del esquema, ejecutar en cambio las migraciones de `database/migrations/` en orden (son idempotentes): 002 a 007.
+4. Para comprobar que la base coincide con el esquema y que los datos están al día, ejecutar `database/verificar_base.sql` (no modifica nada): devuelve una fila por cada diferencia, o "OK".
+5. (Opcional) **Database → Extensions**: habilitar `pg_cron` para que el reporte mensual y los recordatorios diarios se generen sin intervención. Si no está habilitado, la app los genera al ingresar a Reportes y a la pantalla principal.
 
 ### Ingreso con Google
 
@@ -208,7 +211,7 @@ Tras cada cambio en `service-worker.js` se incrementa la constante `VERSION` par
 Definido en `database/schema.sql`:
 
 * **usuario** (extiende `auth.users`; rol, perfil completo, foto de Google), **especie**, **catamaran**, **lugar** (con su ubicación en el plano), **reserva** (número `RES-`, permiso que ampara la salida e importe del permiso), **reserva_lugar** (asiento por fecha y turno), **permiso**, **tarifa_permiso**, **pago** (con código de autorización), **reporte** (con destinatario, origen y estado de envío), **notificacion** (con `id_reserva` para recordatorios), **alerta_fauna**.
-* Funciones: `crear_reserva_completa` (valida catamarán, asientos, fecha, turno, medio de pago y permiso propio, y crea reserva + asientos + pago + permiso nuevo + notificación en una transacción), `validar_permiso`, `ubicacion_lugar`, `anular_reserva` (no anula un permiso que ampara otra reserva activa), `generar_reporte_municipal` (el automático resume el mes que cerró), `generar_recordatorios`, `handle_new_user` (alta del perfil con los datos de Google) y `proteger_perfil` (protección de rol, correo y estado).
+* Funciones: `crear_reserva_completa` (valida catamarán, asientos, fecha, turno, medio de pago y permiso propio, y crea reserva + asientos + pago + permiso nuevo + notificación en una transacción), `validar_permiso`, `ubicacion_lugar`, `actualizar_estados` (marca permisos vencidos y salidas realizadas; la llama `generar_recordatorios` a diario), `anular_reserva` (no anula un permiso que ampara otra reserva activa), `generar_reporte_municipal` (el automático resume el mes que cerró), `generar_recordatorios`, `handle_new_user` (alta del perfil con los datos de Google) y `proteger_perfil` (protección de rol, correo y estado).
 * Disparador `actualizar_alerta_fauna`: al emitirse un permiso, si los permisos del mes de la especie alcanzan el 80 % del umbral, registra la alerta y avisa a la administración municipal.
 * Vistas: `v_dashboard_resumen`, `v_reservas_por_dia`, `v_ocupacion_catamaran`, `v_permisos_por_especie`, `v_lugares_ocupados`.
 

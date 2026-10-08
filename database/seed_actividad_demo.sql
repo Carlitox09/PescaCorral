@@ -6,7 +6,7 @@
 --  presentación del prototipo.
 --
 --  REQUISITOS
---    1. Haber ejecutado schema.sql y seed.sql (o las migraciones 002 a 004).
+--    1. Haber ejecutado schema.sql y seed.sql (o las migraciones 002 a 007).
 --    2. Haber ingresado al menos una vez a la aplicación con la cuenta de
 --       Google que se usará en la demostración y completado el perfil.
 --
@@ -18,6 +18,10 @@
 --  Genera salidas entre los últimos 30 días y los próximos 3, de modo que
 --  existan reservas pasadas, una para hoy y otra para mañana, necesarias para
 --  que se generen los recordatorios de salida.
+--
+--  Las alertas de fauna que crea son de demostración (cercanas al umbral, sin
+--  esa cantidad de permisos reales): verificar_base.sql las informa como
+--  "Alerta de fauna sin respaldo". Para quitarlas, usar el bloque del final.
 -- ============================================================================
 
 do $$
@@ -142,7 +146,7 @@ begin
                         when 'anual'   then (v_fecha + interval '1 year')
                         when 'semanal' then (v_fecha + interval '7 day')
                         else (v_fecha + time '23:59')
-                    end;
+                    end at time zone 'America/Argentina/Salta';
         v_estado_p := case
                         when v_estado = 'cancelada' then 'anulado'
                         when v_vence < now()        then 'vencido'
@@ -154,6 +158,9 @@ begin
         values (v_reserva, v_uid, v_esp, v_numero, v_tipo,
                 v_numero || '|' || v_uid::text || '|' || v_fecha::text,
                 v_fecha + time '10:05', v_vence, v_estado_p);
+        update public.reserva
+        set id_permiso = (select id from public.permiso where id_reserva = v_reserva)
+        where id = v_reserva;
 
         if v_estado <> 'cancelada' and v_fecha >= current_date then
             insert into public.notificacion (id_usuario, id_reserva, tipo, titulo, mensaje)
@@ -176,6 +183,7 @@ begin
     from public.especie e
     where e.nombre in ('Pejerrey', 'Dorado', 'Bagre');
 
+    perform public.actualizar_estados();
     raise notice 'Actividad generada: % salidas para %.', v_creadas, v_email;
 end $$;
 

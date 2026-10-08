@@ -2,7 +2,8 @@
 --  PescaCorral · Datos de ejemplo (seed)
 --  Ejecutar DESPUÉS de schema.sql, en el SQL Editor de Supabase.
 --
---  Carga catamaranes, asientos (lugar), especies y alertas de fauna.
+--  Carga catamaranes, asientos (lugar) y especies. Las alertas de fauna no se
+--  cargan: las genera el disparador actualizar_alerta_fauna con los permisos reales.
 --  No carga usuarios: las cuentas se crean desde la app (Supabase Auth) o
 --  desde Authentication -> Users en el panel de Supabase. Al final de este
 --  archivo hay un bloque OPCIONAL para generar reservas y permisos de demo
@@ -56,14 +57,6 @@ begin
         end loop;
     end loop;
 end $$;
-
--- ----------------------------------------------------------------------------
--- Alertas de fauna activas (el panel municipal muestra "3 alertas").
--- ----------------------------------------------------------------------------
-insert into public.alerta_fauna (id_especie, periodo, permisos_emitidos, umbral, estado) values
-  ('11111111-1111-1111-1111-111111111101', '2026-05', 380, 400, 'activa'),
-  ('11111111-1111-1111-1111-111111111102', '2026-05', 140, 150, 'activa'),
-  ('11111111-1111-1111-1111-111111111103', '2026-05', 290, 300, 'activa');
 
 -- ============================================================================
 --  BLOQUE OPCIONAL · Reservas y permisos de demostración

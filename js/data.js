@@ -853,6 +853,7 @@ function enrichPermisoDemo(p, full = false) {
 
 function mapPermisoSupabase(p, full = false) {
   const r = p.reserva || {};
+  p = applyPermisoEstado(p);   // un permiso vencido se muestra así aunque la base aún no lo haya marcado
   const out = {
     ...p, especie_nombre: p.especie?.nombre || "—",
     catamaran_nombre: r.catamaran?.nombre || "—",
@@ -987,6 +988,9 @@ export async function generarRecordatorios() {
   const u = demoSessionUser();
   if (!u) return 0;
   const hoy = todayISO(), manana = dateISO(isoFromOffset(1));
+  // Igual que public.actualizar_estados: permisos vencidos y salidas ya realizadas.
+  DB.permisos.forEach((x) => { if (x.estado === "vigente" && new Date(x.fecha_vencimiento).getTime() < Date.now()) x.estado = "vencido"; });
+  DB.reservas.forEach((x) => { if (x.estado === "confirmada" && x.fecha < hoy) x.estado = "completada"; });
   let n = 0;
   DB.reservas.filter((r) => r.id_usuario === u.id && r.estado === "confirmada" && (r.fecha === hoy || r.fecha === manana)).forEach((r) => {
     if (DB.notificaciones.some((x) => x.tipo === "recordatorio" && x.id_reserva === r.id)) return;
@@ -998,7 +1002,7 @@ export async function generarRecordatorios() {
     });
     n++;
   });
-  if (n) persist();
+  persist();
   return n;
 }
 
