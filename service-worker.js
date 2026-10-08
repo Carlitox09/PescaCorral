@@ -3,10 +3,13 @@
  *  Cachea el "app shell" para funcionamiento offline e instalación (PWA).
  *  Estrategia:
  *   - Navegación (HTML): network-first con fallback a index.html (SPA).
- *   - Recursos propios (css/js/icons/vendor): stale-while-revalidate.
+ *   - Recursos propios (css/js/icons/vendor): network-first revalidando con el
+ *     servidor, para que un cambio publicado se vea en la próxima carga; la copia
+ *     en caché sólo se usa sin conexión.
+ *   - Recursos externos (librería de Supabase): stale-while-revalidate.
  *   - Llamadas a Supabase (/auth, /rest, /realtime): siempre a la red (no se cachean).
  * ========================================================================== */
-const VERSION = "pescacorral-v1.5.0";
+const VERSION = "pescacorral-v1.6.0";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -30,8 +33,9 @@ const APP_SHELL = [
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(VERSION).then((cache) =>
-      // No fallar la instalación si algún recurso opcional no está.
-      Promise.allSettled(APP_SHELL.map((url) => cache.add(url)))
+      // No fallar la instalación si algún recurso opcional no está. "reload" evita
+      // guardar una copia vieja que el navegador todavía tenga en su caché HTTP.
+      Promise.allSettled(APP_SHELL.map((url) => cache.add(new Request(url, { cache: "reload" }))))
     ).then(() => self.skipWaiting())
   );
 });
@@ -55,16 +59,35 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Navegación: intentar red y, si falla, servir el shell cacheado.
+  // Navegación: intentar red (revalidando con el servidor) y, si falla, servir el
+  // shell cacheado. Una respuesta redirigida (p. ej. /Municipio -> /Municipio/) se
+  // devuelve como redirección, que es lo que admite una navegación.
   if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request).catch(() =>
-        caches.match(request).then((r) => r || caches.match("./index.html")))
+      fetch(request.url, { cache: "no-cache", credentials: "same-origin" })
+        .then((r) => (r.redirected ? Response.redirect(r.url, 302) : r))
+        .catch(() => caches.match(request).then((r) => r || caches.match("./index.html")))
     );
     return;
   }
 
-  // Resto: stale-while-revalidate.
+  // Recursos propios: red primero (revalidando con el servidor) y caché sin conexión.
+  if (url.origin === self.location.origin) {
+    event.respondWith(
+      fetch(new Request(request, { cache: "no-cache" }))
+        .then((response) => {
+          if (response && response.status === 200) {
+            const copy = response.clone();
+            caches.open(VERSION).then((cache) => cache.put(request, copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match(request))
+    );
+    return;
+  }
+
+  // Externos: stale-while-revalidate.
   event.respondWith(
     caches.match(request).then((cached) => {
       const network = fetch(request)
