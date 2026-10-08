@@ -8,7 +8,7 @@
 
   <!-- PWA -->
   <link rel="manifest" href="manifest.webmanifest" />
-  <meta name="theme-color" content="#0a2540" />
+  <meta name="theme-color" content="#3B0D14" />
   <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
   <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png" />
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
@@ -36,17 +36,30 @@
   <!-- Definiciones SVG reutilizables (logo + íconos de línea) -->
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
     <defs>
-      <linearGradient id="grad-mark" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#0a2540" />
-        <stop offset="1" stop-color="#0e7490" />
+      <!-- Logo: el puente sobre el Dique Cabra Corral al atardecer, con los cerros salteños -->
+      <linearGradient id="lm-cielo" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#A12A3A" />
+        <stop offset="1" stop-color="#5E1422" />
       </linearGradient>
+      <linearGradient id="lm-agua" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#2C8AA8" />
+        <stop offset="1" stop-color="#175A73" />
+      </linearGradient>
+      <clipPath id="lm-clip"><rect x="2" y="2" width="60" height="60" rx="15" /></clipPath>
       <symbol id="logo-mark" viewBox="0 0 64 64">
-        <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#grad-mark)" />
-        <path d="M32 17 L32 42" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>
-        <path d="M31 17 L31 41 L18 41 Z" fill="#ffffff"/>
-        <path d="M33 22 L33 41 L46 41 Z" fill="#f0703c"/>
-        <path d="M19 42 L45 42 L40 49 L24 49 Z" fill="#ffffff"/>
-        <path d="M17 52 L47 52" stroke="#7dd3e6" stroke-width="2" stroke-linecap="round"/>
+        <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#lm-cielo)" />
+        <g clip-path="url(#lm-clip)">
+          <circle cx="46" cy="18" r="6.5" fill="#F4C46A" />
+          <path d="M2 40 L14 25 L22 32 L32 20 L44 33 L52 27 L62 34 L62 46 L2 46 Z" fill="#CF8A2E" />
+          <path d="M2 44 L11 37 L21 42 L31 36 L41 42 L51 37 L62 42 L62 47 L2 47 Z" fill="#A9552B" />
+          <rect x="2" y="45" width="60" height="17" fill="url(#lm-agua)" />
+          <rect x="2" y="39.5" width="60" height="3.6" fill="#FFF6EA" />
+          <rect x="10.5" y="42" width="2.8" height="10" fill="#FFF6EA" />
+          <rect x="22.5" y="42" width="2.8" height="10" fill="#FFF6EA" />
+          <rect x="34.5" y="42" width="2.8" height="10" fill="#FFF6EA" />
+          <rect x="46.5" y="42" width="2.8" height="10" fill="#FFF6EA" />
+          <path d="M7 56h9M27 58.5h10M45 56h9" stroke="#FFFFFF" stroke-opacity=".45" stroke-width="1.5" stroke-linecap="round" />
+        </g>
       </symbol>
     </defs>
   </svg>

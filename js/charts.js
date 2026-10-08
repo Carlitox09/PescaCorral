@@ -6,7 +6,8 @@
 import { esc } from "./ui.js";
 
 export const CHART_COLORS = [
-  "#1b5fc4", "#14a89a", "#16a34a", "#f59e0b", "#8b5cf6", "#ef4444", "#0ea5e9", "#64748b",
+  // Paleta salteña: granate, ocre, agua del dique, verde de los valles, terracota.
+  "#8E1F2F", "#C9821E", "#1F6E8C", "#2E7D4F", "#B85C2E", "#6B4C7A", "#2C8AA8", "#7A6862",
 ];
 
 /* ------------------------------ Barras ----------------------------------- */
@@ -16,7 +17,7 @@ export const CHART_COLORS = [
  * @param {{height?:number, color?:string, money?:boolean, unit?:string}} opts
  */
 export function barChart(data = [], opts = {}) {
-  const { height = 220, color = "#1b5fc4", unit = "" } = opts;
+  const { height = 220, color = "#8E1F2F", unit = "" } = opts;
   if (!data.length) return emptyChart(height);
 
   const W = Math.max(data.length * 56, 280);
@@ -29,7 +30,7 @@ export function barChart(data = [], opts = {}) {
   const gridY = 4;
   const gridLines = Array.from({ length: gridY + 1 }, (_, i) => {
     const y = padTop + (innerH / gridY) * i;
-    return `<line x1="${padX}" y1="${y.toFixed(1)}" x2="${W - padX}" y2="${y.toFixed(1)}" stroke="#eef2f9" stroke-width="1"/>`;
+    return `<line x1="${padX}" y1="${y.toFixed(1)}" x2="${W - padX}" y2="${y.toFixed(1)}" stroke="#F1E9E0" stroke-width="1"/>`;
   }).join("");
 
   const bars = data.map((d, i) => {
@@ -88,8 +89,8 @@ export function donutChart(data = [], opts = {}) {
   }).join("");
 
   const center = centerTop
-    ? `<text x="${cx}" y="${cy - 2}" text-anchor="middle" font-size="22" font-weight="800" fill="#0f172a">${esc(centerTop)}</text>
-       <text x="${cx}" y="${cy + 16}" text-anchor="middle" font-size="11" font-weight="600" fill="#64748b">${esc(centerSub)}</text>`
+    ? `<text x="${cx}" y="${cy - 2}" text-anchor="middle" font-size="22" font-weight="800" fill="#2A1B1C">${esc(centerTop)}</text>
+       <text x="${cx}" y="${cy + 16}" text-anchor="middle" font-size="11" font-weight="600" fill="#7A6862">${esc(centerSub)}</text>`
     : "";
 
   const legend = items.map((d, i) => {
@@ -101,7 +102,7 @@ export function donutChart(data = [], opts = {}) {
 
   return `<div class="flex gap-12 items-center" style="flex-wrap:wrap;justify-content:center">
     <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img">
-      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#eef2f9" stroke-width="${thickness}"/>
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#F1E9E0" stroke-width="${thickness}"/>
       ${arcs}${center}
     </svg>
     <div class="legend" style="min-width:150px;flex:1">${legend}</div>
@@ -111,13 +112,13 @@ export function donutChart(data = [], opts = {}) {
 /* ------------------------------ Auxiliares ------------------------------- */
 function emptyChart(height) {
   return `<svg class="chart" viewBox="0 0 280 ${height}" role="img">
-    <text x="140" y="${height / 2}" text-anchor="middle" fill="#94a3b8" font-size="13" font-weight="600">Sin datos en el período</text>
+    <text x="140" y="${height / 2}" text-anchor="middle" fill="#A8978F" font-size="13" font-weight="600">Sin datos en el período</text>
   </svg>`;
 }
 function emptyDonut(size) {
   const r = (size - 30) / 2;
   return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
-    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="#eef2f9" stroke-width="30"/>
+    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="#F1E9E0" stroke-width="30"/>
   </svg>`;
 }
 

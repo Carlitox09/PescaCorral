@@ -392,7 +392,7 @@ export async function viewHome(ctx) {
   const hoy = U.todayISO();
   try { await D.generarRecordatorios(); } catch (e) { console.warn(e); }
   const [reservas, permisos, notifs, cats] = await Promise.all([
-    D.listReservas(), D.listPermisos(), D.listNotificaciones(), D.disponibilidad(hoy),
+    D.listReservas(), D.listPermisos(), D.listNotificaciones(), D.disponibilidad(hoy, "manana"),
   ]);
   const unread = notifs.filter((n) => !n.leida).length;
   const proxima = reservas.filter((r) => r.estado !== "cancelada" && r.fecha >= hoy).sort((a, b) => a.fecha < b.fecha ? -1 : 1)[0];
@@ -495,10 +495,10 @@ function boatCard(c, fecha, turno) {
   const agotado = conDispo && c.libres === 0;
   const dispo = conDispo
     ? (agotado ? `<span class="badge badge--danger" style="margin-top:4px">Sin disponibilidad</span>`
-               : `<span class="badge ${c.libres <= 3 ? "badge--warn" : "badge--ok"}" style="margin-top:4px">${c.libres} de ${c.capacidad} lugares libres</span>`)
+               : `<span class="badge ${c.libres <= 3 ? "badge--warn" : "badge--ok"}" style="margin-top:4px">${c.libres} libres de ${c.capacidad}</span>`)
     : "";
   return `<div class="boat" style="margin-bottom:12px">
-    <div class="boat__img" style="color:#0c4a72">${U.icon("boat", { size: 46, stroke: 1.6 })}</div>
+    <div class="boat__img">${U.icon("boat", { size: 46, stroke: 1.6 })}</div>
     <div class="boat__main">
       <h3>${U.esc(c.nombre)}</h3>
       <div class="boat__meta">${U.icon("users", { size: 13 })} ${c.capacidad} lugares ${c.habilitacion ? "· Hab. " + U.esc(c.habilitacion) : ""}</div>
@@ -543,7 +543,7 @@ export async function viewReserva(ctx) {
             <h3>${U.esc(cat.nombre)}</h3>
             <div class="muted" style="font-weight:600;margin-top:2px">${U.fmtMoney(cat.precio)} / lugar · ${cat.capacidad} lugares</div>
           </div>
-          <div class="boat__img" style="width:54px;height:54px;color:#0c4a72">${U.icon("boat", { size: 30, stroke: 1.6 })}</div>
+          <div class="boat__img" style="width:54px;height:54px">${U.icon("boat", { size: 30, stroke: 1.6 })}</div>
         </div>
         <div class="filters mt-12">
           <input class="input" type="date" id="r-fecha" value="${fecha}" min="${U.todayISO()}"/>
@@ -583,10 +583,14 @@ export async function viewReserva(ctx) {
       </div>
 
       <div class="summary mt-16" id="summary"></div>
-      <button class="btn btn--cta btn--block btn--lg mt-16" id="confirm-btn" disabled>
-        ${U.icon("credit-card", { size: 20 })} Pagar y confirmar reserva
-      </button>
       <p class="muted center mt-8" style="font-size:.78rem">La pasarela de pago es simulada en este prototipo: no se realiza ningún cobro real.</p>
+
+      <div class="paybar" aria-live="polite">
+        <div class="paybar__total"><small id="paybar-cant">Elegí tus lugares</small><b id="paybar-total">${U.fmtMoney(0)}</b></div>
+        <button class="btn btn--cta btn--lg" id="confirm-btn" disabled>
+          ${U.icon("credit-card", { size: 20 })} Pagar y confirmar
+        </button>
+      </div>
     `,
   }));
   wireChrome(ctx);
@@ -601,6 +605,8 @@ export async function viewReserva(ctx) {
       <div class="flex between mt-8"><span>Precio por lugar</span><b>${U.fmtMoney(cat.precio)}</b></div>
       <div class="flex between mt-8 total"><span><b>Total a pagar</b></span><b>${U.fmtMoney(total)}</b></div>
       ${n ? `<div class="muted mt-8" style="font-size:.8rem">Lugares: ${[...seleccion].map((id) => lugares.find((l) => l.id === id).numero).sort((a, b) => a - b).join(", ")}</div>` : ""}`;
+    U.$("#paybar-total").textContent = U.fmtMoney(total);
+    U.$("#paybar-cant").textContent = n ? `${n} lugar${n > 1 ? "es" : ""} · ${turno === "tarde" ? "turno tarde" : "turno mañana"}` : "Elegí tus lugares";
     confirmBtn.disabled = n === 0;
   };
   refreshSummary();
@@ -625,7 +631,7 @@ export async function viewReserva(ctx) {
   U.$("#r-fecha").addEventListener("change", reloadSeats);
   U.$("#r-turno").addEventListener("change", reloadSeats);
 
-  const labelBtn = `${U.icon("credit-card", { size: 20 })} Pagar y confirmar reserva`;
+  const labelBtn = `${U.icon("credit-card", { size: 20 })} Pagar y confirmar`;
   confirmBtn.addEventListener("click", async () => {
     if (!seleccion.size) return;
     const metodo = U.$("#r-metodo").value;
@@ -784,19 +790,17 @@ export async function viewHistorial(ctx) {
   const reservasHtml = reservas.length ? reservas.map((r) => {
     const b = U.estadoReservaBadge(r.estado);
     const cancelable = r.estado === "confirmada" && r.fecha >= hoy;
-    return `<div class="row-item">
+    return `<div class="row-item row-item--wrap">
       <div class="row-item__ic">${U.icon("boat", { size: 20 })}</div>
       <div class="row-item__main">
         <h4>${U.esc(r.catamaran_nombre)}</h4>
         <small>${U.fmtDate(r.fecha)} · ${U.turnoLabel(r.turno)} · ${r.cantidad_lugares} lugar${r.cantidad_lugares > 1 ? "es" : ""} · ${U.fmtMoney(r.monto_total)}</small>
       </div>
-      <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
-        <span class="badge ${b.cls}">${b.label}</span>
-        <div class="flex gap-8">
-          ${r.permiso_id ? `<a class="btn btn--soft btn--sm" href="#/permiso/${r.permiso_id}">Permiso</a>` : ""}
+      <span class="badge ${b.cls}">${b.label}</span>
+      ${r.permiso_id || cancelable ? `<div class="row-item__actions">
+          ${r.permiso_id ? `<a class="btn btn--soft btn--sm" href="#/permiso/${r.permiso_id}">${U.icon("ticket", { size: 16 })} Ver permiso</a>` : ""}
           ${cancelable ? `<button class="btn btn--danger btn--sm" data-anular="${r.id}">Anular</button>` : ""}
-        </div>
-      </div>
+        </div>` : ""}
     </div>`;
   }).join("") : emptyState("Sin reservas todavía", "Cuando reserves una salida, aparecerá acá.", "calendar");
 
@@ -1005,7 +1009,7 @@ export async function viewAdmin(ctx) {
       <div class="grid-2">
         <div class="panel">
           <h3>Reservas por día · ${U.fmtDate(from)} a ${U.fmtDate(to)}</h3>
-          ${barChart(serie, { height: 230, color: "#1b5fc4" })}
+          ${barChart(serie, { height: 230, color: "#8E1F2F" })}
         </div>
         <div class="panel">
           <h3>Permisos por especie</h3>
@@ -1091,7 +1095,7 @@ export async function viewReportes(ctx) {
       <div class="grid-2">
         <div class="panel">
           <h3>Evolución mensual de reservas</h3>
-          ${barChart(mesData, { height: 230, color: "#14a89a" })}
+          ${barChart(mesData, { height: 230, color: "#C9821E" })}
         </div>
         <div class="panel">
           <h3>Distribución de permisos por especie</h3>
@@ -1204,7 +1208,7 @@ export async function viewGestion(ctx) {
 
   const list = propios.length ? propios.map((c) => `
     <div class="boat" style="margin-bottom:12px">
-      <div class="boat__img" style="color:#0c4a72">${U.icon("boat", { size: 46, stroke: 1.6 })}</div>
+      <div class="boat__img">${U.icon("boat", { size: 46, stroke: 1.6 })}</div>
       <div class="boat__main">
         <h3>${U.esc(c.nombre)}</h3>
         <div class="boat__meta">${U.icon("users", { size: 13 })} ${c.capacidad} lugares · ${U.fmtMoney(c.precio)}/lugar</div>
