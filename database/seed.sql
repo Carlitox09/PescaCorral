@@ -5,9 +5,8 @@
 --  Carga catamaranes, asientos (lugar) y especies. Las alertas de fauna no se
 --  cargan: las genera el disparador actualizar_alerta_fauna con los permisos reales.
 --  No carga usuarios: las cuentas se crean desde la app (Supabase Auth) o
---  desde Authentication -> Users en el panel de Supabase. Al final de este
---  archivo hay un bloque OPCIONAL para generar reservas y permisos de demo
---  una vez que exista al menos un usuario.
+--  desde Authentication -> Users en el panel de Supabase. Para generar
+--  reservas y permisos de demostración, ver seed_actividad_demo.sql.
 -- ============================================================================
 
 -- Limpieza de datos de ejemplo previos (no borra usuarios reales).
@@ -57,51 +56,6 @@ begin
         end loop;
     end loop;
 end $$;
-
--- ============================================================================
---  BLOQUE OPCIONAL · Reservas y permisos de demostración
---  ----------------------------------------------------------------------------
---  Para que el Panel Municipal y la pantalla de Reportes muestren números en
---  Supabase, necesitás al menos un usuario. Pasos:
---    1. Registrate desde la app (o creá un usuario en Authentication -> Users).
---    2. Copiá su UUID (columna "id" en la tabla public.usuario).
---    3. Reemplazá 'PEGAR-UUID-DE-USUARIO-AQUI' abajo y ejecutá SOLO este bloque.
--- ============================================================================
-/*
-do $$
-declare
-    v_uid     uuid := 'PEGAR-UUID-DE-USUARIO-AQUI';
-    v_cat     uuid := '22222222-2222-2222-2222-222222222201'; -- Don Juan II
-    v_lugares uuid[];
-    d         integer;
-begin
-    for d in 0..6 loop
-        -- Toma 2 asientos libres del catamarán para cada día simulado.
-        select array_agg(l.id) into v_lugares
-        from (
-            select id from public.lugar
-            where id_catamaran = v_cat
-              and id not in (
-                  select id_lugar from public.reserva_lugar
-                  where fecha = (current_date - d) and estado = 'confirmada')
-            order by numero
-            limit 2
-        ) l;
-
-        if v_lugares is not null then
-            perform public.crear_reserva_completa(
-                v_cat,
-                (current_date - d),
-                'manana',
-                v_lugares,
-                'tarjeta',
-                'diario',
-                '11111111-1111-1111-1111-111111111101'  -- Pejerrey
-            );
-        end if;
-    end loop;
-end $$;
-*/
 
 -- ============================================================================
 --  FIN DEL SEED

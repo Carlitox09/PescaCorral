@@ -28,7 +28,6 @@ const CLAVES_DEMO = {
 
 /* Tarifas de los permisos en modo demo (en Supabase, tabla tarifa_permiso). */
 const TARIFAS_DEMO = { diario: 5000, semanal: 15000, anual: 45000 };
-const MSG_FALTA_006 = "Para usar un permiso propio falta actualizar la base de datos (migración 006).";
 
 /* Ubicación de un asiento en el plano del catamarán, vista desde arriba con la
  * proa adelante (igual que public.ubicacion_lugar): numeración en sentido
@@ -294,12 +293,8 @@ async function fetchProfileSupabase(id) {
 
 /** Perfil incompleto = primer ingreso sin DNI ni tipo de cuenta confirmados. */
 export function perfilCompleto(profile) {
-  if (!profile) return false;
-  if (typeof profile.perfil_completo === "boolean") return profile.perfil_completo;
-  return Boolean(String(profile.dni || "").trim());
+  return Boolean(profile?.perfil_completo);
 }
-
-const esFuncionInexistente = (err) => /PGRST202|could not find the function|does not exist/i.test(String(err?.message || err?.code || ""));
 
 /* Dirección a la que Google (a través de Supabase) devuelve al usuario. */
 const redirectURL = () => location.origin + location.pathname.replace(/index\.html$/, "");
@@ -430,12 +425,7 @@ export async function completarPerfil({ nombre, apellido, telefono, dni, rol }) 
     const { data: s } = await sb.auth.getSession();
     const id = s.session?.user?.id;
     if (!id) throw new Error("La sesión expiró. Volvé a ingresar con Google.");
-    let { error } = await sb.from("usuario").update(patch).eq("id", id);
-    if (error && /perfil_completo/.test(error.message)) {
-      // Base sin la migración 003: se guarda igual, sin la marca de perfil completo.
-      delete patch.perfil_completo;
-      ({ error } = await sb.from("usuario").update(patch).eq("id", id));
-    }
+    const { error } = await sb.from("usuario").update(patch).eq("id", id);
     if (error) throw new Error(traducirDB(error.message));
     emitAuth("USER_UPDATED");
     return true;
@@ -518,31 +508,19 @@ export async function getLugares(catId) {
 
 /* Lugares ocupados (confirmados) en una fecha y, si se indica, en un turno,
  * para todos los catamaranes. En Supabase se lee la vista v_lugares_ocupados,
- * que muestra la ocupación sin revelar quién reservó; si no existe, se consulta
- * la tabla (limitada por RLS a lo que el usuario puede ver). Sin la columna
- * "turno" (base anterior a la migración 004) la ocupación se toma por día. */
+ * que muestra la ocupación sin revelar quién reservó. */
 async function ocupadosPorFecha(fecha, turno = null) {
   let rows;
   if (MODE === "supabase") {
-    const v = await sb.from("v_lugares_ocupados").select("*").eq("fecha", fecha);
-    if (!v.error) rows = v.data;
-    else {
-      const t = await sb.from("reserva_lugar").select("*, lugar!inner(id_catamaran)").eq("fecha", fecha).eq("estado", "confirmada");
-      if (t.error) throw t.error;
-      rows = t.data.map((r) => ({ id_lugar: r.id_lugar, id_catamaran: r.lugar?.id_catamaran, turno: r.turno }));
-    }
+    const { data, error } = await sb.from("v_lugares_ocupados").select("*").eq("fecha", fecha);
+    if (error) throw error;
+    rows = data;
   } else {
     const lugarCat = new Map(DB.lugares.map((l) => [l.id, l.id_catamaran]));
     rows = DB.reserva_lugar.filter((rl) => rl.fecha === fecha && rl.estado === "confirmada")
       .map((rl) => ({ id_lugar: rl.id_lugar, id_catamaran: lugarCat.get(rl.id_lugar), turno: rl.turno }));
   }
-  return turno ? rows.filter((r) => !r.turno || r.turno === turno) : rows;
-}
-
-/** Devuelve un array con los IDs de lugar ocupados para esa fecha y turno. */
-export async function getOcupacion(catId, fecha, turno = null) {
-  await ready();
-  return (await ocupadosPorFecha(fecha, turno)).filter((r) => r.id_catamaran === catId).map((r) => r.id_lugar);
+  return turno ? rows.filter((r) => r.turno === turno) : rows;
 }
 
 /** Ocupación de un catamarán en una fecha, separada por turno: { manana: [ids], tarde: [ids] }. */
@@ -550,8 +528,8 @@ export async function ocupacionPorTurno(catId, fecha) {
   await ready();
   const rows = (await ocupadosPorFecha(fecha)).filter((r) => r.id_catamaran === catId);
   return {
-    manana: rows.filter((r) => !r.turno || r.turno === "manana").map((r) => r.id_lugar),
-    tarde:  rows.filter((r) => !r.turno || r.turno === "tarde").map((r) => r.id_lugar),
+    manana: rows.filter((r) => r.turno === "manana").map((r) => r.id_lugar),
+    tarde:  rows.filter((r) => r.turno === "tarde").map((r) => r.id_lugar),
   };
 }
 
@@ -619,13 +597,12 @@ export async function procesarPago({ metodo = "tarjeta", monto = 0, tarjeta = {}
   return { aprobado: true, autorizacion: "AUT-" + Math.random().toString(36).slice(2, 8).toUpperCase() };
 }
 
-/** Tarifas de los permisos: { diario, semanal, anual }. Sin la migración 006 el
- *  permiso no se cobra aparte, por eso las tarifas valen 0. */
+/** Tarifas de los permisos: { diario, semanal, anual }. */
 export async function listTarifasPermiso() {
   await ready();
   if (MODE === "supabase") {
     const { data, error } = await sb.from("tarifa_permiso").select("tipo, precio");
-    if (error) return { diario: 0, semanal: 0, anual: 0 };
+    if (error) throw error;
     const t = { diario: 0, semanal: 0, anual: 0 };
     data.forEach((x) => (t[x.tipo] = Number(x.precio)));
     return t;
@@ -655,7 +632,7 @@ export async function validarPermiso(numero, fecha) {
   await ready();
   if (MODE === "supabase") {
     const { data, error } = await sb.rpc("validar_permiso", { p_numero: String(numero || "").trim(), p_fecha: fecha });
-    if (error) throw new Error(esFuncionInexistente(error) ? MSG_FALTA_006 : error.message);
+    if (error) throw new Error(error.message);
     return data;
   }
   return validarPermisoDemo(demoSessionUser(), numero, fecha);
@@ -673,13 +650,8 @@ export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo 
       p_lugares: lugares, p_metodo_pago: metodo, p_tipo_permiso: tipoPermiso, p_id_especie: especieId,
       p_numero_permiso: propio || null, p_autorizacion: autorizacion,
     };
-    let { data, error } = await sb.rpc("crear_reserva_completa", args);
-    if (error && esFuncionInexistente(error) && !propio) {
-      // Base sin la migración 006: la reserva se hace igual, con permiso nuevo.
-      delete args.p_numero_permiso; delete args.p_autorizacion;
-      ({ data, error } = await sb.rpc("crear_reserva_completa", args));
-    }
-    if (error) throw new Error(esFuncionInexistente(error) ? MSG_FALTA_006 : error.message);
+    const { data, error } = await sb.rpc("crear_reserva_completa", args);
+    if (error) throw new Error(error.message);
     return data;
   }
   // Demo: replica la lógica del RPC crear_reserva_completa.
@@ -987,14 +959,15 @@ export function setPrefRecordatorios(on) {
 
 /* Recordatorios de salida (HU-011 · criterio 2): genera una notificación para
  * cada reserva confirmada de hoy o mañana que aún no tenga recordatorio.
- * En Supabase lo hace la función generar_recordatorios (migración 002; además
- * pg_cron la ejecuta a diario para todos los usuarios). */
+ * En Supabase lo hace la función generar_recordatorios, que además pone al día
+ * los estados (permisos vencidos, salidas realizadas); pg_cron la ejecuta a
+ * diario para todos los usuarios. */
 export async function generarRecordatorios() {
   await ready();
   if (!prefRecordatorios()) return 0;
   if (MODE === "supabase") {
     const { data, error } = await sb.rpc("generar_recordatorios", { p_solo_usuario: true });
-    if (error) { if (!esFuncionInexistente(error)) console.warn("generar_recordatorios:", error.message); return 0; }
+    if (error) { console.warn("generar_recordatorios:", error.message); return 0; }
     if (Number(data) > 0) emitAuth("NOTIF");
     return Number(data) || 0;
   }
@@ -1073,7 +1046,7 @@ export async function reservasPorDia({ from, to } = {}) {
   return [...map.values()].sort((a, b) => (a.fecha < b.fecha ? -1 : 1));
 }
 
-export async function ocupacionCatamaranes() {
+async function ocupacionCatamaranes() {
   await ready();
   if (MODE === "supabase") {
     const { data, error } = await sb.from("v_ocupacion_catamaran").select("*");
@@ -1137,10 +1110,9 @@ export async function ultimosPermisos(limit = 6) {
  *  REPORTES AL MUNICIPIO (HU-009)
  *  Cada envío queda registrado en la tabla "reporte" con fecha, destinatario,
  *  origen (manual / automático) y una instantánea de los indicadores. En
- *  Supabase lo realiza la función generar_reporte_municipal (migración 002),
- *  que además notifica a los administradores municipales; pg_cron la ejecuta
- *  automáticamente al cierre de cada mes. Sin la migración, la instantánea se
- *  arma en el cliente y se inserta directamente (sólo administradores, por RLS).
+ *  Supabase lo realiza la función generar_reporte_municipal, que además
+ *  notifica a los administradores municipales; pg_cron la ejecuta al cierre
+ *  de cada mes.
  * ========================================================================== */
 const DESTINATARIO = () => CFG.MUNICIPIO || "Municipio de Coronel Moldes";
 const periodoActual = () => todayISO().slice(0, 7);
@@ -1165,17 +1137,8 @@ export async function enviarReporteMunicipio(tipo = "general", origen = "manual"
   const periodo = origen === "automatico" ? periodoAnterior() : periodoActual();
   if (MODE === "supabase") {
     const { data, error } = await sb.rpc("generar_reporte_municipal", { p_tipo: tipo, p_origen: origen });
-    if (!error) return data;
-    if (!esFuncionInexistente(error)) throw new Error(error.message);
-    const datos = await snapshotReporte(periodo);
-    const { data: s } = await sb.auth.getSession();
-    const { data: row, error: e2 } = await sb.from("reporte").insert({
-      tipo, titulo: tituloReporte(tipo, periodo), fecha: todayISO(),
-      parametros: { periodo, origen, destinatario },
-      datos, generado_por: s.session?.user?.id || null,
-    }).select().single();
-    if (e2) throw new Error(e2.message);
-    return row;
+    if (error) throw new Error(error.message);
+    return data;
   }
   const u = demoSessionUser();
   const datos = await snapshotReporte(periodo);

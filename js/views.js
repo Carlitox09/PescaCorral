@@ -449,7 +449,6 @@ export async function viewHome(ctx) {
     `,
   }));
   wireChrome(ctx);
-  wireBoatCards(ctx);
 }
 
 /* ============================================================================
@@ -478,7 +477,6 @@ export async function viewCatamaranes(ctx) {
     `,
   }));
   wireChrome(ctx);
-  wireBoatCards(ctx);
 
   const update = () => {
     const f = U.$("#f-fecha").value || U.todayISO();
@@ -515,7 +513,6 @@ function boatCard(c, fecha, turno) {
     </div>
   </div>`;
 }
-function wireBoatCards() { /* navegación por href; sin JS extra */ }
 
 /* ============================================================================
  *  RESERVA DE LUGARES

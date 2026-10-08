@@ -71,17 +71,9 @@ PescaCorral/
 ├── icons/                  # Íconos de la PWA
 └── database/
     ├── schema.sql          # Esquema completo (tablas, funciones, vistas, RLS, pg_cron)
-    ├── seed.sql            # Datos iniciales (especies, catamaranes, alertas)
+    ├── seed.sql            # Datos iniciales (especies, catamaranes y sus lugares)
     ├── seed_actividad_demo.sql   # Reservas, permisos y alertas para presentar el panel
-    ├── verificar_base.sql  # Chequeo de sólo lectura: compara la base con schema.sql y revisa los datos
-    └── migrations/         # Para bases creadas con versiones anteriores del esquema
-        ├── 002_seguridad_reportes_recordatorios.sql
-        ├── 003_ingreso_con_google.sql
-        ├── 004_turnos_alertas_reportes.sql
-        ├── 005_acceso_personal.sql
-        ├── 006_permiso_propio_comprobante.sql
-        ├── 007_mantenimiento_datos_al_dia.sql
-        └── 008_cuentas_publicas_solo_google.sql
+    └── verificar_base.sql  # Chequeo de sólo lectura: compara la base con schema.sql y revisa los datos
 ```
 
 ---
@@ -93,10 +85,7 @@ PescaCorral/
 Servir la carpeta con cualquier servidor estático (los módulos ES y el service worker no funcionan con `file://`):
 
 ```bash
-# Python
-python3 -m http.server 8080
-# o Node
-npx serve .
+python -m http.server 8080
 ```
 
 Abrir `http://localhost:8080`.
@@ -104,10 +93,9 @@ Abrir `http://localhost:8080`.
 ### Base de datos en Supabase
 
 1. Crear un proyecto en https://supabase.com.
-2. **SQL Editor → New query**: pegar y ejecutar `database/schema.sql` completo, y luego `database/seed.sql`.
-3. Si la base ya existía con una versión anterior del esquema, ejecutar en cambio las migraciones de `database/migrations/` en orden (son idempotentes): 002 a 008.
-4. Para comprobar que la base coincide con el esquema y que los datos están al día, ejecutar `database/verificar_base.sql` (no modifica nada): devuelve una fila por cada diferencia, o "OK".
-5. (Opcional) **Database → Extensions**: habilitar `pg_cron` para que el reporte mensual y los recordatorios diarios se generen sin intervención. Si no está habilitado, la app los genera al ingresar a Reportes y a la pantalla principal.
+2. **SQL Editor → New query**: pegar y ejecutar `database/schema.sql` completo, y luego `database/seed.sql`. `schema.sql` crea la base desde cero y **borra los datos existentes**: no se usa sobre una base en producción.
+3. Para comprobar que la base coincide con el esquema y que los datos están al día, ejecutar `database/verificar_base.sql` (no modifica nada): devuelve una fila por cada diferencia, o "OK".
+4. (Opcional) **Database → Extensions**: habilitar `pg_cron` para que el reporte mensual y los recordatorios diarios se generen sin intervención. Si no está habilitado, la app los genera al ingresar a Reportes y a la pantalla principal.
 
 ### Ingreso con Google
 
@@ -185,7 +173,7 @@ Desde **Perfil → Reiniciar datos de demo** se restauran los datos iniciales.
 
 ### Actividad para presentar el panel (modo Supabase)
 
-`database/seed_actividad_demo.sql` genera reservas de los últimos 30 días y de los próximos 3, con pagos, permisos, notificaciones y alertas de fauna del mes. Requiere que la cuenta de pescador ya haya ingresado con Google: se reemplaza su correo en la variable `v_email` y se ejecuta el archivo en el SQL Editor.
+`database/seed_actividad_demo.sql` genera reservas de los últimos 30 días y de los próximos 3, con pagos, permisos, notificaciones y alertas de fauna de demostración. Requiere que la cuenta de pescador ya haya ingresado con Google: se reemplaza su correo en la variable `v_email` y se ejecuta el archivo en el SQL Editor.
 
 ### Pasarela de pago simulada
 
@@ -193,7 +181,8 @@ Desde **Perfil → Reiniciar datos de demo** se restauran los datos iniciales.
 | --- | --- |
 | Pago aprobado | `4111 1111 1111 1111`, cualquier titular, vencimiento futuro (MM/AA), CVV de 3 dígitos |
 | Pago rechazado por la entidad | cualquier número terminado en `0000` |
-| Transferencia / efectivo | se registran como aprobados al confirmar |
+| Mercado Pago | el correo de la cuenta; se aprueba al confirmar |
+| Efectivo | se registra como cobrado en la boletería al confirmar |
 
 Un pago rechazado no crea la reserva ni emite el permiso, y permite reintentar.
 

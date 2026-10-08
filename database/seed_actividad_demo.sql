@@ -6,7 +6,7 @@
 --  presentación del prototipo.
 --
 --  REQUISITOS
---    1. Haber ejecutado schema.sql y seed.sql (o las migraciones 002 a 007).
+--    1. Haber ejecutado schema.sql y seed.sql.
 --    2. Haber ingresado al menos una vez a la aplicación con la cuenta de
 --       Google que se usará en la demostración y completado el perfil.
 --

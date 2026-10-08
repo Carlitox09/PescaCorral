@@ -956,8 +956,7 @@ grant select on public.v_lugares_ocupados to anon, authenticated;
 -- alter publication supabase_realtime add table public.notificacion;
 
 -- ============================================================================
--- 8. REPORTES, RECORDATORIOS Y ALERTAS DE FAUNA
---    (mismo contenido que las migraciones 002 a 004)
+-- 8. REPORTES, RECORDATORIOS, ESTADOS Y ALERTAS DE FAUNA
 -- ============================================================================
 
 -- ---- 8.1 Envío de reportes al municipio (HU-009) ----------------------------
