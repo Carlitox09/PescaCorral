@@ -418,7 +418,7 @@ export async function signInPersonal({ usuario, clave, tipo } = {}) {
           : "Esta cuenta no tiene acceso a esta sección.");
       }
     } else {
-      const cred = CLAVES_DEMO[usuario];
+      const cred = (DB.clavesPersonal || {})[usuario] || CLAVES_DEMO[usuario];
       const u = cred && DB.usuarios.find((x) => x.email === cred.email);
       if (!u || cred.clave !== clave) throw new Error("Usuario o contraseña incorrectos.");
       if (u.rol !== rolEsperado) throw new Error("Esta cuenta no tiene acceso a esta sección.");
@@ -1236,10 +1236,10 @@ export async function listUsuarios() {
 }
 
 /* La administración cambia el tipo de cuenta (pescador o dueño) y el estado de
- * las cuentas del público. Las cuentas del personal y los roles administrativos
- * se gestionan sólo desde la base (lo controla public.proteger_perfil). */
+ * las cuentas del público; el estado de las cuentas del personal, sólo el
+ * administrador del sistema. Los roles administrativos se fijan al dar de alta
+ * la cuenta del personal (lo controla public.proteger_perfil). */
 export const esRolPersonal = (rol) => rol === "admin_municipal" || rol === "admin_sistema";
-const SOLO_BASE = "Las cuentas del personal y los roles administrativos se gestionan desde la base de datos.";
 
 export async function setRol(userId, rol) {
   await ready();
@@ -1248,7 +1248,8 @@ export async function setRol(userId, rol) {
     if (error) throw new Error(error.message); return true;
   }
   const u = byId(DB.usuarios, userId);
-  if (u && (esRolPersonal(u.rol) || esRolPersonal(rol))) throw new Error(SOLO_BASE);
+  if (u && esRolPersonal(u.rol)) throw new Error("El rol de una cuenta del personal no se modifica.");
+  if (u && esRolPersonal(rol)) throw new Error("Los roles administrativos se asignan al dar de alta una cuenta del personal.");
   if (u) u.rol = rol; persist();
   return true;
 }
@@ -1263,9 +1264,112 @@ export async function setActivo(userId, activo) {
     if (error) throw new Error(error.message); return true;
   }
   const u = byId(DB.usuarios, userId);
-  if (u && esRolPersonal(u.rol)) throw new Error(SOLO_BASE);
+  if (u && esRolPersonal(u.rol) && demoSessionUser()?.rol !== "admin_sistema")
+    throw new Error("Solo el administrador del sistema puede activar o desactivar cuentas del personal.");
   if (u) u.activo = Boolean(activo); persist();
   return true;
+}
+
+/* ============================================================================
+ *  PERSONAL: alta de cuentas del municipio y de la administración
+ *  Sólo el administrador del sistema (crear_cuenta_personal y
+ *  cambiar_clave_personal en la base). El usuario corto se traduce al correo
+ *  del dominio reservado, igual que en el ingreso.
+ * ========================================================================== */
+/** Requisitos de la contraseña del personal (los mismos que exige la base). */
+export function claveSegura(clave = "") {
+  return clave.length >= 12 && /[a-z]/.test(clave) && /[A-Z]/.test(clave) && /\d/.test(clave) && /[^A-Za-z0-9]/.test(clave);
+}
+const CLAVE_DEBIL = "La contraseña debe tener al menos 12 caracteres, con minúsculas, mayúsculas, números y símbolos.";
+/** Usuario corto de una cuenta del personal (la parte del correo antes de la @). */
+export const usuarioPersonal = (email = "") => String(email).split("@")[0];
+
+export async function crearCuentaPersonal({ usuario, nombre, apellido = "", rol, clave }) {
+  await ready();
+  usuario = String(usuario || "").trim().toLowerCase();
+  if (!/^[a-z0-9._-]{3,30}$/.test(usuario)) throw new Error("El usuario debe tener entre 3 y 30 caracteres: letras minúsculas, números, punto o guiones.");
+  if (!esRolPersonal(rol)) throw new Error("Elegí el rol de la cuenta.");
+  if (!String(nombre || "").trim()) throw new Error("Ingresá el nombre.");
+  if (!claveSegura(clave)) throw new Error(CLAVE_DEBIL);
+  if (MODE === "supabase") {
+    const { data, error } = await sb.rpc("crear_cuenta_personal", { p_usuario: usuario, p_nombre: nombre, p_apellido: apellido, p_rol: rol, p_clave: clave });
+    if (error) throw new Error(error.message);
+    return data;
+  }
+  if (demoSessionUser()?.rol !== "admin_sistema") throw new Error("Solo el administrador del sistema puede dar de alta cuentas del personal.");
+  const email = `${usuario}@demo.com`;
+  DB.clavesPersonal = DB.clavesPersonal || {};
+  if (CLAVES_DEMO[usuario] || DB.clavesPersonal[usuario] || DB.usuarios.some((u) => u.email === email))
+    throw new Error(`Ya existe una cuenta con el usuario ${usuario}`);
+  const u = { id: uid(), nombre: String(nombre).trim(), apellido: String(apellido).trim(), email, telefono: "", dni: "", rol, activo: true, perfil_completo: true, created_at: new Date().toISOString() };
+  DB.usuarios.push(u);
+  DB.clavesPersonal[usuario] = { email, clave };
+  persist();
+  return { id: u.id, usuario, email, rol };
+}
+
+export async function cambiarClavePersonal(userId, clave) {
+  await ready();
+  if (!claveSegura(clave)) throw new Error(CLAVE_DEBIL);
+  if (MODE === "supabase") {
+    const { error } = await sb.rpc("cambiar_clave_personal", { p_id: userId, p_clave: clave });
+    if (error) throw new Error(error.message);
+    return true;
+  }
+  if (demoSessionUser()?.rol !== "admin_sistema") throw new Error("Solo el administrador del sistema puede cambiar contraseñas del personal.");
+  const u = byId(DB.usuarios, userId);
+  if (!u || !esRolPersonal(u.rol)) throw new Error("La cuenta no es del personal");
+  DB.clavesPersonal = DB.clavesPersonal || {};
+  DB.clavesPersonal[usuarioPersonal(u.email)] = { email: u.email, clave };
+  persist();
+  return true;
+}
+
+/* ============================================================================
+ *  AVISOS de la administración (llegan a la campanita de los usuarios)
+ *  destino: todos | pescador | dueno | usuario (una persona, idUsuario).
+ * ========================================================================== */
+export const DESTINOS_AVISO = { todos: "Todos los usuarios", pescador: "Pescadores y turistas", dueno: "Dueños de catamarán", usuario: "Un usuario" };
+
+export async function publicarAviso({ titulo, mensaje, destino = "todos", idUsuario = null }) {
+  await ready();
+  titulo = String(titulo || "").trim(); mensaje = String(mensaje || "").trim();
+  if (titulo.length < 3 || titulo.length > 80) throw new Error("El título debe tener entre 3 y 80 caracteres.");
+  if (mensaje.length < 3 || mensaje.length > 500) throw new Error("El mensaje debe tener entre 3 y 500 caracteres.");
+  if (!DESTINOS_AVISO[destino]) throw new Error("Elegí los destinatarios.");
+  if (destino === "usuario" && !idUsuario) throw new Error("Elegí el usuario.");
+  if (MODE === "supabase") {
+    const { data, error } = await sb.rpc("publicar_aviso", { p_titulo: titulo, p_mensaje: mensaje, p_destino: destino, p_id_usuario: destino === "usuario" ? idUsuario : null });
+    if (error) throw new Error(error.message);
+    return data;
+  }
+  const autor = demoSessionUser();
+  if (!esRolPersonal(autor?.rol)) throw new Error("Solo la administración puede publicar avisos");
+  const ahora = new Date().toISOString();
+  const dest = DB.usuarios.filter((u) => u.activo !== false && (u.rol === "pescador" || u.rol === "dueno")
+    && (destino === "todos" || (destino === "usuario" ? u.id === idUsuario : u.rol === destino)));
+  if (destino === "usuario" && !dest.length) throw new Error("Elegí una cuenta activa del público");
+  dest.forEach((u) => DB.notificaciones.unshift({ id: uid(), id_usuario: u.id, tipo: "aviso", titulo, mensaje, leida: false, created_at: ahora }));
+  const aviso = { id: uid(), titulo, mensaje, destino, id_destinatario: destino === "usuario" ? idUsuario : null, destinatarios: dest.length, publicado_por: autor.id, created_at: ahora };
+  DB.avisos = [aviso, ...(DB.avisos || [])];
+  persist();
+  return { id: aviso.id, destinatarios: dest.length };
+}
+
+export async function listAvisos(limit = 30) {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("aviso")
+      .select("*, autor:usuario!aviso_publicado_por_fkey(nombre, apellido), destinatario:usuario!aviso_id_destinatario_fkey(nombre, apellido, email)")
+      .order("created_at", { ascending: false }).limit(limit);
+    if (error) throw error;
+    return data;
+  }
+  return (DB.avisos || []).slice(0, limit).map((a) => ({
+    ...a,
+    autor: byId(DB.usuarios, a.publicado_por) || null,
+    destinatario: a.id_destinatario ? byId(DB.usuarios, a.id_destinatario) || null : null,
+  }));
 }
 
 export async function crearCatamaran({ nombre, descripcion, capacidad, precio, habilitacion, estado = "activa" }) {

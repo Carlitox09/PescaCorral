@@ -70,6 +70,8 @@ const ICONS = {
   cash:        '<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6 10v4M18 10v4"/>',
   steering:    '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.3"/><path d="M12 3.5v6.2M12 14.3v6.2M3.5 12h6.2M14.3 12h6.2"/>',
   dots:        '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  megaphone:   '<path d="M3.5 10.5v3a1 1 0 0 0 1 1H7l7 4.5v-14L7 9.5H4.5a1 1 0 0 0-1 1Z"/><path d="M17.5 9a4 4 0 0 1 0 6M7.5 14.5l1.4 4.5h2.4l-1.1-3.6"/>',
+  key:         '<circle cx="8" cy="15" r="4.5"/><path d="M11.2 11.8 20 3M16.5 6.5l2.5 2.5M14 9l2 2"/>',
 };
 
 /** Devuelve el markup de un ícono. `name` debe existir en ICONS. */

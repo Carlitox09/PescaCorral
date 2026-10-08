@@ -26,6 +26,8 @@ const ROUTES = {
   admin:       { view: V.viewAdmin,       auth: true, roles: ["admin_municipal", "admin_sistema"] },
   reportes:    { view: V.viewReportes,    auth: true, roles: ["admin_municipal", "admin_sistema"] },
   usuarios:    { view: V.viewUsuarios,    auth: true, roles: ["admin_municipal", "admin_sistema"] },
+  avisos:      { view: V.viewAvisos,      auth: true, roles: ["admin_municipal", "admin_sistema"] },
+  personal:    { view: V.viewPersonal,    auth: true, roles: ["admin_sistema"] },
 };
 
 /* ------------------------------- Parsing --------------------------------- */

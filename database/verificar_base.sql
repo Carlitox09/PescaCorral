@@ -14,7 +14,7 @@
 -- ============================================================================
 with
 esperado_tabla(n) as (values
-    ('alerta_fauna'), ('catamaran'), ('especie'), ('lugar'), ('notificacion'), ('pago'),
+    ('alerta_fauna'), ('aviso'), ('catamaran'), ('especie'), ('lugar'), ('notificacion'), ('pago'),
     ('permiso'), ('personal_autorizado'), ('reporte'), ('reserva'), ('reserva_lugar'),
     ('tarifa_permiso'), ('usuario')),
 esperado_vista(n) as (values
@@ -22,15 +22,17 @@ esperado_vista(n) as (values
     ('v_permisos_por_especie'), ('v_reservas_por_dia')),
 esperado_funcion(n, args) as (values
     ('actualizar_alerta_fauna', 0), ('actualizar_estados', 0), ('anular_reserva', 1),
-    ('cerrar_sesiones_desactivada', 0), ('crear_reserva_completa', 9), ('es_admin', 0),
-    ('exigir_cuenta_activa', 0), ('generar_numero_permiso', 0),
+    ('cambiar_clave_personal', 2), ('cerrar_sesiones_desactivada', 0), ('clave_segura', 1),
+    ('crear_cuenta_personal', 5), ('crear_reserva_completa', 9), ('es_admin', 0),
+    ('exigir_cuenta_activa', 0), ('generar_numero_permiso', 0), ('publicar_aviso', 4),
     ('generar_recordatorios', 1), ('generar_reporte_municipal', 2), ('handle_new_user', 0),
     ('proteger_perfil', 0), ('rol_actual', 0), ('set_updated_at', 0),
     ('ubicacion_lugar', 2), ('validar_permiso', 2)),
 -- Funciones que pueden ejecutar los usuarios con sesión (las demás son internas).
 esperado_funcion_api(n) as (values
-    ('anular_reserva'), ('crear_reserva_completa'), ('es_admin'), ('generar_recordatorios'),
-    ('generar_reporte_municipal'), ('rol_actual'), ('validar_permiso')),
+    ('anular_reserva'), ('cambiar_clave_personal'), ('crear_cuenta_personal'), ('crear_reserva_completa'),
+    ('es_admin'), ('generar_recordatorios'), ('generar_reporte_municipal'), ('publicar_aviso'),
+    ('rol_actual'), ('validar_permiso')),
 esperado_disparador(t, n) as (values
     ('usuario', 'trg_usuario_updated'), ('usuario', 'trg_usuario_proteger'),
     ('usuario', 'trg_usuario_cerrar_sesiones'),
@@ -52,7 +54,8 @@ esperado_politica(t, n) as (values
     ('permiso', 'permiso_select'), ('pago', 'pago_select'),
     ('reporte', 'reporte_admin'), ('notificacion', 'notificacion_select'),
     ('notificacion', 'notificacion_update'), ('tarifa_permiso', 'tarifa_permiso_select'),
-    ('tarifa_permiso', 'tarifa_permiso_admin'), ('alerta_fauna', 'alerta_fauna_admin')),
+    ('tarifa_permiso', 'tarifa_permiso_admin'), ('alerta_fauna', 'alerta_fauna_admin'),
+    ('aviso', 'aviso_select')),
 esperado_cron(n) as (values ('pescacorral-reporte-mensual'), ('pescacorral-recordatorios')),
 
 -- Objetos reales del esquema public (sin los que pertenecen a extensiones).
@@ -125,7 +128,7 @@ hallazgos(tipo, objeto, detalle) as (
                or has_table_privilege('anon', r.oid, 'update') or has_table_privilege('anon', r.oid, 'delete'))
     union all select 'Escritura directa habilitada', t.n || ' · ' || p.p, 'sólo mediante las funciones de negocio'
         from (values ('reserva'), ('reserva_lugar'), ('permiso'), ('pago'), ('notificacion'),
-                     ('catamaran'), ('personal_autorizado')) t(n)
+                     ('catamaran'), ('personal_autorizado'), ('aviso')) t(n)
         cross join (values ('insert'), ('update'), ('delete')) p(p)
         where has_table_privilege('authenticated', 'public.' || t.n, p.p)
           and not (t.n = 'catamaran' and p.p in ('insert', 'delete'))
@@ -133,7 +136,7 @@ hallazgos(tipo, objeto, detalle) as (
         where has_table_privilege('authenticated', 'public.personal_autorizado', 'select')
     union all select 'Políticas de escritura', tablename || '.' || policyname, 'esa tabla se escribe sólo con funciones'
         from pg_policies where schemaname = 'public'
-          and tablename in ('reserva', 'reserva_lugar', 'permiso', 'pago') and cmd <> 'SELECT'
+          and tablename in ('reserva', 'reserva_lugar', 'permiso', 'pago', 'aviso') and cmd <> 'SELECT'
 
     -- Cuentas
     union all select 'Cuenta sin perfil', u.email, 'está en auth.users y no en usuario' from auth.users u

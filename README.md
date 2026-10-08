@@ -78,7 +78,7 @@ PescaCorral/
     ├── seed_actividad_demo.sql   # Reservas, permisos y alertas para presentar el panel
     ├── verificar_base.sql  # Chequeo de sólo lectura: compara la base con schema.sql y revisa los datos
     ├── pruebas_seguridad.sql     # Pruebas de acceso con cada perfil (no deja datos)
-    └── migrations/         # Cambios para la base ya en uso (009_seguridad.sql)
+    └── migrations/         # Cambios para la base ya en uso (009_seguridad.sql, 010_avisos_personal.sql)
 ```
 
 ---
@@ -129,7 +129,9 @@ En el primer ingreso de cada persona, el trigger `handle_new_user` crea el perfi
 
 El personal municipal ingresa por `https://carlitox09.github.io/PescaCorral/Municipio` y el administrador del sistema por `.../Admin`. El usuario es un nombre corto (`municipio`, `admin`) que la aplicación traduce a `<usuario>@pescacorral.example.com`, un dominio reservado que no recibe correos (`DOMINIO_PERSONAL` en `config.js`). Cada acceso acepta sólo su rol: `/Municipio` → `admin_municipal`, `/Admin` → `admin_sistema`.
 
-Alta de una cuenta (no hay registro abierto):
+Alta de una cuenta (no hay registro abierto): el administrador del sistema la crea desde la aplicación, en **Personal** (`#/personal`): usuario, nombre, rol y contraseña (al menos 12 caracteres, con minúsculas, mayúsculas, números y símbolos). Desde ahí también cambia contraseñas y activa o desactiva cuentas del personal. Lo hace la función `crear_cuenta_personal`, que registra la autorización en `personal_autorizado` y crea la cuenta en Supabase Auth con la contraseña cifrada.
+
+La primera cuenta del administrador (o cualquier otra, si se prefiere) se puede crear también desde Supabase:
 
 1. En el SQL Editor (la autorización vence a los 15 minutos y se usa una sola vez):
    ```sql
@@ -142,7 +144,11 @@ Para el administrador del sistema se repite con `'admin'`, `'admin@pescacorral.e
 
 ### Roles administrativos
 
-Toda cuenta nueva de Google es *Pescador/Turista* (o *Dueño de catamarán*, si lo elige en el alta). Los roles administrativos no pueden autoasignarse: el trigger `proteger_perfil` impide que un usuario cambie su rol, su correo o su estado. Desde la pantalla Usuarios, la administración sólo cambia el tipo de cuenta (pescador o dueño) y el estado de las cuentas del público. Las cuentas del personal reciben su rol al crearse, desde `personal_autorizado`, y sólo se modifican desde el SQL Editor.
+Toda cuenta nueva de Google es *Pescador/Turista* (o *Dueño de catamarán*, si lo elige en el alta). Los roles administrativos no pueden autoasignarse: el trigger `proteger_perfil` impide que un usuario cambie su rol, su correo o su estado. Desde la pantalla Usuarios, la administración sólo cambia el tipo de cuenta (pescador o dueño) y el estado de las cuentas del público. Las cuentas del personal reciben su rol al crearse (en Personal o desde `personal_autorizado`) y ese rol no cambia; sólo el administrador del sistema las da de alta, les cambia la contraseña y las activa o desactiva.
+
+### Avisos a los usuarios
+
+La administración (municipio y administrador del sistema) publica avisos en **Avisos** (`#/avisos`): título, mensaje y destinatarios (todos los usuarios, pescadores y turistas, dueños de catamarán o una persona). Cada aviso llega como notificación a la campanita de los destinatarios con cuenta activa y queda registrado en la tabla `aviso` (fecha, autor y cantidad de destinatarios). Lo hace la función `publicar_aviso`.
 
 ### Credenciales
 
@@ -156,13 +162,13 @@ Toda cuenta nueva de Google es *Pescador/Turista* (o *Dueño de catamarán*, si 
 * **Personal con usuario y contraseña**: cuentas creadas sólo por la administración (`personal_autorizado` + trigger), contraseñas de al menos 12 caracteres guardadas cifradas por Supabase Auth, límite de intentos de Supabase y mensaje genérico ante credenciales incorrectas. Cada acceso admite sólo su rol.
 * **Sesiones JWT** emitidas por Supabase Auth, con renovación automática. El flujo PKCE devuelve un código de un solo uso (`?code=`) que la aplicación intercambia por la sesión.
 * **Primer ingreso controlado**: sin DNI y tipo de cuenta confirmados, el enrutador solo permite la pantalla de alta.
-* **Protección del perfil** (trigger `proteger_perfil`): un usuario no puede cambiar su rol, su correo ni el estado de su cuenta; el tipo de cuenta se elige una sola vez. La administración no puede asignar roles administrativos ni modificar cuentas del personal desde la aplicación.
+* **Protección del perfil** (trigger `proteger_perfil`): un usuario no puede cambiar su rol, su correo ni el estado de su cuenta; el tipo de cuenta se elige una sola vez. Los roles administrativos se fijan al dar de alta la cuenta del personal, y sólo el administrador del sistema da de alta, cambia contraseñas y activa o desactiva esas cuentas.
 * **Cuentas desactivadas**: la administración puede desactivar una cuenta desde `#/usuarios`. Con `activo = false` la base le quita todos los permisos (también los de administración), cierra sus sesiones y la aplicación rechaza el ingreso.
 * **RLS**: cada perfil (pescador, dueño, administración municipal, administrador del sistema) solo puede leer y modificar los registros que le corresponden, aun consultando la API directamente.
 * **Escrituras sólo por funciones**: reservas, lugares, permisos y pagos se crean y anulan únicamente con `crear_reserva_completa` y `anular_reserva`, que validan fecha, catamarán, lugares libres, pago y permiso.
 * **Privilegios mínimos**: sin sesión no se accede a ninguna tabla, vista ni función; con sesión sólo se ejecutan las funciones que usa la aplicación.
 * **Frontend**: política de seguridad de contenido (CSP) que sólo admite código propio y conexiones a Supabase; el cliente de Supabase es una copia local con versión fija; todo dato se muestra escapado; los mensajes de error no se toman de la dirección.
-* **Pruebas**: `database/pruebas_seguridad.sql` verifica estos controles con 70 casos.
+* **Pruebas**: `database/pruebas_seguridad.sql` verifica estos controles con 86 casos.
 
 ---
 

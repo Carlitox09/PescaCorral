@@ -83,7 +83,9 @@ function adminLayout({ active, title, subtitle = "", actions = "", body = "" }, 
     ["panel", "Panel", "grid", "#/admin"],
     ["reportes", "Reportes", "bar-chart", "#/reportes"],
     ["usuarios", "Usuarios", "users", "#/usuarios"],
+    ["avisos", "Avisos", "megaphone", "#/avisos"],
     ["gestion", "Catamaranes", "boat", "#/gestion"],
+    ...(p.rol === "admin_sistema" ? [["personal", "Personal", "key", "#/personal"]] : []),
   ];
   const links = nav.map(([key, label, ic, href]) =>
     `<a href="${href}" class="${active === key ? "active" : ""}">${U.icon(ic, { size: 19 })}<span>${label}</span></a>`
@@ -1251,6 +1253,7 @@ async function openNotificaciones(ctx) {
   const notifs = await D.listNotificaciones();
   const body = notifs.length ? `<div class="notif-list">${notifs.map((n) => `
     <div class="notif ${n.leida ? "" : "unread"}">
+      ${n.tipo === "aviso" ? `<span class="notif__tag">${U.icon("megaphone", { size: 14 })} Aviso del ${U.esc(CFG.MUNICIPIO || "municipio")}</span>` : ""}
       <h4>${U.esc(n.titulo)}</h4>
       <p>${U.esc(n.mensaje)}</p>
       <small>${U.fmtRelative(n.created_at)}</small>
@@ -1500,7 +1503,7 @@ export async function viewUsuarios(ctx) {
           </td>
         </tr>`).join("")}</tbody>
       </table>
-      <p class="panel__foot">Desde acá se cambia el tipo de cuenta (pescador o dueño) y el estado de las cuentas del público. Una cuenta desactivada no puede ingresar y sus sesiones se cierran. Las cuentas del personal se gestionan desde la base de datos. Los cambios se aplican al instante.</p>
+      <p class="panel__foot">Desde acá se cambia el tipo de cuenta (pescador o dueño) y el estado de las cuentas del público. Una cuenta desactivada no puede ingresar y sus sesiones se cierran. Las cuentas del personal las da de alta y las gestiona el administrador del sistema, en Personal. Los cambios se aplican al instante.</p>
     </div>`,
   }, ctx));
   wireAdmin(ctx);
@@ -1514,6 +1517,212 @@ export async function viewUsuarios(ctx) {
     try { await D.setActivo(sel.dataset.activo, activo); U.toast(activo ? "Cuenta activada" : "Cuenta desactivada", "ok"); }
     catch (err) { U.toast(err.message, "err"); }
   }));
+}
+
+/* ============================================================================
+ *  AVISOS (municipio y administración): publicar un aviso que llega a la
+ *  campanita de los usuarios elegidos
+ * ========================================================================== */
+export async function viewAvisos(ctx) {
+  const [avisos, usuarios] = await Promise.all([D.listAvisos(), D.listUsuarios()]);
+  const publico = usuarios.filter((u) => !D.esRolPersonal(u.rol) && u.activo !== false && u.perfil_completo !== false)
+    .sort((a, b) => `${a.nombre} ${a.apellido}`.localeCompare(`${b.nombre} ${b.apellido}`));
+  const destinoTxt = (a) => a.destino === "usuario"
+    ? `${U.esc(`${a.destinatario?.nombre || ""} ${a.destinatario?.apellido || ""}`.trim() || "Un usuario")}`
+    : U.esc(D.DESTINOS_AVISO[a.destino] || a.destino);
+
+  U.mount(adminLayout({
+    active: "avisos",
+    title: "Avisos",
+    subtitle: "Mensajes de la administración para los usuarios",
+    body: `<div class="panel">
+        <h3>${U.icon("megaphone", { size: 18 })} Nuevo aviso</h3>
+        <form id="av-form" novalidate>
+          <div class="field"><label for="av-destino">Destinatarios</label>
+            <select class="select" id="av-destino">
+              ${Object.entries(D.DESTINOS_AVISO).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}
+            </select></div>
+          <div class="field hide" id="av-usuario-campo"><label for="av-usuario">Usuario</label>
+            <select class="select" id="av-usuario">
+              <option value="">Elegí un usuario</option>
+              ${publico.map((u) => `<option value="${u.id}">${U.esc(`${u.nombre} ${u.apellido || ""}`.trim())} · ${U.esc(u.email)}</option>`).join("")}
+            </select></div>
+          <div class="field"><label for="av-titulo">Título</label>
+            <input class="input" id="av-titulo" maxlength="80" placeholder="Por ejemplo: Dique cerrado por crecida"/></div>
+          <div class="field"><label for="av-mensaje">Mensaje</label>
+            <textarea class="input" id="av-mensaje" rows="4" maxlength="500" placeholder="Escribí el aviso tal como lo van a leer los usuarios."></textarea>
+            <div class="field__hint" id="av-cuenta">0 / 500</div></div>
+          <div class="field__error hide" id="av-err"></div>
+          <div class="nota nota--agua">${U.icon("bell", { size: 18 })}<span>El aviso se publica al instante y llega como notificación a la campanita de cada destinatario.</span>
+            <button class="btn btn--primary" type="submit" id="av-btn">${U.icon("send", { size: 16 })} Publicar aviso</button></div>
+        </form>
+      </div>
+      <div class="panel">
+        <h3>Avisos publicados</h3>
+        <table class="table">
+          <thead><tr><th>Fecha</th><th>Aviso</th><th>Destinatarios</th><th>Publicado por</th></tr></thead>
+          <tbody>${avisos.map((a) => `<tr>
+            <td style="white-space:nowrap">${U.fmtDateTime(a.created_at)}</td>
+            <td><b>${U.esc(a.titulo)}</b><br><small class="muted">${U.esc(a.mensaje)}</small></td>
+            <td>${destinoTxt(a)}<br><small class="muted">${a.destinatarios} ${a.destinatarios === 1 ? "persona" : "personas"}</small></td>
+            <td>${U.esc(`${a.autor?.nombre || ""} ${a.autor?.apellido || ""}`.trim() || "—")}</td>
+          </tr>`).join("") || `<tr><td colspan="4" class="muted">Todavía no se publicaron avisos.</td></tr>`}</tbody>
+        </table>
+        <p class="panel__foot">Cada aviso queda registrado con su fecha, quién lo publicó y cuántas personas lo recibieron.</p>
+      </div>`,
+  }, ctx));
+  wireAdmin(ctx);
+
+  const destino = U.$("#av-destino"), campoUsuario = U.$("#av-usuario-campo"), mensaje = U.$("#av-mensaje");
+  const errBox = U.$("#av-err"), btn = U.$("#av-btn");
+  destino.addEventListener("change", () => campoUsuario.classList.toggle("hide", destino.value !== "usuario"));
+  mensaje.addEventListener("input", () => { U.$("#av-cuenta").textContent = `${mensaje.value.length} / 500`; });
+  U.$("#av-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    errBox.classList.add("hide");
+    const datos = { titulo: U.$("#av-titulo").value, mensaje: mensaje.value, destino: destino.value, idUsuario: U.$("#av-usuario").value || null };
+    const cuantos = destino.value === "usuario" ? "a esa persona" : `a ${D.DESTINOS_AVISO[destino.value].toLowerCase()}`;
+    const ok = await U.confirmDialog({ title: "Publicar aviso", message: `El aviso "${datos.titulo.trim()}" se va a enviar ${cuantos}. ¿Confirmás?`, okLabel: "Publicar", okVariant: "btn--primary" });
+    if (!ok) return;
+    btn.disabled = true;
+    try {
+      const r = await D.publicarAviso(datos);
+      U.toast(`Aviso publicado · ${r.destinatarios} ${r.destinatarios === 1 ? "persona" : "personas"}`, "ok");
+      ctx.rerender();
+    } catch (err) {
+      showErr(errBox, err.message); btn.disabled = false;
+    }
+  });
+}
+
+/* ============================================================================
+ *  PERSONAL (sólo administrador del sistema): alta de cuentas del municipio y
+ *  de la administración, cambio de contraseña y activación
+ * ========================================================================== */
+export async function viewPersonal(ctx) {
+  const yo = ctx.session.profile.id;
+  const personal = (await D.listUsuarios()).filter((u) => D.esRolPersonal(u.rol))
+    .sort((a, b) => a.rol.localeCompare(b.rol) || D.usuarioPersonal(a.email).localeCompare(D.usuarioPersonal(b.email)));
+
+  U.mount(adminLayout({
+    active: "personal",
+    title: "Personal",
+    subtitle: "Cuentas del municipio y de la administración",
+    actions: `<button class="btn btn--cta btn--sm" data-nueva>${U.icon("plus", { size: 16 })} Nueva cuenta</button>`,
+    body: `<div class="panel">
+      <table class="table">
+        <thead><tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Ingresa por</th><th>Cuenta</th><th></th></tr></thead>
+        <tbody>${personal.map((u) => `<tr>
+          <td><b>${U.esc(D.usuarioPersonal(u.email))}</b></td>
+          <td>${U.esc(`${u.nombre} ${u.apellido || ""}`.trim())}</td>
+          <td>${U.esc(U.rolLabel(u.rol))}</td>
+          <td><small class="muted">${u.rol === "admin_sistema" ? "/Admin" : "/Municipio"}</small></td>
+          <td>${u.id === yo ? "Activa (tu cuenta)" : `
+            <select class="select" data-activo="${u.id}" style="padding:8px 10px;font-size:.85rem">
+              <option value="1"${u.activo !== false ? " selected" : ""}>Activa</option>
+              <option value="0"${u.activo === false ? " selected" : ""}>Desactivada</option>
+            </select>`}</td>
+          <td><button class="btn btn--soft btn--sm" data-clave="${u.id}" data-usuario="${U.esc(D.usuarioPersonal(u.email))}">${U.icon("key", { size: 16 })} Contraseña</button></td>
+        </tr>`).join("")}</tbody>
+      </table>
+      <p class="panel__foot">El personal municipal ingresa por /Municipio y el administrador del sistema por /Admin, con el usuario y la contraseña que se definen acá. El rol de una cuenta se fija al crearla. Una cuenta desactivada no puede ingresar y sus sesiones se cierran.</p>
+    </div>`,
+  }, ctx));
+  wireAdmin(ctx);
+
+  U.$$("[data-activo]").forEach((sel) => sel.addEventListener("change", async () => {
+    const activo = sel.value === "1";
+    try { await D.setActivo(sel.dataset.activo, activo); U.toast(activo ? "Cuenta activada" : "Cuenta desactivada", "ok"); }
+    catch (err) { U.toast(err.message, "err"); ctx.rerender(); }
+  }));
+  U.$$("[data-clave]").forEach((b) => b.addEventListener("click", () => claveModal(ctx, b.dataset.clave, b.dataset.usuario)));
+  U.$("[data-nueva]").addEventListener("click", () => cuentaPersonalModal(ctx));
+}
+
+const REQUISITOS_CLAVE = "Al menos 12 caracteres, con minúsculas, mayúsculas, números y símbolos.";
+function camposClave() {
+  return `
+    <div class="field"><label for="pc-clave">Contraseña</label>
+      <input class="input" id="pc-clave" type="password" autocomplete="new-password"/>
+      <div class="field__hint">${REQUISITOS_CLAVE}</div></div>
+    <div class="field"><label for="pc-clave2">Repetí la contraseña</label>
+      <input class="input" id="pc-clave2" type="password" autocomplete="new-password"/>
+      <label class="field__hint" style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="pc-ver"/> Mostrar contraseña</label></div>
+    <div class="field__error hide" id="pc-err"></div>`;
+}
+function wireCamposClave() {
+  U.$("#pc-ver").addEventListener("change", (e) => {
+    U.$("#pc-clave").type = U.$("#pc-clave2").type = e.target.checked ? "text" : "password";
+  });
+}
+function leerClave() {
+  const clave = U.$("#pc-clave").value;
+  if (!D.claveSegura(clave)) throw new Error(`La contraseña no cumple los requisitos. ${REQUISITOS_CLAVE}`);
+  if (clave !== U.$("#pc-clave2").value) throw new Error("Las contraseñas no coinciden.");
+  return clave;
+}
+
+function cuentaPersonalModal(ctx) {
+  U.modal({
+    title: "Nueva cuenta del personal",
+    body: `
+      <div class="field"><label for="pc-rol">Rol</label>
+        <select class="select" id="pc-rol">
+          <option value="admin_municipal">${U.rolLabel("admin_municipal")}</option>
+          <option value="admin_sistema">${U.rolLabel("admin_sistema")}</option>
+        </select>
+        <div class="field__hint">La administración municipal ingresa por /Municipio; el administrador del sistema, por /Admin.</div></div>
+      <div class="field"><label for="pc-usuario">Usuario</label>
+        <input class="input" id="pc-usuario" autocapitalize="none" spellcheck="false" maxlength="30" placeholder="por ejemplo: jperez"/>
+        <div class="field__hint">Entre 3 y 30 caracteres: letras minúsculas, números, punto o guiones.</div></div>
+      <div class="flex gap-12">
+        <div class="field grow"><label for="pc-nombre">Nombre</label><input class="input" id="pc-nombre" autocomplete="off"/></div>
+        <div class="field grow"><label for="pc-apellido">Apellido</label><input class="input" id="pc-apellido" autocomplete="off"/></div>
+      </div>
+      ${camposClave()}`,
+    actions: [
+      { label: "Cancelar", variant: "btn--soft" },
+      {
+        label: "Crear cuenta", variant: "btn--primary", close: false,
+        onClick: async () => {
+          const errBox = U.$("#pc-err"); errBox.classList.add("hide");
+          try {
+            const r = await D.crearCuentaPersonal({
+              usuario: U.$("#pc-usuario").value, nombre: U.$("#pc-nombre").value, apellido: U.$("#pc-apellido").value,
+              rol: U.$("#pc-rol").value, clave: leerClave(),
+            });
+            U.closeModal();
+            U.toast(`Cuenta creada: ${r.usuario} ingresa por ${r.rol === "admin_sistema" ? "/Admin" : "/Municipio"}`, "ok");
+            ctx.rerender();
+          } catch (err) { showErr(errBox, err.message); return false; }
+        },
+      },
+    ],
+  });
+  wireCamposClave();
+  U.$("#pc-usuario").focus();
+}
+
+function claveModal(ctx, userId, usuario) {
+  U.modal({
+    title: `Contraseña de ${usuario}`,
+    body: `<p class="muted" style="margin-top:-6px;margin-bottom:14px">La contraseña anterior deja de funcionar y se cierran las sesiones abiertas de esa cuenta.</p>${camposClave()}`,
+    actions: [
+      { label: "Cancelar", variant: "btn--soft" },
+      {
+        label: "Guardar", variant: "btn--primary", close: false,
+        onClick: async () => {
+          const errBox = U.$("#pc-err"); errBox.classList.add("hide");
+          try {
+            await D.cambiarClavePersonal(userId, leerClave());
+            U.closeModal(); U.toast("Contraseña actualizada", "ok");
+          } catch (err) { showErr(errBox, err.message); return false; }
+        },
+      },
+    ],
+  });
+  wireCamposClave();
+  U.$("#pc-clave").focus();
 }
 
 /* ============================================================================

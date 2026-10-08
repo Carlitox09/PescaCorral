@@ -340,6 +340,7 @@ a { color: inherit; text-decoration: none; }
 .input--error { border-color: var(--rojo-500); background: #FFF7F5; }
 .field__error { color: var(--rojo-600); font-size: .8rem; margin-top: 5px; font-weight: 600; }
 .field__hint { color: var(--muted); font-size: .78rem; margin-top: 5px; }
+textarea.input { min-height: 110px; resize: vertical; line-height: 1.45; }
 
 /* Filtros (fecha / turno) */
 .filters { display: flex; gap: 10px; margin-bottom: 16px; }
@@ -692,6 +693,8 @@ button.chip:hover { border-color: var(--granate-500); color: var(--granate-700);
 .notif h4 { font-size: .92rem; font-weight: 800; }
 .notif p { font-size: .84rem; color: var(--text-2); margin-top: 2px; }
 .notif small { color: var(--muted); font-size: .74rem; }
+.notif__tag { display: inline-flex; align-items: center; gap: 5px; margin-bottom: 4px; font-size: .72rem; font-weight: 800; letter-spacing: .2px; color: var(--granate-700); }
+.notif__tag svg { flex: none; }
 
 /* Utilidades */
 .muted { color: var(--muted); }
