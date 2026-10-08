@@ -2,6 +2,8 @@
 <html lang="es-AR">
 <head>
   <meta charset="UTF-8" />
+  <!-- Política de seguridad de contenido: sólo código propio; datos sólo con Supabase. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.googleusercontent.com; connect-src 'self' https://*.supabase.co wss://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5" />
   <title>PescaCorral · Reservas y permisos de pesca</title>
   <meta name="description" content="Gestión digital de reservas de pesca deportiva y permisos municipales en el Dique Cabra Corral." />
@@ -71,39 +73,7 @@
   <!-- Aplicación (módulo ES) -->
   <script type="module" src="js/app.js"></script>
 
-  <!-- Registro del Service Worker -->
-  <script>
-    /* Actualización automática: cuando se publica una versión nueva, el service
-     * worker nuevo toma el control. Si la página recién se abrió, se recarga sola;
-     * si el usuario ya la estaba usando, se ofrece actualizar para no perder lo
-     * que esté cargando. */
-    if ("serviceWorker" in navigator) {
-      const abierta = Date.now();
-      const habiaControlador = Boolean(navigator.serviceWorker.controller);
-      let recargando = false;
-      const recargar = () => { if (!recargando) { recargando = true; location.reload(); } };
-      navigator.serviceWorker.addEventListener("controllerchange", () => {
-        if (!habiaControlador) return;                      // primera instalación: nada que actualizar
-        if (Date.now() - abierta < 15000) { recargar(); return; }
-        if (document.getElementById("aviso-version")) return;
-        const aviso = document.createElement("div");
-        aviso.id = "aviso-version";
-        aviso.className = "aviso-version";
-        aviso.innerHTML = '<span>Hay una versión nueva de PescaCorral.</span><button type="button">Actualizar</button>';
-        aviso.querySelector("button").addEventListener("click", recargar);
-        document.body.appendChild(aviso);
-      });
-      window.addEventListener("load", () => {
-        navigator.serviceWorker.register("service-worker.js", { updateViaCache: "none" }).then((reg) => {
-          // Al volver a la app (por ejemplo, desde segundo plano en el celular) se busca una versión nueva.
-          document.addEventListener("visibilitychange", () => {
-            if (document.visibilityState === "visible") reg.update().catch(() => {});
-          });
-        }).catch((err) => {
-          console.warn("No se pudo registrar el Service Worker:", err);
-        });
-      });
-    }
-  </script>
+  <!-- Registro del Service Worker y actualización automática -->
+  <script src="js/sw-registro.js"></script>
 </body>
 </html>

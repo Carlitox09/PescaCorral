@@ -3,9 +3,11 @@
 --  Sólo lectura: no modifica nada. Ejecutar en Supabase -> SQL Editor.
 --
 --  Compara la base con schema.sql (tablas, vistas, funciones, disparadores,
---  índices, secuencias, políticas RLS y tareas de pg_cron) y revisa que los
---  datos estén al día y sean coherentes entre sí. Devuelve una fila por cada
---  diferencia, o una sola fila "OK" si todo coincide.
+--  índices, secuencias, políticas RLS, privilegios de los roles de la API y
+--  tareas de pg_cron) y revisa que los datos estén al día y sean coherentes
+--  entre sí. Devuelve una fila por cada diferencia, o una sola fila "OK" si
+--  todo coincide. Las pruebas de acceso con cada perfil están en
+--  pruebas_seguridad.sql.
 --
 --  Al cambiar schema.sql (objetos nuevos o eliminados) hay que actualizar
 --  también las listas de "esperado" de este archivo.
@@ -20,12 +22,18 @@ esperado_vista(n) as (values
     ('v_permisos_por_especie'), ('v_reservas_por_dia')),
 esperado_funcion(n, args) as (values
     ('actualizar_alerta_fauna', 0), ('actualizar_estados', 0), ('anular_reserva', 1),
-    ('crear_reserva_completa', 9), ('es_admin', 0), ('generar_numero_permiso', 0),
+    ('cerrar_sesiones_desactivada', 0), ('crear_reserva_completa', 9), ('es_admin', 0),
+    ('exigir_cuenta_activa', 0), ('generar_numero_permiso', 0),
     ('generar_recordatorios', 1), ('generar_reporte_municipal', 2), ('handle_new_user', 0),
     ('proteger_perfil', 0), ('rol_actual', 0), ('set_updated_at', 0),
     ('ubicacion_lugar', 2), ('validar_permiso', 2)),
+-- Funciones que pueden ejecutar los usuarios con sesión (las demás son internas).
+esperado_funcion_api(n) as (values
+    ('anular_reserva'), ('crear_reserva_completa'), ('es_admin'), ('generar_recordatorios'),
+    ('generar_reporte_municipal'), ('rol_actual'), ('validar_permiso')),
 esperado_disparador(t, n) as (values
     ('usuario', 'trg_usuario_updated'), ('usuario', 'trg_usuario_proteger'),
+    ('usuario', 'trg_usuario_cerrar_sesiones'),
     ('catamaran', 'trg_catamaran_updated'), ('reserva', 'trg_reserva_updated'),
     ('permiso', 'trg_permiso_alerta_fauna'), ('auth.users', 'on_auth_user_created')),
 esperado_indice(n) as (values
@@ -40,9 +48,8 @@ esperado_politica(t, n) as (values
     ('catamaran', 'catamaran_select'), ('catamaran', 'catamaran_insert'),
     ('catamaran', 'catamaran_update'), ('catamaran', 'catamaran_delete'),
     ('lugar', 'lugar_select'), ('lugar', 'lugar_admin'),
-    ('reserva', 'reserva_select'), ('reserva', 'reserva_insert'), ('reserva', 'reserva_update'),
-    ('reserva_lugar', 'reserva_lugar_select'), ('reserva_lugar', 'reserva_lugar_insert'),
-    ('permiso', 'permiso_select'), ('permiso', 'permiso_update'), ('pago', 'pago_select'),
+    ('reserva', 'reserva_select'), ('reserva_lugar', 'reserva_lugar_select'),
+    ('permiso', 'permiso_select'), ('pago', 'pago_select'),
     ('reporte', 'reporte_admin'), ('notificacion', 'notificacion_select'),
     ('notificacion', 'notificacion_update'), ('tarifa_permiso', 'tarifa_permiso_select'),
     ('tarifa_permiso', 'tarifa_permiso_admin'), ('alerta_fauna', 'alerta_fauna_admin')),
@@ -55,7 +62,9 @@ real_rel as (
     where s.nspname = 'public'
       and not exists (select 1 from pg_depend d where d.objid = c.oid and d.deptype = 'e')),
 real_funcion as (
-    select p.proname as n, p.pronargs as args
+    select p.proname as n, p.pronargs as args,
+           has_function_privilege('anon', p.oid, 'execute')          as anon,
+           has_function_privilege('authenticated', p.oid, 'execute') as auth
     from pg_proc p join pg_namespace s on s.oid = p.pronamespace
     where s.nspname = 'public'
       and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e')),
@@ -103,6 +112,28 @@ hallazgos(tipo, objeto, detalle) as (
         where k = 'r' and n in (select n from esperado_tabla)
           and not (select relrowsecurity from pg_class where oid = r.oid)
     union all select 'Tarea pg_cron sobrante', n, '' from real_cron where n not in (select n from esperado_cron)
+
+    -- Privilegios de los roles de la API
+    union all select 'Función ejecutable sin sesión', n, 'revocar a anon y public' from real_funcion where anon
+    union all select 'Función interna expuesta', n, 'revocar a authenticated' from real_funcion
+        where auth and n not in (select n from esperado_funcion_api)
+    union all select 'Falta permiso de ejecución', n, 'otorgar a authenticated' from esperado_funcion_api
+        where n not in (select n from real_funcion where auth)
+    union all select 'Acceso sin sesión', r.n, 'revocar privilegios a anon' from real_rel r
+        where r.k in ('r', 'p', 'v', 'm')
+          and (has_table_privilege('anon', r.oid, 'select') or has_table_privilege('anon', r.oid, 'insert')
+               or has_table_privilege('anon', r.oid, 'update') or has_table_privilege('anon', r.oid, 'delete'))
+    union all select 'Escritura directa habilitada', t.n || ' · ' || p.p, 'sólo mediante las funciones de negocio'
+        from (values ('reserva'), ('reserva_lugar'), ('permiso'), ('pago'), ('notificacion'),
+                     ('catamaran'), ('personal_autorizado')) t(n)
+        cross join (values ('insert'), ('update'), ('delete')) p(p)
+        where has_table_privilege('authenticated', 'public.' || t.n, p.p)
+          and not (t.n = 'catamaran' and p.p in ('insert', 'delete'))
+    union all select 'Autorizaciones legibles', 'personal_autorizado', 'revocar a authenticated'
+        where has_table_privilege('authenticated', 'public.personal_autorizado', 'select')
+    union all select 'Políticas de escritura', tablename || '.' || policyname, 'esa tabla se escribe sólo con funciones'
+        from pg_policies where schemaname = 'public'
+          and tablename in ('reserva', 'reserva_lugar', 'permiso', 'pago') and cmd <> 'SELECT'
 
     -- Cuentas
     union all select 'Cuenta sin perfil', u.email, 'está en auth.users y no en usuario' from auth.users u

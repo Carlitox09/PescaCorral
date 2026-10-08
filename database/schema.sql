@@ -323,6 +323,7 @@ create sequence public.seq_numero_permiso start 215 increment 1;
 create or replace function public.generar_numero_permiso()
 returns text
 language sql
+set search_path = public
 as $$
     select 'PCC-' || lpad(nextval('public.seq_numero_permiso')::text, 6, '0');
 $$;
@@ -335,6 +336,7 @@ create or replace function public.ubicacion_lugar(p_numero integer, p_total inte
 returns text
 language sql
 immutable
+set search_path = public
 as $$
     select case when p_numero <= x.filas then 'estribor' else 'babor' end
            || ' · ' ||
@@ -347,8 +349,10 @@ as $$
                       else 2 * ceil(p_total / 2.0)::int - p_numero end as fila) x;
 $$;
 
--- Devuelve el rol del usuario autenticado. SECURITY DEFINER para evitar
--- recursión de RLS al consultarse desde políticas sobre "usuario".
+-- Devuelve el rol del usuario autenticado, sólo si su cuenta está activa (una
+-- cuenta desactivada pierde sus permisos, también los de administración).
+-- SECURITY DEFINER para evitar recursión de RLS al consultarse desde políticas
+-- sobre "usuario".
 create or replace function public.rol_actual()
 returns text
 language sql
@@ -356,7 +360,7 @@ stable
 security definer
 set search_path = public
 as $$
-    select rol from public.usuario where id = auth.uid();
+    select rol from public.usuario where id = auth.uid() and activo;
 $$;
 
 create or replace function public.es_admin()
@@ -369,10 +373,38 @@ as $$
     select coalesce(public.rol_actual() in ('admin_municipal','admin_sistema'), false);
 $$;
 
+-- Primera validación de toda función de negocio: hay un usuario y su cuenta
+-- está activa. Devuelve su id.
+create or replace function public.exigir_cuenta_activa()
+returns uuid
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+    v_uid    uuid := auth.uid();
+    v_activo boolean;
+begin
+    if v_uid is null then
+        raise exception 'No autenticado';
+    end if;
+    select activo into v_activo from public.usuario where id = v_uid;
+    if v_activo is null then
+        raise exception 'No se encontró tu perfil';
+    end if;
+    if not v_activo then
+        raise exception 'Tu cuenta está desactivada. Comunicate con el Municipio de Coronel Moldes.';
+    end if;
+    return v_uid;
+end;
+$$;
+
 -- Mantener updated_at al actualizar filas.
 create or replace function public.set_updated_at()
 returns trigger
 language plpgsql
+set search_path = public
 as $$
 begin
     new.updated_at = now();
@@ -449,32 +481,55 @@ create trigger on_auth_user_created
 -- Protección de los datos sensibles del perfil.
 -- La política RLS permite que cada usuario edite su propio perfil; este
 -- trigger impide que, al hacerlo, cambie su rol, su correo o su estado. El tipo
--- de cuenta (pescador o dueño) sólo se elige una vez, en el alta. Las consultas
--- administrativas (SQL Editor) no tienen restricción.
+-- de cuenta (pescador o dueño) sólo se elige una vez, en el alta. Sobre cuentas
+-- ajenas, la administración sólo cambia el tipo de cuenta y el estado de las
+-- cuentas del público: las cuentas del personal y los roles administrativos se
+-- gestionan desde la base. Las consultas administrativas (SQL Editor) no tienen
+-- restricción.
 -- ----------------------------------------------------------------------------
 create or replace function public.proteger_perfil()
 returns trigger
 language plpgsql
 set search_path = public
 as $$
+declare
+    v_uid uuid := auth.uid();
 begin
-    if auth.uid() is null or public.es_admin() then
+    -- Sin usuario (SQL Editor, tareas programadas, funciones internas): sin restricción.
+    if v_uid is null then
         return new;
     end if;
 
-    if new.id <> old.id
-       or new.email <> old.email
-       or new.activo <> old.activo
-       or new.created_at <> old.created_at then
+    if new.id <> old.id or new.email <> old.email or new.created_at <> old.created_at then
         raise exception 'No está permitido modificar ese dato del perfil';
     end if;
 
+    -- Cuenta ajena: sólo la administración, y sólo el tipo de cuenta y el estado
+    -- de las cuentas del público. El personal se gestiona desde la base.
+    if old.id <> v_uid then
+        if not public.es_admin() then
+            raise exception 'No autorizado';
+        end if;
+        if old.rol not in ('pescador', 'dueno') or new.rol not in ('pescador', 'dueno') then
+            raise exception 'Las cuentas del personal y los roles administrativos se gestionan desde la base de datos';
+        end if;
+        if (new.nombre, new.apellido, new.telefono, new.dni, new.avatar_url, new.perfil_completo)
+           is distinct from
+           (old.nombre, old.apellido, old.telefono, old.dni, old.avatar_url, old.perfil_completo) then
+            raise exception 'La administración sólo puede cambiar el tipo de cuenta y el estado';
+        end if;
+        return new;
+    end if;
+
+    -- Cuenta propia: no cambia su estado; el tipo de cuenta se elige una sola vez, en el alta.
+    if new.activo <> old.activo then
+        raise exception 'No está permitido modificar ese dato del perfil';
+    end if;
     if new.rol <> old.rol then
         if old.perfil_completo or new.rol not in ('pescador', 'dueno') then
             raise exception 'El tipo de cuenta sólo puede modificarlo la administración municipal';
         end if;
     end if;
-
     if old.perfil_completo then
         new.perfil_completo := true;           -- el alta no se puede deshacer
     end if;
@@ -485,6 +540,30 @@ $$;
 create trigger trg_usuario_proteger
     before update on public.usuario
     for each row execute function public.proteger_perfil();
+
+-- Al desactivar una cuenta se cierran sus sesiones (con ellas caen los refresh
+-- tokens); desde ese momento rol_actual() y exigir_cuenta_activa() la rechazan.
+create or replace function public.cerrar_sesiones_desactivada()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+    if old.activo and not new.activo then
+        begin
+            delete from auth.sessions where user_id = new.id;
+        exception when insufficient_privilege then
+            raise warning 'No se pudieron cerrar las sesiones de %', new.email;
+        end;
+    end if;
+    return null;
+end;
+$$;
+
+create trigger trg_usuario_cerrar_sesiones
+    after update of activo on public.usuario
+    for each row execute function public.cerrar_sesiones_desactivada();
 
 -- ============================================================================
 -- 3. LÓGICA DE NEGOCIO (RPC)
@@ -503,14 +582,11 @@ security definer
 set search_path = public
 as $$
 declare
-    v_uid   uuid := auth.uid();
+    v_uid   uuid := public.exigir_cuenta_activa();
     p       record;
     v_desde date;
     v_hasta date;
 begin
-    if v_uid is null then
-        raise exception 'No autenticado';
-    end if;
     if coalesce(trim(p_numero), '') = '' then
         raise exception 'Ingresá el número de tu permiso';
     end if;
@@ -574,7 +650,7 @@ security definer
 set search_path = public
 as $$
 declare
-    v_uid         uuid := auth.uid();
+    v_uid         uuid := public.exigir_cuenta_activa();
     v_turno       text := coalesce(p_turno, 'manana');
     v_metodo      text := coalesce(p_metodo_pago, 'tarjeta');
     v_tipo        text := coalesce(p_tipo_permiso, 'diario');
@@ -596,9 +672,6 @@ declare
     v_permiso     uuid;
     v_comprobante text;
 begin
-    if v_uid is null then
-        raise exception 'No autenticado';
-    end if;
     if v_cant = 0 then
         raise exception 'Debe seleccionar al menos un lugar';
     end if;
@@ -707,7 +780,8 @@ $$;
 
 -- ----------------------------------------------------------------------------
 -- anular_reserva: cancela la reserva, libera los asientos y anula el permiso
--- emitido con ella, salvo que ampare otra reserva activa.
+-- emitido con ella, salvo que ampare otra reserva activa. Sólo reservas
+-- confirmadas; el pescador, las suyas y de hoy en adelante.
 -- ----------------------------------------------------------------------------
 create or replace function public.anular_reserva(p_id_reserva uuid)
 returns void
@@ -716,24 +790,31 @@ security definer
 set search_path = public
 as $$
 declare
-    v_uid uuid := auth.uid();
-    v_dueno uuid;
+    v_uid   uuid := public.exigir_cuenta_activa();
+    v_admin boolean := public.es_admin();
+    r       record;
 begin
-    select id_usuario into v_dueno from public.reserva where id = p_id_reserva;
-    if v_dueno is null then
+    select id_usuario, estado, fecha into r from public.reserva where id = p_id_reserva;
+    if not found then
         raise exception 'La reserva no existe';
     end if;
-    if v_dueno <> v_uid and not public.es_admin() then
+    if r.id_usuario <> v_uid and not v_admin then
         raise exception 'No autorizado para anular esta reserva';
+    end if;
+    if r.estado <> 'confirmada' then
+        raise exception 'Sólo se puede anular una reserva confirmada';
+    end if;
+    if not v_admin and r.fecha < (now() at time zone 'America/Argentina/Salta')::date then
+        raise exception 'No se puede anular una salida que ya pasó';
     end if;
 
     update public.reserva       set estado = 'cancelada' where id = p_id_reserva;
     update public.reserva_lugar set estado = 'cancelada' where id_reserva = p_id_reserva;
     update public.permiso pe    set estado = 'anulado'
     where pe.id_reserva = p_id_reserva
-      and not exists (select 1 from public.reserva r
-                      where r.id_permiso = pe.id and r.id <> p_id_reserva
-                        and r.estado in ('confirmada', 'completada'));
+      and not exists (select 1 from public.reserva x
+                      where x.id_permiso = pe.id and x.id <> p_id_reserva
+                        and x.estado in ('confirmada', 'completada'));
 end;
 $$;
 
@@ -814,8 +895,7 @@ alter table public.reporte        enable row level security;
 alter table public.notificacion   enable row level security;
 alter table public.alerta_fauna   enable row level security;
 alter table public.tarifa_permiso enable row level security;
-alter table public.personal_autorizado enable row level security;   -- sin políticas: sólo SQL Editor
-revoke all on public.personal_autorizado from anon, authenticated;
+alter table public.personal_autorizado enable row level security;   -- sin políticas ni privilegios: sólo SQL Editor (sección 6)
 
 -- ----- USUARIO --------------------------------------------------------------
 create policy usuario_select_propio on public.usuario
@@ -861,7 +941,10 @@ create policy lugar_admin on public.lugar
     );
 
 -- ----- RESERVA --------------------------------------------------------------
--- El pescador ve/crea las suyas; el dueño ve las de sus catamaranes; admin todas.
+-- El pescador ve las suyas; el dueño, las de sus catamaranes; admin, todas.
+-- Reservas, lugares, permisos y pagos no tienen políticas de escritura: se
+-- crean y anulan sólo con crear_reserva_completa y anular_reserva, que
+-- validan cada regla (fecha, catamarán, lugares libres, pago y permiso).
 create policy reserva_select on public.reserva
     for select using (
         id_usuario = auth.uid()
@@ -869,10 +952,6 @@ create policy reserva_select on public.reserva
         or exists (select 1 from public.catamaran c
                    where c.id = reserva.id_catamaran and c.id_propietario = auth.uid())
     );
-create policy reserva_insert on public.reserva
-    for insert with check (id_usuario = auth.uid());
-create policy reserva_update on public.reserva
-    for update using (id_usuario = auth.uid() or public.es_admin());
 
 -- ----- RESERVA_LUGAR --------------------------------------------------------
 create policy reserva_lugar_select on public.reserva_lugar
@@ -884,17 +963,10 @@ create policy reserva_lugar_select on public.reserva_lugar
                    join public.catamaran c on c.id = r.id_catamaran
                    where r.id = reserva_lugar.id_reserva and c.id_propietario = auth.uid())
     );
-create policy reserva_lugar_insert on public.reserva_lugar
-    for insert with check (
-        exists (select 1 from public.reserva r
-                where r.id = reserva_lugar.id_reserva and r.id_usuario = auth.uid())
-    );
 
 -- ----- PERMISO --------------------------------------------------------------
 create policy permiso_select on public.permiso
     for select using (id_usuario = auth.uid() or public.es_admin());
-create policy permiso_update on public.permiso
-    for update using (public.es_admin());
 
 -- ----- PAGO -----------------------------------------------------------------
 create policy pago_select on public.pago
@@ -925,28 +997,27 @@ create policy alerta_fauna_admin on public.alerta_fauna
     for all using (public.es_admin()) with check (public.es_admin());
 
 -- ============================================================================
--- 6. PERMISOS DE EJECUCIÓN DE FUNCIONES (roles de Supabase)
+-- 6. PRIVILEGIOS DE LOS ROLES DE LA API (roles de Supabase)
+--    anon (sin sesión) no accede a nada: toda la aplicación requiere ingresar.
+--    authenticated recibe lo que usa la aplicación y RLS decide qué filas ve o
+--    modifica cada uno. Las vistas usan security_invoker, así que también
+--    respetan RLS. Los permisos sobre funciones se dan al final del script
+--    (sección 9), cuando ya están todas creadas.
 -- ============================================================================
-grant execute on function public.crear_reserva_completa(uuid,date,text,uuid[],text,text,uuid,text,text) to authenticated;
-grant execute on function public.validar_permiso(text,date) to authenticated;
-grant execute on function public.anular_reserva(uuid) to authenticated;
-grant execute on function public.rol_actual() to authenticated, anon;
-grant execute on function public.es_admin()   to authenticated, anon;
-
--- Acceso a tablas, vistas y secuencias para los roles de la API.
--- La seguridad real la imponen las políticas RLS de arriba; estos grants son
--- el modelo estándar de Supabase (y dejan el script self-contained en cualquier
--- PostgreSQL). Las vistas usan security_invoker, así que también respetan RLS.
 grant usage on schema public to anon, authenticated;
-grant select, insert, update, delete on all tables in schema public to anon, authenticated;
-grant usage, select on all sequences in schema public to anon, authenticated;
-grant select on
-    public.v_reservas_por_dia,
-    public.v_ocupacion_catamaran,
-    public.v_permisos_por_especie,
-    public.v_dashboard_resumen
-to authenticated;
-grant select on public.v_lugares_ocupados to anon, authenticated;
+revoke all on all tables    in schema public from anon;
+revoke all on all sequences in schema public from anon;
+grant select, insert, update, delete on all tables in schema public to authenticated;
+revoke all on public.personal_autorizado from authenticated;
+
+-- Escrituras sólo mediante las funciones de negocio.
+revoke insert, update, delete on public.reserva, public.reserva_lugar, public.permiso, public.pago from authenticated;
+-- Notificaciones: sólo marcarlas como leídas.
+revoke insert, update, delete on public.notificacion from authenticated;
+grant  update (leida) on public.notificacion to authenticated;
+-- Catamarán: la capacidad (que define los asientos) y el propietario no se cambian.
+revoke update on public.catamaran from authenticated;
+grant  update (nombre, descripcion, precio, habilitacion, estado) on public.catamaran to authenticated;
 
 -- ============================================================================
 -- 7. (OPCIONAL) Realtime: descomentar para recibir cambios en vivo en la app.
@@ -977,8 +1048,12 @@ declare
     v_id      uuid;
     adm       record;
 begin
-    -- Desde la app sólo un administrador puede enviar; pg_cron (sin usuario) genera el automático.
-    if auth.uid() is not null and not public.es_admin() then
+    -- Sin usuario sólo la tarea programada (pg_cron, sin token); desde la app, sólo la administración.
+    if auth.uid() is null then
+        if auth.role() is not null then
+            raise exception 'No autenticado';
+        end if;
+    elsif not public.es_admin() then
         raise exception 'Sólo un administrador puede enviar reportes al municipio';
     end if;
     if p_origen not in ('manual', 'automatico') then p_origen := 'manual'; end if;
@@ -1025,7 +1100,6 @@ begin
     return (select to_jsonb(r) from public.reporte r where r.id = v_id);
 end;
 $$;
-grant execute on function public.generar_reporte_municipal(text, text) to authenticated;
 
 -- ---- 8.2 Recordatorios de salida (HU-011) -----------------------------------
 -- Estados al día: permisos vencidos y salidas ya realizadas (completadas).
@@ -1052,7 +1126,6 @@ begin
     return jsonb_build_object('permisos_vencidos', v_permisos, 'reservas_completadas', v_reservas);
 end;
 $$;
-revoke execute on function public.actualizar_estados() from public, anon, authenticated;
 
 create or replace function public.generar_recordatorios(p_solo_usuario boolean default true)
 returns integer
@@ -1065,6 +1138,19 @@ declare
     n integer := 0;
     r record;
 begin
+    -- Sin usuario sólo la tarea programada; un usuario genera sólo los suyos,
+    -- salvo la administración.
+    if auth.uid() is null then
+        if auth.role() is not null then
+            raise exception 'No autenticado';
+        end if;
+    else
+        perform public.exigir_cuenta_activa();
+        if not public.es_admin() then
+            p_solo_usuario := true;
+        end if;
+    end if;
+
     perform public.actualizar_estados();
     for r in
         select res.id, res.id_usuario, res.fecha, res.turno, c.nombre as catamaran
@@ -1088,7 +1174,6 @@ begin
     return n;
 end;
 $$;
-grant execute on function public.generar_recordatorios(boolean) to authenticated;
 
 -- ---- 8.3 Alertas de fauna automáticas (HU-015) ---------------------------
 -- Al emitirse un permiso, si los permisos del mes de esa especie alcanzan el
@@ -1165,6 +1250,24 @@ begin
 exception when others then
     raise notice 'pg_cron no disponible (%). La app cubre la automatización desde el cliente.', sqlerrm;
 end $$;
+
+-- ============================================================================
+-- 9. PERMISOS DE EJECUCIÓN DE FUNCIONES
+--    PostgreSQL y Supabase dan EXECUTE a todos por defecto. Se quita y se da
+--    sólo a usuarios con sesión, para las funciones que usa la aplicación (y
+--    las que consultan las políticas RLS). Las demás son internas: las usan
+--    otras funciones, los disparadores o pg_cron.
+-- ============================================================================
+revoke execute on all functions in schema public from public, anon, authenticated;
+grant execute on function
+    public.crear_reserva_completa(uuid, date, text, uuid[], text, text, uuid, text, text),
+    public.validar_permiso(text, date),
+    public.anular_reserva(uuid),
+    public.generar_reporte_municipal(text, text),
+    public.generar_recordatorios(boolean),
+    public.rol_actual(),
+    public.es_admin()
+to authenticated;
 
 -- ============================================================================
 --  FIN DEL ESQUEMA · Ejecutá ahora seed.sql para cargar datos de ejemplo.

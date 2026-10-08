@@ -66,14 +66,19 @@ PescaCorral/
 │   ├── data.js             # Capa de datos: Supabase / demo (misma API)
 │   ├── views.js            # Pantallas
 │   ├── ui.js               # Íconos, modales, toasts y formato
-│   └── charts.js           # Gráficos SVG
-├── vendor/qrcode.min.js    # Generador de QR offline
+│   ├── charts.js           # Gráficos SVG
+│   └── sw-registro.js      # Registro del service worker y aviso de versión nueva
+├── vendor/
+│   ├── qrcode.min.js       # Generador de QR offline
+│   └── supabase.min.js     # Cliente de Supabase (supabase-js 2.117.3, copia local con versión fija)
 ├── icons/                  # Íconos de la PWA
 └── database/
     ├── schema.sql          # Esquema completo (tablas, funciones, vistas, RLS, pg_cron)
     ├── seed.sql            # Datos iniciales (especies, catamaranes y sus lugares)
     ├── seed_actividad_demo.sql   # Reservas, permisos y alertas para presentar el panel
-    └── verificar_base.sql  # Chequeo de sólo lectura: compara la base con schema.sql y revisa los datos
+    ├── verificar_base.sql  # Chequeo de sólo lectura: compara la base con schema.sql y revisa los datos
+    ├── pruebas_seguridad.sql     # Pruebas de acceso con cada perfil (no deja datos)
+    └── migrations/         # Cambios para la base ya en uso (009_seguridad.sql)
 ```
 
 ---
@@ -95,7 +100,8 @@ Abrir `http://localhost:8080`.
 1. Crear un proyecto en https://supabase.com.
 2. **SQL Editor → New query**: pegar y ejecutar `database/schema.sql` completo, y luego `database/seed.sql`. `schema.sql` crea la base desde cero y **borra los datos existentes**: no se usa sobre una base en producción.
 3. Para comprobar que la base coincide con el esquema y que los datos están al día, ejecutar `database/verificar_base.sql` (no modifica nada): devuelve una fila por cada diferencia, o "OK".
-4. (Opcional) **Database → Extensions**: habilitar `pg_cron` para que el reporte mensual y los recordatorios diarios se generen sin intervención. Si no está habilitado, la app los genera al ingresar a Reportes y a la pantalla principal.
+4. Para probar la seguridad, ejecutar `database/pruebas_seguridad.sql`: crea cuentas y datos de prueba, intenta cada operación con la identidad de cada perfil (sin sesión, pescador, dueño, municipio, administrador y cuentas desactivadas), muestra el resultado de cada caso (OK / FALLA) y revierte todo.
+5. (Opcional) **Database → Extensions**: habilitar `pg_cron` para que el reporte mensual y los recordatorios diarios se generen sin intervención. Si no está habilitado, la app los genera al ingresar a Reportes y a la pantalla principal.
 
 ### Ingreso con Google
 
@@ -136,7 +142,7 @@ Para el administrador del sistema se repite con `'admin'`, `'admin@pescacorral.e
 
 ### Roles administrativos
 
-Toda cuenta nueva de Google es *Pescador/Turista* (o *Dueño de catamarán*, si lo elige en el alta). Los roles administrativos no pueden autoasignarse: el trigger `proteger_perfil` impide que un usuario cambie su rol, su correo o su estado. Las cuentas del personal reciben su rol al crearse, desde `personal_autorizado`.
+Toda cuenta nueva de Google es *Pescador/Turista* (o *Dueño de catamarán*, si lo elige en el alta). Los roles administrativos no pueden autoasignarse: el trigger `proteger_perfil` impide que un usuario cambie su rol, su correo o su estado. Desde la pantalla Usuarios, la administración sólo cambia el tipo de cuenta (pescador o dueño) y el estado de las cuentas del público. Las cuentas del personal reciben su rol al crearse, desde `personal_autorizado`, y sólo se modifican desde el SQL Editor.
 
 ### Credenciales
 
@@ -150,9 +156,13 @@ Toda cuenta nueva de Google es *Pescador/Turista* (o *Dueño de catamarán*, si 
 * **Personal con usuario y contraseña**: cuentas creadas sólo por la administración (`personal_autorizado` + trigger), contraseñas de al menos 12 caracteres guardadas cifradas por Supabase Auth, límite de intentos de Supabase y mensaje genérico ante credenciales incorrectas. Cada acceso admite sólo su rol.
 * **Sesiones JWT** emitidas por Supabase Auth, con renovación automática. El flujo PKCE devuelve un código de un solo uso (`?code=`) que la aplicación intercambia por la sesión.
 * **Primer ingreso controlado**: sin DNI y tipo de cuenta confirmados, el enrutador solo permite la pantalla de alta.
-* **Protección del perfil** (trigger `proteger_perfil`): un usuario no puede cambiar su rol, su correo ni el estado de su cuenta; el tipo de cuenta se elige una sola vez.
-* **Cuentas desactivadas**: la administración puede desactivar una cuenta desde `#/usuarios`; con `activo = false`, la aplicación cierra la sesión y rechaza el ingreso.
+* **Protección del perfil** (trigger `proteger_perfil`): un usuario no puede cambiar su rol, su correo ni el estado de su cuenta; el tipo de cuenta se elige una sola vez. La administración no puede asignar roles administrativos ni modificar cuentas del personal desde la aplicación.
+* **Cuentas desactivadas**: la administración puede desactivar una cuenta desde `#/usuarios`. Con `activo = false` la base le quita todos los permisos (también los de administración), cierra sus sesiones y la aplicación rechaza el ingreso.
 * **RLS**: cada perfil (pescador, dueño, administración municipal, administrador del sistema) solo puede leer y modificar los registros que le corresponden, aun consultando la API directamente.
+* **Escrituras sólo por funciones**: reservas, lugares, permisos y pagos se crean y anulan únicamente con `crear_reserva_completa` y `anular_reserva`, que validan fecha, catamarán, lugares libres, pago y permiso.
+* **Privilegios mínimos**: sin sesión no se accede a ninguna tabla, vista ni función; con sesión sólo se ejecutan las funciones que usa la aplicación.
+* **Frontend**: política de seguridad de contenido (CSP) que sólo admite código propio y conexiones a Supabase; el cliente de Supabase es una copia local con versión fija; todo dato se muestra escapado; los mensajes de error no se toman de la dirección.
+* **Pruebas**: `database/pruebas_seguridad.sql` verifica estos controles con 70 casos.
 
 ---
 

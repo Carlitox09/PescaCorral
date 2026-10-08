@@ -171,11 +171,13 @@ export async function viewLogin(ctx) {
   </div>`);
 
   const errBox = U.$("#login-err");
-  if (ctx.params.msg) showErr(errBox, ctx.params.msg);
+  const previo = U.aviso();
+  if (previo) showErr(errBox, previo);
   const btn = U.$("#btn-google");
   const label = btn.querySelector("span");
   btn.addEventListener("click", async () => {
     errBox.classList.add("hide");
+    U.borrarAviso();
     if (demo) { selectorCuentasDemo(ctx); return; }
     btn.disabled = true; label.textContent = "Conectando con Google…";
     try {
@@ -228,7 +230,8 @@ export async function viewAcceso(ctx) {
   </div>`);
 
   const errBox = U.$("#acc-err");
-  if (ctx.params.msg) showErr(errBox, ctx.params.msg);
+  const previo = U.aviso();
+  if (previo) showErr(errBox, previo);
   U.$(ctx.params.u ? "#acc-pass" : "#acc-user").focus();
   const btn = U.$("#acc-btn");
   U.$("#acc-ver").addEventListener("change", (e) => { U.$("#acc-pass").type = e.target.checked ? "text" : "password"; });
@@ -236,13 +239,15 @@ export async function viewAcceso(ctx) {
   U.$("#acc-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     errBox.classList.add("hide");
+    U.borrarAviso();
     btn.disabled = true; btn.textContent = "Ingresando…";
     try {
       await D.signInPersonal({ usuario: U.$("#acc-user").value, clave: U.$("#acc-pass").value, tipo });
       ctx.go("/admin");
     } catch (err) {
-      // El mensaje viaja en la ruta para sobrevivir al redibujo por cierre de sesión.
-      ctx.go(`/acceso/${tipo}?msg=${encodeURIComponent(err.message)}&u=${encodeURIComponent(U.$("#acc-user").value.trim())}`);
+      // El mensaje se guarda como aviso para sobrevivir al redibujo por cierre de sesión.
+      U.avisar(err.message);
+      ctx.go(`/acceso/${tipo}?u=${encodeURIComponent(U.$("#acc-user").value.trim())}`);
     }
   });
 }
@@ -1461,8 +1466,9 @@ export async function viewReportes(ctx) {
  * ========================================================================== */
 export async function viewUsuarios(ctx) {
   const usuarios = await D.listUsuarios();
-  const yo = ctx.session.profile.id;
-  const roles = ["pescador", "dueno", "admin_municipal", "admin_sistema"];
+  // Desde la aplicación sólo se gestionan las cuentas del público (tipo de
+  // cuenta y estado); las del personal, desde la base de datos.
+  const roles = ["pescador", "dueno"];
 
   U.mount(adminLayout({
     active: "usuarios",
@@ -1471,24 +1477,30 @@ export async function viewUsuarios(ctx) {
     body: `<div class="panel">
       <table class="table">
         <thead><tr><th>Usuario</th><th>Contacto</th><th>DNI</th><th>Rol</th><th>Cuenta</th></tr></thead>
-        <tbody>${usuarios.map((u) => `<tr>
+        <tbody>${usuarios.map((u) => D.esRolPersonal(u.rol) ? `<tr>
+          <td><b>${U.esc(u.nombre)} ${U.esc(u.apellido || "")}</b></td>
+          <td><small class="muted">${U.esc(u.email)}<br>${U.esc(u.telefono || "—")}</small></td>
+          <td>${U.esc(u.dni || "—")}</td>
+          <td><b>${U.esc(U.rolLabel(u.rol))}</b><br><small class="muted">Personal</small></td>
+          <td>${u.activo !== false ? "Activa" : "Desactivada"}</td>
+        </tr>` : `<tr>
           <td><b>${U.esc(u.nombre)} ${U.esc(u.apellido || "")}</b></td>
           <td><small class="muted">${U.esc(u.email)}<br>${U.esc(u.telefono || "—")}</small></td>
           <td>${U.esc(u.dni || "—")}</td>
           <td>
-            <select class="select" data-rol="${u.id}" style="padding:8px 10px;font-size:.85rem" ${u.id === yo ? "disabled" : ""}>
+            <select class="select" data-rol="${u.id}" style="padding:8px 10px;font-size:.85rem">
               ${roles.map((r) => `<option value="${r}"${u.rol === r ? " selected" : ""}>${U.rolLabel(r)}</option>`).join("")}
             </select>
           </td>
           <td>
-            <select class="select" data-activo="${u.id}" style="padding:8px 10px;font-size:.85rem" ${u.id === yo ? "disabled" : ""}>
+            <select class="select" data-activo="${u.id}" style="padding:8px 10px;font-size:.85rem">
               <option value="1"${u.activo !== false ? " selected" : ""}>Activa</option>
               <option value="0"${u.activo === false ? " selected" : ""}>Desactivada</option>
             </select>
           </td>
         </tr>`).join("")}</tbody>
       </table>
-      <p class="panel__foot">No podés cambiar tu propio rol ni desactivar tu cuenta. Una cuenta desactivada no puede ingresar. Los cambios se aplican al instante.</p>
+      <p class="panel__foot">Desde acá se cambia el tipo de cuenta (pescador o dueño) y el estado de las cuentas del público. Una cuenta desactivada no puede ingresar y sus sesiones se cierran. Las cuentas del personal se gestionan desde la base de datos. Los cambios se aplican al instante.</p>
     </div>`,
   }, ctx));
   wireAdmin(ctx);

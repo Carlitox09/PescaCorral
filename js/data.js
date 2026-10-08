@@ -52,11 +52,23 @@ const authListeners = new Set();
  *  INICIALIZACIÓN
  * ========================================================================== */
 let _ready = null;
+/* El cliente de Supabase es una copia local con versión fija (vendor/), así
+ * ningún servidor externo entrega código que maneje las sesiones. */
+function cargarScript(src) {
+  return new Promise((ok, mal) => {
+    const s = document.createElement("script");
+    s.src = src;
+    s.onload = ok;
+    s.onerror = () => mal(new Error("No se pudo cargar la aplicación. Revisá tu conexión e intentá de nuevo."));
+    document.head.appendChild(s);
+  });
+}
 function ready() {
   if (_ready) return _ready;
   _ready = (async () => {
     if (MODE === "supabase") {
-      const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
+      if (!window.supabase) await cargarScript("vendor/supabase.min.js");
+      const { createClient } = window.supabase;
       sb = createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, {
         // Flujo PKCE: al volver de Google la sesión llega como ?code= en la URL
         // (no como #token), lo que no interfiere con el enrutador por hash.
@@ -724,8 +736,14 @@ export async function anularReserva(reservaId) {
     if (error) throw new Error(error.message);
     return true;
   }
+  // Las mismas reglas que public.anular_reserva.
   const r = byId(DB.reservas, reservaId);
   if (!r) throw new Error("La reserva no existe.");
+  const u = demoSessionUser();
+  const admin = esRolPersonal(u?.rol);
+  if (!u || (r.id_usuario !== u.id && !admin)) throw new Error("No autorizado para anular esta reserva.");
+  if (r.estado !== "confirmada") throw new Error("Sólo se puede anular una reserva confirmada.");
+  if (!admin && r.fecha < todayISO()) throw new Error("No se puede anular una salida que ya pasó.");
   r.estado = "cancelada";
   DB.reserva_lugar.filter((rl) => rl.id_reserva === reservaId).forEach((rl) => (rl.estado = "cancelada"));
   // El permiso emitido con la reserva se anula, salvo que ampare otra reserva activa.
@@ -1198,25 +1216,36 @@ export async function listUsuarios() {
   return [...DB.usuarios].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
 }
 
+/* La administración cambia el tipo de cuenta (pescador o dueño) y el estado de
+ * las cuentas del público. Las cuentas del personal y los roles administrativos
+ * se gestionan sólo desde la base (lo controla public.proteger_perfil). */
+export const esRolPersonal = (rol) => rol === "admin_municipal" || rol === "admin_sistema";
+const SOLO_BASE = "Las cuentas del personal y los roles administrativos se gestionan desde la base de datos.";
+
 export async function setRol(userId, rol) {
   await ready();
   if (MODE === "supabase") {
     const { error } = await sb.from("usuario").update({ rol }).eq("id", userId);
     if (error) throw new Error(error.message); return true;
   }
-  const u = byId(DB.usuarios, userId); if (u) u.rol = rol; persist();
+  const u = byId(DB.usuarios, userId);
+  if (u && (esRolPersonal(u.rol) || esRolPersonal(rol))) throw new Error(SOLO_BASE);
+  if (u) u.rol = rol; persist();
   return true;
 }
 
 /* Activa o desactiva una cuenta (plan de contingencia: cuentas comprometidas).
- * Una cuenta desactivada no puede ingresar: el enrutador cierra su sesión. */
+ * Una cuenta desactivada pierde sus permisos y sus sesiones se cierran en la
+ * base; además, el enrutador cierra la sesión abierta en el dispositivo. */
 export async function setActivo(userId, activo) {
   await ready();
   if (MODE === "supabase") {
     const { error } = await sb.from("usuario").update({ activo: Boolean(activo) }).eq("id", userId);
     if (error) throw new Error(error.message); return true;
   }
-  const u = byId(DB.usuarios, userId); if (u) u.activo = Boolean(activo); persist();
+  const u = byId(DB.usuarios, userId);
+  if (u && esRolPersonal(u.rol)) throw new Error(SOLO_BASE);
+  if (u) u.activo = Boolean(activo); persist();
   return true;
 }
 

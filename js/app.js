@@ -5,7 +5,7 @@
  * ========================================================================== */
 import * as D from "./data.js";
 import * as V from "./views.js";
-import { toast, esc } from "./ui.js";
+import { toast, esc, avisar } from "./ui.js";
 
 const isAdmin = (rol) => rol === "admin_municipal" || rol === "admin_sistema";
 
@@ -48,10 +48,12 @@ function go(path) {
   else location.hash = target;              // dispara hashchange -> render
 }
 const inicioSegunRol = (rol) => (isAdmin(rol) ? "/admin" : "/home");
-const aLogin = (msg) => go(D.rutaIngreso() + (msg ? "?msg=" + encodeURIComponent(msg) : ""));
+const aLogin = (msg) => { if (msg) avisar(msg); go(D.rutaIngreso()); };
 
 /* Al volver de Google, un error llega en la URL (?error=… o #error=…).
- * Devuelve el mensaje a mostrar, o null si no hay error. */
+ * Devuelve el mensaje a mostrar, o null si no hay error. El detalle de la URL
+ * no se muestra (cualquiera puede armar un enlace con un texto falso): va a la
+ * consola. */
 function errorDeIngreso() {
   const q = new URLSearchParams(location.search);
   const h = new URLSearchParams((location.hash || "").replace(/^#/, ""));
@@ -60,7 +62,8 @@ function errorDeIngreso() {
   if (!code && !desc) return null;
   history.replaceState(null, "", location.pathname);   // limpia la URL
   if (/access_denied/i.test(code || "")) return "Cancelaste el ingreso con Google.";
-  return "No se pudo completar el ingreso con Google" + (desc ? `: ${desc.replace(/\+/g, " ")}` : ".");
+  if (desc) console.warn("Ingreso con Google:", desc.replace(/\+/g, " "));
+  return "No se pudo completar el ingreso con Google. Intentá de nuevo.";
 }
 
 /* ------------------------------- Render ---------------------------------- */
@@ -121,8 +124,9 @@ async function render() {
       <div class="empty" style="min-height:100dvh;display:grid;place-content:center">
         <h3>Ups, algo salió mal</h3>
         <p class="muted">${esc((err && err.message) || "Error inesperado.")}</p>
-        <button class="btn btn--primary mt-16" onclick="location.hash='#/home';location.reload()">Reintentar</button>
+        <button class="btn btn--primary mt-16" type="button" id="reintentar">Reintentar</button>
       </div>`;
+    document.getElementById("reintentar").addEventListener("click", () => { location.hash = "#/home"; location.reload(); });
   } finally {
     rendering = false;
     // Si el hash cambió mientras renderizábamos, volver a procesar.

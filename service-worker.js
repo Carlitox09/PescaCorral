@@ -6,10 +6,10 @@
  *   - Recursos propios (css/js/icons/vendor): network-first revalidando con el
  *     servidor, para que un cambio publicado se vea en la próxima carga; la copia
  *     en caché sólo se usa sin conexión.
- *   - Recursos externos (librería de Supabase): stale-while-revalidate.
+ *   - Recursos externos (fotos de perfil de Google): stale-while-revalidate.
  *   - Llamadas a Supabase (/auth, /rest, /realtime): siempre a la red (no se cachean).
  * ========================================================================== */
-const VERSION = "pescacorral-v1.7.4";
+const VERSION = "pescacorral-v1.8.0";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -21,7 +21,9 @@ const APP_SHELL = [
   "./js/ui.js",
   "./js/charts.js",
   "./js/views.js",
+  "./js/sw-registro.js",
   "./vendor/qrcode.min.js",
+  "./vendor/supabase.min.js",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/apple-touch-icon.png",

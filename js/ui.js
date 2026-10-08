@@ -86,6 +86,25 @@ export function logoMark(size = 34, cls = "") {
   return `<svg viewBox="0 0 64 64" width="${size}" height="${size}" class="${cls}" aria-hidden="true"><use href="#logo-mark"></use></svg>`;
 }
 
+/* --------------------- Aviso para la pantalla siguiente --------------------
+ * Un mensaje (por ejemplo, un error de ingreso) que debe verse en la próxima
+ * pantalla aunque el enrutador la dibuje más de una vez. Se guarda unos
+ * segundos en sessionStorage y no viaja en la dirección: así un enlace armado
+ * no puede mostrar textos falsos en la pantalla de ingreso. */
+const AVISO_KEY = "pescacorral.aviso";
+export function avisar(msg) {
+  try { sessionStorage.setItem(AVISO_KEY, JSON.stringify({ msg: String(msg), t: Date.now() })); } catch {}
+}
+export function aviso() {
+  try {
+    const a = JSON.parse(sessionStorage.getItem(AVISO_KEY) || "null");
+    if (a && Date.now() - a.t < 10000) return a.msg;
+    sessionStorage.removeItem(AVISO_KEY);
+  } catch {}
+  return null;
+}
+export function borrarAviso() { try { sessionStorage.removeItem(AVISO_KEY); } catch {} }
+
 /* -------------------------------- Toasts --------------------------------- */
 export function toast(message, type = "info", timeout = 3200) {
   const root = document.getElementById("toast-root");
