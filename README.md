@@ -40,7 +40,7 @@ No hay servidor propio ni proceso de compilación: el repositorio se sirve tal c
 | HU-007 | **Pasarela de pago simulada** (tarjeta, Mercado Pago o efectivo en la boletería) con escenario de rechazo. Al pagar se muestra el **comprobante**: número de reserva, comprobante de pago y permiso | `#/comprobante/:id` |
 | HU-008 | Reportes con gráficos, exportación CSV (Excel) y PDF | `#/reportes` |
 | HU-009 | **Envío de reportes al municipio** (manual y cierre mensual automático) con registro de fecha, destinatario y origen | `#/reportes` |
-| HU-010 | Historial de reservas y permisos | `#/historial` |
+| HU-010 | Historial de reservas y permisos, **consultables sin conexión** con su comprobante y su código QR; el dueño ve también las reservas de sus catamaranes (pestaña Reservas) | `#/historial` |
 | HU-011 | Centro de notificaciones y **recordatorios de salida** (día previo y día de la reserva), con preferencia del usuario | campana / `#/perfil` |
 | HU-012 | Gestión de roles y activación o desactivación de cuentas | `#/usuarios` |
 | HU-013 | Panel municipal con **filtros por rango de fechas y embarcación** y exportación PDF | `#/admin` |
@@ -53,6 +53,8 @@ No hay servidor propio ni proceso de compilación: el repositorio se sirve tal c
 
 ```text
 PescaCorral/
+├── .github/workflows/
+│   └── mantener-activa.yml # Tarea diaria que consulta la base para que Supabase no la pause
 ├── index.html              # Punto de entrada
 ├── 404.html                # Redirige /municipio y /admin en cualquier combinación de mayúsculas
 ├── Municipio/index.html    # /Municipio: acceso del personal municipal (#/acceso/municipio)
@@ -146,7 +148,7 @@ Toda cuenta nueva de Google es *Pescador/Turista* (o *Dueño de catamarán*, si 
 
 ### Uso sin conexión
 
-En el dique la señal es irregular. Para pescadores y dueños, la aplicación guarda en el dispositivo lo último que consultaron (perfil, reservas, permisos, comprobantes, notificaciones y catamaranes). Sin internet la sesión se mantiene y esas pantallas muestran los datos guardados, con un aviso de su fecha; el permiso digital con su código QR se puede mostrar al embarcar. Con señal débil, si la red no responde en unos segundos también se muestran los datos guardados. Reservar y pagar necesitan conexión. Al volver internet la aplicación se actualiza sola. Lo guardado se borra al cerrar sesión, y el personal no usa este modo.
+En el dique la señal es irregular. Para pescadores y dueños, al abrir la aplicación con conexión quedan guardados en el dispositivo el perfil, **todas las reservas y los permisos de la cuenta** (con su comprobante y su código QR, aunque nunca se hayan abierto), las notificaciones y lo último que se vio de los catamaranes. Sin internet la sesión se mantiene y esas pantallas muestran los datos guardados, con un aviso de su fecha; el permiso digital con su código QR se puede mostrar al embarcar. El dueño de un catamarán también consulta sin conexión, en **Reservas**, las reservas de sus embarcaciones (fecha, turno y lugares; los datos personales, el pago y el permiso del pasajero no se le muestran). Con señal débil, si la red no responde en unos segundos también se muestran los datos guardados. Reservar y pagar necesitan conexión. Al volver internet la aplicación se actualiza sola. Lo guardado se borra al cerrar sesión, y el personal no usa este modo.
 
 La sesión de Google queda abierta en el dispositivo hasta que se cierra. Si se cerró, el ingreso propone continuar con la última cuenta usada ("Continuar como …"), sin pasar por el selector de cuentas de Google; "Usar otra cuenta" lo muestra.
 
@@ -215,6 +217,10 @@ Subir el contenido de la carpeta a la raíz del repositorio y, en **Settings →
 
 Tras cada cambio en `service-worker.js` se incrementa la constante `VERSION` para que los navegadores renueven la caché.
 
+### Base de datos siempre activa
+
+El plan gratuito de Supabase pausa el proyecto después de siete días sin uso. La tarea `.github/workflows/mantener-activa.yml` (GitHub Actions) consulta la base todos los días a las 9:00 con la clave pública: la base responde "permission denied" sin entregar datos, lo que confirma que está en línea y cuenta como actividad. Si no responde, la tarea falla y GitHub avisa por correo. Se puede ejecutar a mano desde la pestaña **Actions** (*Mantener activa la base de datos → Run workflow*). GitHub desactiva las tareas programadas de un repositorio público tras 60 días sin cambios: en ese caso se reactivan desde la misma pestaña.
+
 ---
 
 ## Modelo de datos
@@ -236,7 +242,7 @@ Definido en `database/schema.sql`:
 * **Google muestra "Error 400: redirect_uri_mismatch"**: el URI de redireccionamiento del cliente de OAuth debe ser exactamente `https://<proyecto>.supabase.co/auth/v1/callback`.
 * **Después de elegir la cuenta vuelve a otra dirección**: agregar la dirección de la app en *Authentication → URL Configuration → Redirect URLs*.
 * **Solo pueden ingresar algunas cuentas**: la pantalla de consentimiento de Google sigue *En prueba*; publicarla.
-* **El proyecto de Supabase no responde**: en el plan gratuito se pausa tras siete días sin actividad; reactivarlo desde el panel.
+* **El proyecto de Supabase no responde**: en el plan gratuito se pausa tras siete días sin actividad (la tarea diaria lo evita); reactivarlo desde el panel y revisar en **Actions** que la tarea siga habilitada.
 
 ---
 

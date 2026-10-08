@@ -46,6 +46,7 @@ function bottomNav(active, rol) {
     items = [
       ["home", "Inicio", "home", "#/home"],
       ["catamaranes", "Catamaranes", "boat", "#/catamaranes"],
+      ["historial", "Reservas", "calendar", "#/historial"],
       ["gestion", "Gestión", "grid", "#/gestion"],
       ["perfil", "Perfil", "user", "#/perfil"],
     ];
@@ -413,7 +414,8 @@ export async function viewHome(ctx) {
     D.listReservas(), D.listPermisos(), D.listNotificaciones(), D.disponibilidad(hoy, "manana"),
   ]);
   const unread = notifs.filter((n) => !n.leida).length;
-  const proxima = reservas.filter((r) => r.estado !== "cancelada" && r.fecha >= hoy).sort((a, b) => a.fecha < b.fecha ? -1 : 1)[0];
+  // Sólo las salidas propias (el dueño también recibe las de sus pasajeros).
+  const proxima = reservas.filter((r) => r.id_usuario === p.id && r.estado !== "cancelada" && r.fecha >= hoy).sort((a, b) => a.fecha < b.fecha ? -1 : 1)[0];
   const permisoVigente = permisos.find((p) => p.estado === "vigente");
   const disponibles = cats.filter((c) => c.estado === "activa").slice(0, 2);
 
@@ -954,6 +956,31 @@ export async function viewComprobante(ctx) {
   const perBadge = per ? U.estadoPermisoBadge(per.estado) : null;
   const resBadge = U.estadoReservaBadge(c.estado);
   const fila = (k, v) => `<div class="permit__row"><span>${U.esc(k)}</span><b>${v}</b></div>`;
+  // Reserva de un pasajero en un catamarán del dueño: sólo la salida y los lugares.
+  const pasajero = c.id_usuario !== p.id && !isAdmin(p.rol);
+  if (pasajero) {
+    U.mount(appShell({
+      active: null, rol: p.rol,
+      topbarHtml: topbar({ title: "Reserva", back: true, bell: false }),
+      bodyHtml: `
+        <section class="doc" id="comprobante">
+          <div class="doc__head">${U.icon("boat", { size: 18 })}<span>Reserva de un pasajero</span><span class="badge ${resBadge.cls}">${resBadge.label}</span></div>
+          <div class="doc__numero"><small>N° de reserva</small><b>${U.esc(c.numero)}</b></div>
+          <div class="permit__body">
+            ${fila("Catamarán", U.esc(c.catamaran))}
+            ${fila("Fecha de salida", U.fmtDate(c.fecha))}
+            ${fila("Turno", U.turnoLabel(c.turno))}
+            <div class="permit__row permit__row--col"><span>Lugares</span>
+              <div class="chips">${c.lugares.map((n) => `<span class="chip chip--lugar"><b>${n}</b> ${U.esc(D.ubicacionLugar(n, c.capacidad || c.lugares.length))}</span>`).join("")}</div></div>
+            <div class="permit__row doc__total"><span>Total de la reserva</span><b>${U.fmtMoney(c.monto_total)}</b></div>
+          </div>
+        </section>
+        <p class="muted center mt-12" style="font-size:.8rem">${U.icon("shield", { size: 14 })} Los datos personales, el pago y el permiso sólo los ven el pasajero y el Municipio. Al embarcar, pedile su permiso digital.</p>
+      `,
+    }));
+    wireChrome(ctx);
+    return;
+  }
 
   U.mount(appShell({
     active: null, rol: p.rol,
@@ -1108,25 +1135,32 @@ export async function viewHistorial(ctx) {
   const [reservas, permisos, notifs] = await Promise.all([D.listReservas(), D.listPermisos(), D.listNotificaciones()]);
   const unread = notifs.filter((n) => !n.leida).length;
   const hoy = U.todayISO();
+  const dueno = p.rol === "dueno";
 
   const reservasHtml = reservas.length ? reservas.map((r) => {
     const b = U.estadoReservaBadge(r.estado);
-    const cancelable = r.estado === "confirmada" && r.fecha >= hoy;
+    // El dueño también ve las reservas de pasajeros en sus catamaranes: sólo la
+    // salida y los lugares (sus datos, pago y permiso no están a su alcance).
+    const pasajero = r.id_usuario !== p.id;
+    const cancelable = !pasajero && r.estado === "confirmada" && r.fecha >= hoy;
+    const lugares = r.lugares?.length
+      ? `Lugar${r.lugares.length > 1 ? "es" : ""} ${r.lugares.join(", ")}`
+      : `${r.cantidad_lugares} lugar${r.cantidad_lugares > 1 ? "es" : ""}`;
     return `<div class="row-item row-item--wrap">
       <div class="row-item__ic">${U.icon("boat", { size: 20 })}</div>
       <div class="row-item__main">
         <h2>${U.esc(r.catamaran_nombre)}</h2>
-        ${r.numero ? `<small>${U.esc(r.numero)}</small>` : ""}
-        <small>${U.fmtDate(r.fecha)} · ${U.turnoLabel(r.turno)} · ${r.cantidad_lugares} lugar${r.cantidad_lugares > 1 ? "es" : ""} · ${U.fmtMoney(r.monto_total)}</small>
+        ${r.numero ? `<small>${U.esc(r.numero)}${pasajero ? " · Pasajero" : ""}</small>` : ""}
+        <small>${U.fmtDate(r.fecha)} · ${U.turnoLabel(r.turno)} · ${lugares} · ${U.fmtMoney(r.monto_total)}</small>
       </div>
       <span class="badge ${b.cls}">${b.label}</span>
       <div class="row-item__actions">
-          <a class="btn btn--soft btn--sm" href="#/comprobante/${r.id}">Comprobante</a>
-          ${r.permiso_id ? `<a class="btn btn--soft btn--sm" href="#/permiso/${r.permiso_id}">Permiso</a>` : ""}
+          <a class="btn btn--soft btn--sm" href="#/comprobante/${r.id}">${pasajero ? "Detalle" : "Comprobante"}</a>
+          ${r.permiso_id && !pasajero ? `<a class="btn btn--soft btn--sm" href="#/permiso/${r.permiso_id}">Permiso</a>` : ""}
           ${cancelable ? `<button class="btn btn--danger btn--sm" data-anular="${r.id}">Anular</button>` : ""}
         </div>
     </div>`;
-  }).join("") : emptyState("Sin reservas todavía", "Cuando reserves una salida, aparecerá acá.", "calendar");
+  }).join("") : emptyState("Sin reservas todavía", dueno ? "Las reservas de tus catamaranes y las tuyas aparecerán acá." : "Cuando reserves una salida, aparecerá acá.", "calendar");
 
   const permisosHtml = permisos.length ? permisos.map((per) => {
     const cls = per.estado === "vencido" ? "is-vencido" : per.estado === "anulado" ? "is-anulado" : "";
@@ -1140,7 +1174,7 @@ export async function viewHistorial(ctx) {
 
   U.mount(appShell({
     active: "historial", rol: p.rol,
-    topbarHtml: topbar({ title: "Historial", bell: true, unread }),
+    topbarHtml: topbar({ title: dueno ? "Reservas" : "Historial", bell: true, unread }),
     bodyHtml: `
       <div class="tabs">
         <button class="${tab === "reservas" ? "active" : ""}" data-tab="reservas">Reservas</button>

@@ -52,10 +52,12 @@ const authListeners = new Set();
 
 /* ============================================================================
  *  SIN CONEXIÓN (pescadores y dueños)
- *  En el dique la señal es irregular. Lo último que la persona vio (perfil,
- *  reservas, permisos, comprobantes, notificaciones y catamaranes) queda
- *  guardado en el dispositivo: sin internet la sesión sigue abierta y esas
- *  pantallas muestran los datos guardados, con un aviso. Reservar y pagar
+ *  En el dique la señal es irregular. Al abrir la app con conexión quedan
+ *  guardados en el dispositivo el perfil, todas las reservas y permisos de la
+ *  cuenta (con su comprobante y su código QR, aunque no se hayan abierto), las
+ *  notificaciones y lo último que se vio de los catamaranes: sin internet la
+ *  sesión sigue abierta y esas pantallas muestran los datos guardados, con un
+ *  aviso. Reservar y pagar
  *  necesitan conexión. Sólo se guardan lecturas de la API de la cuenta del
  *  público que usa el dispositivo y se borran al cerrar sesión; el personal no
  *  usa este modo (sus paneles muestran datos de todas las personas).
@@ -66,6 +68,7 @@ const MAX_RESPUESTAS = 80;
 const ESPERA_MAX_MS = 6000, ESPERA_LENTA_MS = 2500;
 let redLentaHasta = 0;
 let sinConexionDesde = null;
+let rolSesion = null;          // rol de la sesión actual (lo fija getSession)
 /** Fecha (ms) de los datos guardados que se están mostrando sin conexión, o null. */
 export const sinConexion = () => sinConexionDesde;
 
@@ -401,6 +404,7 @@ export async function getSession() {
       const off = leerOffline();
       if (off?.sesion && (clienteSinConexion || esErrorDeRed(error))) {
         sinConexionDesde = off.sesion.t;
+        rolSesion = off.sesion.profile?.rol || null;
         return { user: off.sesion.user, profile: off.sesion.profile, sinConexion: true };
       }
       if (!clienteSinConexion && !esErrorDeRed(error)) borrarOffline();
@@ -415,6 +419,7 @@ export async function getSession() {
       profile = off.sesion.profile;
       sinConexionDesde = sinConexionDesde || off.sesion.t;
     }
+    rolSesion = profile?.rol || null;
     if (profile && !esRolPersonal(profile.rol)) {
       if (!sinConexionDesde) {
         const actual = leerOffline();        // se relee: la lectura del perfil también se guardó
@@ -943,12 +948,36 @@ function scopeReservasDemo(u) {
   return DB.reservas.filter((r) => r.id_usuario === u.id);
 }
 
+/* Pescadores y dueños abren cada reserva y cada permiso a partir de la lista
+ * completa (con los datos del comprobante y del permiso): como la pantalla
+ * principal lee esas listas, al abrir la app con conexión todas quedan
+ * guardadas en el dispositivo y cualquiera puede consultarse sin conexión,
+ * aunque no se haya abierto antes. El personal no usa ese modo y consulta cada
+ * una por separado. */
+const CAMPOS_PERMISO_RESERVA = "id,numero,tipo,estado,codigo_qr,fecha_emision,fecha_vencimiento,especie(nombre)";
+const SEL_RESERVA = `*, catamaran(nombre,habilitacion,capacidad), usuario(nombre,apellido,dni,email), reserva_lugar(lugar(numero)), pago(*), permiso!permiso_id_reserva_fkey(${CAMPOS_PERMISO_RESERVA})`;
+const SEL_PERMISO = "*, especie(nombre,nombre_cientifico), reserva!permiso_id_reserva_fkey(id,fecha,turno,cantidad_lugares,monto_total,catamaran(nombre),pago(comprobante,metodo,estado)), usuario(nombre,apellido,dni)";
+const reservasCompletas = () => sb.from("reserva").select(SEL_RESERVA).order("fecha", { ascending: false });
+const permisosCompletos = () => sb.from("permiso").select(SEL_PERMISO).order("fecha_emision", { ascending: false });
+const detalleDesdeLista = () => Boolean(rolSesion) && !esRolPersonal(rolSesion);
+
+/* Fila `id` de una lista completa; si no está (por ejemplo, una reserva recién
+ * pagada cuando la lista vino de la copia guardada), se consulta sola. */
+async function buscarDetalle(lista, tabla, sel, id) {
+  if (detalleDesdeLista()) {
+    const { data } = await lista();
+    const fila = (data || []).find((x) => x.id === id);
+    if (fila) return fila;
+  }
+  const { data, error } = await sb.from(tabla).select(sel).eq("id", id).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
 export async function listReservas() {
   await ready();
   if (MODE === "supabase") {
-    const { data, error } = await sb.from("reserva")
-      .select("*, catamaran(nombre), permiso!permiso_id_reserva_fkey(id,numero,estado)")
-      .order("fecha", { ascending: false });
+    const { data, error } = await reservasCompletas();
     if (error) throw error;
     return data.map((r) => {
       // PostgREST devuelve la relación 1‑a‑1 (permiso) como objeto; 1‑a‑N como arreglo.
@@ -957,6 +986,7 @@ export async function listReservas() {
         ...r, catamaran_nombre: r.catamaran?.nombre || "",
         // La salida puede estar amparada por un permiso que el pescador ya tenía (id_permiso).
         permiso_id: r.id_permiso || per?.id || null, numero_permiso: per?.numero || null,
+        lugares: (r.reserva_lugar || []).map((x) => x.lugar?.numero).filter(Boolean).sort((a, b) => a - b),
       };
     });
   }
@@ -966,28 +996,24 @@ export async function listReservas() {
     .map((r) => {
       const cat = byId(DB.catamaranes, r.id_catamaran);
       const per = (r.id_permiso && byId(DB.permisos, r.id_permiso)) || DB.permisos.find((p) => p.id_reserva === r.id);
-      return { ...r, catamaran_nombre: cat?.nombre || "", permiso_id: per?.id || null, numero_permiso: per?.numero || null };
+      const lugares = DB.reserva_lugar.filter((x) => x.id_reserva === r.id).map((x) => byId(DB.lugares, x.id_lugar)?.numero).filter(Boolean);
+      return { ...r, catamaran_nombre: cat?.nombre || "", permiso_id: per?.id || null, numero_permiso: per?.numero || null, lugares: lugares.sort((a, b) => a - b) };
     });
 }
 
+/* Igual que la política permiso_select: cada cuenta del público ve sólo sus
+ * permisos (el dueño no ve los de sus pasajeros). */
 function scopePermisosDemo(u) {
   if (u.rol === "admin_municipal" || u.rol === "admin_sistema") return DB.permisos;
-  if (u.rol === "dueno") {
-    const mis = new Set(DB.catamaranes.filter((c) => c.id_propietario === u.id).map((c) => c.id));
-    const res = new Set(DB.reservas.filter((r) => mis.has(r.id_catamaran)).map((r) => r.id));
-    return DB.permisos.filter((p) => res.has(p.id_reserva));
-  }
   return DB.permisos.filter((p) => p.id_usuario === u.id);
 }
 
 export async function listPermisos() {
   await ready();
   if (MODE === "supabase") {
-    const { data, error } = await sb.from("permiso")
-      .select("*, especie(nombre), reserva!permiso_id_reserva_fkey(fecha,turno,catamaran(nombre))")
-      .order("fecha_emision", { ascending: false });
+    const { data, error } = await permisosCompletos();
     if (error) throw error;
-    return data.map(mapPermisoSupabase);
+    return data.map((p) => mapPermisoSupabase(p));
   }
   const u = demoSessionUser();
   return scopePermisosDemo(u)
@@ -998,14 +1024,11 @@ export async function listPermisos() {
 export async function getPermiso(id) {
   await ready();
   if (MODE === "supabase") {
-    const { data, error } = await sb.from("permiso")
-      .select("*, especie(nombre,nombre_cientifico), reserva!permiso_id_reserva_fkey(id,fecha,turno,cantidad_lugares,monto_total,catamaran(nombre),pago(comprobante,metodo,estado)), usuario(nombre,apellido,dni)")
-      .eq("id", id).single();
-    if (error) throw error;
-    return mapPermisoSupabase(data, true);
+    const data = await buscarDetalle(permisosCompletos, "permiso", SEL_PERMISO, id);
+    return data ? mapPermisoSupabase(data, true) : null;
   }
   const p = byId(DB.permisos, id);
-  if (!p) return null;
+  if (!p || !scopePermisosDemo(demoSessionUser()).includes(p)) return null;
   return enrichPermisoDemo(applyPermisoEstado(p), true);
 }
 
@@ -1067,7 +1090,7 @@ function armarComprobante(r, { cat, titular, lugares, pago, permiso, propio }) {
   const montoLugares = Number(r.monto_total || 0) - montoPermiso;
   const per = permiso ? applyPermisoEstado(permiso) : null;
   return {
-    id: r.id, numero: numeroReservaDe(r), fecha: r.fecha, turno: r.turno, estado: r.estado, created_at: r.created_at,
+    id: r.id, id_usuario: r.id_usuario, numero: numeroReservaDe(r), fecha: r.fecha, turno: r.turno, estado: r.estado, created_at: r.created_at,
     catamaran: cat?.nombre || "—", habilitacion: cat?.habilitacion || "", capacidad: Number(cat?.capacidad || 0),
     lugares: lugares.slice().sort((a, b) => a - b),
     titular: titular ? { nombre: `${titular.nombre || ""} ${titular.apellido || ""}`.trim(), dni: titular.dni || "—", email: titular.email || "" } : null,
@@ -1085,18 +1108,15 @@ function armarComprobante(r, { cat, titular, lugares, pago, permiso, propio }) {
 export async function getComprobante(reservaId) {
   await ready();
   if (MODE === "supabase") {
-    const camposPermiso = "id,numero,tipo,estado,codigo_qr,fecha_emision,fecha_vencimiento,especie(nombre)";
-    const { data: r, error } = await sb.from("reserva")
-      .select(`*, catamaran(nombre,habilitacion,capacidad), usuario(nombre,apellido,dni,email), reserva_lugar(lugar(numero)), pago(*), permiso!permiso_id_reserva_fkey(${camposPermiso})`)
-      .eq("id", reservaId).maybeSingle();
-    if (error) throw error;
+    const r = await buscarDetalle(reservasCompletas, "reserva", SEL_RESERVA, reservaId);
     if (!r) return null;
     const pago = Array.isArray(r.pago) ? r.pago[0] : r.pago;
     let permiso = Array.isArray(r.permiso) ? r.permiso[0] : r.permiso;
     let propio = false;
     if (r.id_permiso && r.id_permiso !== permiso?.id) {
-      const q = await sb.from("permiso").select(camposPermiso).eq("id", r.id_permiso).maybeSingle();
-      if (q.data) { permiso = q.data; propio = true; }
+      // Permiso que el pescador ya tenía: es suyo, así que está en su lista.
+      const previo = await buscarDetalle(permisosCompletos, "permiso", CAMPOS_PERMISO_RESERVA, r.id_permiso).catch(() => null);
+      if (previo) { permiso = previo; propio = true; }
     }
     return armarComprobante(r, {
       cat: r.catamaran, titular: r.usuario, pago, permiso, propio,
@@ -1106,12 +1126,15 @@ export async function getComprobante(reservaId) {
   const u = demoSessionUser();
   const r = byId(DB.reservas, reservaId);
   if (!r || !u || !scopeReservasDemo(u).includes(r)) return null;
-  const propia = DB.permisos.find((p) => p.id_reserva === r.id);
-  const permiso = (r.id_permiso && byId(DB.permisos, r.id_permiso)) || propia || null;
+  // Como en la base (RLS): el dueño ve la reserva de un pasajero en su
+  // catamarán, pero no sus datos personales, su pago ni su permiso.
+  const ajena = r.id_usuario !== u.id && !esRolPersonal(u.rol);
+  const propia = ajena ? null : DB.permisos.find((p) => p.id_reserva === r.id);
+  const permiso = ajena ? null : (r.id_permiso && byId(DB.permisos, r.id_permiso)) || propia || null;
   const esp = permiso?.id_especie ? byId(DB.especies, permiso.id_especie) : null;
   return armarComprobante(r, {
-    cat: byId(DB.catamaranes, r.id_catamaran), titular: byId(DB.usuarios, r.id_usuario),
-    pago: DB.pagos.find((x) => x.id_reserva === r.id),
+    cat: byId(DB.catamaranes, r.id_catamaran), titular: ajena ? null : byId(DB.usuarios, r.id_usuario),
+    pago: ajena ? null : DB.pagos.find((x) => x.id_reserva === r.id),
     permiso: permiso ? { ...permiso, especie_nombre: esp?.nombre } : null,
     propio: Boolean(permiso && propia?.id !== permiso.id),
     lugares: DB.reserva_lugar.filter((x) => x.id_reserva === r.id).map((x) => byId(DB.lugares, x.id_lugar)?.numero).filter(Boolean),

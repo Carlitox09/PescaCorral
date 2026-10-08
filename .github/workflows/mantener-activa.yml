@@ -1,0 +1,45 @@
+# Mantener activa la base de datos.
+#
+# El plan gratuito de Supabase pausa el proyecto después de 7 días sin uso y la
+# aplicación deja de funcionar hasta que se lo reactiva desde el panel. Esta
+# tarea consulta la base todos los días para que eso no ocurra.
+#
+# La consulta usa la clave pública de config.js. Sin sesión la base no entrega
+# ningún dato y responde "permission denied" (código 42501): esa respuesta la
+# da PostgreSQL, así que confirma que la base está en línea y cuenta como uso.
+# Si la base no responde, la tarea falla y GitHub avisa por correo.
+
+name: Mantener activa la base de datos
+
+on:
+  schedule:
+    - cron: "0 12 * * *"    # todos los días a las 9:00 (hora de Salta)
+  workflow_dispatch:         # también se puede ejecutar a mano desde la pestaña Actions
+
+permissions:
+  contents: read
+
+jobs:
+  consultar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: config.js
+          sparse-checkout-cone-mode: false
+
+      - name: Consultar la base
+        run: |
+          URL=$(grep -oP 'SUPABASE_URL:\s*"\K[^"]+' config.js | head -1)
+          CLAVE=$(grep -oP 'SUPABASE_ANON_KEY:\s*"\K[^"]+' config.js | head -1)
+          ESTADO=$(curl -sS --max-time 30 --retry 2 -o respuesta.json -w '%{http_code}' \
+            -H "apikey: $CLAVE" -H "Authorization: Bearer $CLAVE" \
+            "$URL/rest/v1/catamaran?select=id&limit=1")
+          echo "HTTP $ESTADO: $(head -c 300 respuesta.json)"
+          if [ "$ESTADO" = "200" ] || grep -q '"42501"' respuesta.json; then
+            echo "La base respondió."
+          else
+            echo "::error::La base de datos no respondió como se esperaba. Revisá el proyecto en el panel de Supabase."
+            exit 1
+          fi
