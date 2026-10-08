@@ -303,6 +303,19 @@ async function fetchProfileSupabase(id) {
   return data;
 }
 
+/* Perfil leído con un token determinado (el de un ingreso recién hecho). */
+async function perfilConToken(token, id) {
+  try {
+    const r = await fetch(`${CFG.SUPABASE_URL}/rest/v1/usuario?select=*&id=eq.${encodeURIComponent(id)}`, {
+      headers: { apikey: CFG.SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) return null;
+    return (await r.json())[0] || null;
+  } catch {
+    return null;
+  }
+}
+
 /** Perfil incompleto = primer ingreso sin DNI ni tipo de cuenta confirmados. */
 export function perfilCompleto(profile) {
   return Boolean(profile?.perfil_completo);
@@ -389,9 +402,15 @@ export async function signInPersonal({ usuario, clave, tipo } = {}) {
   try {
     if (MODE === "supabase") {
       const email = usuario.includes("@") ? usuario : `${usuario}@${DOMINIO_PERSONAL}`;
+      // Si hay otra sesión abierta (por ejemplo, la de Google de un pescador), se
+      // cierra antes en este dispositivo: así una renovación de ese token, en esta
+      // pestaña o en otra, no pisa la sesión nueva.
+      const { data: previa } = await sb.auth.getSession();
+      if (previa.session) await sb.auth.signOut({ scope: "local" });
       const { data, error } = await sb.auth.signInWithPassword({ email, password: clave });
       if (error) throw new Error(traducirAuth(error.message));
-      const profile = await fetchProfileSupabase(data.user.id);
+      // El rol se verifica con el token recién emitido, no con la sesión guardada.
+      const profile = await perfilConToken(data.session.access_token, data.user.id);
       if (!profile || profile.rol !== rolEsperado || profile.activo === false) {
         await sb.auth.signOut();
         throw new Error(profile && profile.activo === false
