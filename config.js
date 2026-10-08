@@ -22,4 +22,8 @@ window.PESCACORRAL_CONFIG = {
   // Marca municipal mostrada en la app.
   MUNICIPIO: "Municipio de Coronel Moldes",
   LUGAR: "Dique Cabra Corral",
+
+  // Acceso del personal (/Municipio y /Admin): el usuario "municipio" se traduce
+  // a municipio@<DOMINIO_PERSONAL>. Es un dominio reservado que no recibe correos.
+  DOMINIO_PERSONAL: "pescacorral.example.com",
 };

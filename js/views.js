@@ -130,7 +130,7 @@ function wireAdmin(ctx) {
   });
   // Cierra el drawer al navegar
   U.$$("#sidebar a").forEach((a) => a.addEventListener("click", () => admin.classList.remove("drawer-open")));
-  U.$("[data-logout]")?.addEventListener("click", async () => { await D.signOut(); ctx.go("/login"); });
+  U.$("[data-logout]")?.addEventListener("click", () => salir(ctx));
 }
 
 /* ============================================================================
@@ -185,6 +185,72 @@ export async function viewLogin(ctx) {
       btn.disabled = false; label.textContent = "Continuar con Google";
     }
   });
+}
+
+/* ---- Acceso del personal: #/acceso/municipio y #/acceso/admin ----
+ * Se llega desde /Municipio y /Admin. Usuario y contraseña asignados por la
+ * administración; no hay registro abierto. */
+export async function viewAcceso(ctx) {
+  const tipo = ctx.params.tipo === "admin" ? "admin" : "municipio";
+  const demo = D.MODE === "demo";
+  const titulo = tipo === "admin" ? "Acceso de administración" : "Acceso municipal";
+  const sub = tipo === "admin"
+    ? "Ingreso del administrador del sistema."
+    : `Ingreso del personal del ${U.esc(CFG.MUNICIPIO || "Municipio de Coronel Moldes")}.`;
+  U.mount(`<div class="auth">
+    <div class="auth__head">
+      <span class="logo">${U.logoMark(52)}</span>
+      <h1>PescaCorral</h1>
+      <p>${titulo} · ${U.esc(CFG.LUGAR || "Dique Cabra Corral")}</p>
+    </div>
+    <div class="auth__card-wrap">
+      <form class="auth__card" id="acc-form" novalidate>
+        <h2>${titulo}</h2>
+        <p class="sub">${sub} Usá el usuario y la contraseña que te asignó la administración.</p>
+        <div class="field"><label for="acc-user">Usuario</label>
+          <input class="input" id="acc-user" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="${tipo}" value="${U.esc(ctx.params.u || "")}"/></div>
+        <div class="field"><label for="acc-pass">Contraseña</label>
+          <input class="input" id="acc-pass" type="password" autocomplete="current-password"/>
+          <label class="field__hint" style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="acc-ver"/> Mostrar contraseña</label></div>
+        <div class="field__error hide" id="acc-err"></div>
+        <button class="btn btn--primary btn--block btn--lg mt-8" type="submit" id="acc-btn">Ingresar</button>
+        <ul class="auth__points">
+          <li>${U.icon("shield", { size: 16 })}<span>Las cuentas del personal las crea la administración; no hay registro abierto.</span></li>
+          <li>${U.icon("lock", { size: 16 })}<span>Tu contraseña se guarda cifrada y PescaCorral no la conoce.</span></li>
+        </ul>
+      </form>
+      ${demo ? `<div class="auth__demo">
+        <b>Modo demostración.</b> Usuario <b>${tipo}</b> y contraseña <b>${tipo === "admin" ? "Admin.2026" : "Municipio.2026"}</b>.
+      </div>` : ""}
+    </div>
+    <div class="auth__foot"><a href="#/login" data-publico>¿Sos pescador, turista o dueño de catamarán? Ingresá con Google</a></div>
+  </div>`);
+
+  const errBox = U.$("#acc-err");
+  if (ctx.params.msg) showErr(errBox, ctx.params.msg);
+  U.$(ctx.params.u ? "#acc-pass" : "#acc-user").focus();
+  const btn = U.$("#acc-btn");
+  U.$("#acc-ver").addEventListener("change", (e) => { U.$("#acc-pass").type = e.target.checked ? "text" : "password"; });
+  U.$("[data-publico]").addEventListener("click", () => D.usarIngresoPublico());
+  U.$("#acc-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    errBox.classList.add("hide");
+    btn.disabled = true; btn.textContent = "Ingresando…";
+    try {
+      await D.signInPersonal({ usuario: U.$("#acc-user").value, clave: U.$("#acc-pass").value, tipo });
+      ctx.go("/admin");
+    } catch (err) {
+      // El mensaje viaja en la ruta para sobrevivir al redibujo por cierre de sesión.
+      ctx.go(`/acceso/${tipo}?msg=${encodeURIComponent(err.message)}&u=${encodeURIComponent(U.$("#acc-user").value.trim())}`);
+    }
+  });
+}
+
+/* Cierre de sesión: vuelve a la pantalla de ingreso que corresponde. */
+async function salir(ctx) {
+  const destino = D.rutaIngreso();
+  await D.signOut();
+  ctx.go(destino);
 }
 
 /* Modo demostración: reproduce el selector de cuentas de Google. */
@@ -771,6 +837,7 @@ export async function viewHistorial(ctx) {
  * ========================================================================== */
 export async function viewPerfil(ctx) {
   const p = ctx.session.profile;
+  const conClave = ctx.session.user.metodo === "clave";
   const notifs = await D.listNotificaciones();
   const unread = notifs.filter((n) => !n.leida).length;
 
@@ -815,11 +882,14 @@ export async function viewPerfil(ctx) {
 
       <h2 class="section-title mt-24">Cuenta</h2>
       <div class="card card--flat">
-        <div class="permit__row"><span>Ingreso</span><b>${GOOGLE_G} Cuenta de Google</b></div>
-        <div class="permit__row"><span>Correo</span><b>${U.esc(ctx.session.user.email)}</b></div>
+        ${conClave
+          ? `<div class="permit__row"><span>Ingreso</span><b>${U.icon("lock", { size: 16 })} Usuario y contraseña</b></div>
+        <div class="permit__row"><span>Usuario</span><b>${U.esc(String(ctx.session.user.email || "").split("@")[0])}</b></div>`
+          : `<div class="permit__row"><span>Ingreso</span><b>${GOOGLE_G} Cuenta de Google</b></div>
+        <div class="permit__row"><span>Correo</span><b>${U.esc(ctx.session.user.email)}</b></div>`}
         <div class="permit__row"><span>Modo de datos</span><b>${D.MODE === "demo" ? "Demostración (local)" : "Supabase (en la nube)"}</b></div>
-        <p class="field__hint mt-8">La contraseña y la verificación en dos pasos se administran desde tu cuenta de Google.</p>
-        ${D.MODE === "supabase" ? `<a class="btn btn--outline btn--block mt-12" href="https://myaccount.google.com/security" target="_blank" rel="noopener">${U.icon("shield", { size: 18 })} Seguridad de mi cuenta de Google</a>` : ""}
+        <p class="field__hint mt-8">${conClave ? "La contraseña de las cuentas del personal la asigna y la renueva la administración del sistema." : "La contraseña y la verificación en dos pasos se administran desde tu cuenta de Google."}</p>
+        ${D.MODE === "supabase" && !conClave ? `<a class="btn btn--outline btn--block mt-12" href="https://myaccount.google.com/security" target="_blank" rel="noopener">${U.icon("shield", { size: 18 })} Seguridad de mi cuenta de Google</a>` : ""}
         ${D.MODE === "demo" ? `<button class="btn btn--soft btn--block mt-12" data-reset>${U.icon("refresh", { size: 18 })} Reiniciar datos de demo</button>` : ""}
       </div>
 
@@ -855,7 +925,7 @@ export async function viewPerfil(ctx) {
     if (!ok) return;
     await D.resetDemo(); U.toast("Datos de demo restaurados", "ok"); ctx.go("/login");
   });
-  U.$("[data-logout]")?.addEventListener("click", async () => { await D.signOut(); ctx.go("/login"); });
+  U.$("[data-logout]")?.addEventListener("click", () => salir(ctx));
 }
 
 /* ============================================================================

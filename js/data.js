@@ -14,6 +14,17 @@ export const MODE = HAS_SUPABASE ? "supabase" : "demo";
 
 const DEMO_KEY = "pescacorral.demo.v1";
 const PREF_RECORDATORIOS = "pescacorral.pref.recordatorios";
+const ACCESO_KEY = "pescacorral.acceso";   // último acceso del personal (municipio | admin)
+
+/* Acceso del personal con usuario y contraseña. El usuario corto se traduce a
+ * un correo de un dominio reservado (no recibe mensajes). */
+const DOMINIO_PERSONAL = CFG.DOMINIO_PERSONAL || "pescacorral.example.com";
+const ROL_POR_ACCESO = { municipio: "admin_municipal", admin: "admin_sistema" };
+const ROLES_PERSONAL = Object.values(ROL_POR_ACCESO);
+const CLAVES_DEMO = {
+  municipio: { email: "municipio@demo.com", clave: "Municipio.2026" },
+  admin:     { email: "admin@demo.com",     clave: "Admin.2026" },
+};
 
 let sb = null;                 // cliente supabase (lazy)
 const authListeners = new Set();
@@ -232,13 +243,14 @@ export async function getSession() {
     const user = data.session.user;
     const meta = user.user_metadata || {};
     const profile = await fetchProfileSupabase(user.id);
+    const metodo = user.app_metadata?.provider === "email" ? "clave" : "google";
     return {
-      user: { id: user.id, email: user.email, avatar: meta.avatar_url || meta.picture || null },
+      user: { id: user.id, email: user.email, avatar: meta.avatar_url || meta.picture || null, metodo },
       profile,
     };
   }
   const u = demoSessionUser();
-  return u ? { user: { id: u.id, email: u.email, avatar: null }, profile: u } : null;
+  return u ? { user: { id: u.id, email: u.email, avatar: null, metodo: DB.session.metodo || "google" }, profile: u } : null;
 }
 
 async function fetchProfileSupabase(id) {
@@ -279,6 +291,7 @@ async function googleHabilitado() {
 export async function signInWithGoogle() {
   await ready();
   if (MODE !== "supabase") throw new Error("En modo demostración elegí una de las cuentas de ejemplo.");
+  olvidarAcceso();
   if (!(await googleHabilitado()))
     throw new Error("El ingreso con Google todavía no está habilitado en el servidor. Intentá más tarde.");
   const { error } = await sb.auth.signInWithOAuth({
@@ -293,7 +306,7 @@ export async function listarCuentasDemo() {
   await ready();
   if (MODE !== "demo") return [];
   return DB.usuarios
-    .filter((u) => u.activo !== false)
+    .filter((u) => u.activo !== false && !ROLES_PERSONAL.includes(u.rol))
     .map((u) => ({ email: u.email, nombre: u.nombre || "", apellido: u.apellido || "" }));
 }
 
@@ -314,10 +327,64 @@ export async function signInDemo({ email, nombre = "" } = {}) {
     };
     DB.usuarios.push(u);
   }
+  if (ROLES_PERSONAL.includes(u.rol)) throw new Error("Esta cuenta ingresa por el acceso del personal, con usuario y contraseña.");
   if (u.activo === false) throw new Error("La cuenta está desactivada. Comunicate con el municipio.");
-  DB.session = { userId: u.id }; persist(); emitAuth("SIGNED_IN");
+  olvidarAcceso();
+  DB.session = { userId: u.id, metodo: "google" }; persist(); emitAuth("SIGNED_IN");
   return true;
 }
+
+/* ---- Acceso del personal (municipio y administración) con usuario y contraseña ----
+ * Mientras dura el ingreso, el enrutador no redibuja (ver app.js), así una cuenta
+ * sin el rol de la sección no llega a ver ninguna pantalla interna. */
+export let ingresoPersonalEnCurso = false;
+
+export async function signInPersonal({ usuario, clave, tipo } = {}) {
+  await ready();
+  const rolEsperado = ROL_POR_ACCESO[tipo];
+  if (!rolEsperado) throw new Error("Acceso no válido.");
+  usuario = String(usuario || "").trim().toLowerCase();
+  if (!usuario || !clave) throw new Error("Ingresá tu usuario y tu contraseña.");
+  ingresoPersonalEnCurso = true;
+  try {
+    if (MODE === "supabase") {
+      const email = usuario.includes("@") ? usuario : `${usuario}@${DOMINIO_PERSONAL}`;
+      const { data, error } = await sb.auth.signInWithPassword({ email, password: clave });
+      if (error) throw new Error(traducirAuth(error.message));
+      const profile = await fetchProfileSupabase(data.user.id);
+      if (!profile || profile.rol !== rolEsperado || profile.activo === false) {
+        await sb.auth.signOut();
+        throw new Error(profile && profile.activo === false
+          ? "Tu cuenta está desactivada. Comunicate con la administración."
+          : "Esta cuenta no tiene acceso a esta sección.");
+      }
+    } else {
+      const cred = CLAVES_DEMO[usuario];
+      const u = cred && DB.usuarios.find((x) => x.email === cred.email);
+      if (!u || cred.clave !== clave) throw new Error("Usuario o contraseña incorrectos.");
+      if (u.rol !== rolEsperado) throw new Error("Esta cuenta no tiene acceso a esta sección.");
+      if (u.activo === false) throw new Error("Tu cuenta está desactivada. Comunicate con la administración.");
+      DB.session = { userId: u.id, metodo: "clave" }; persist();
+    }
+    recordarAcceso(tipo);
+  } finally {
+    ingresoPersonalEnCurso = false;
+  }
+  return true;
+}
+
+/* Recuerda por qué puerta ingresó el personal, para volver a ella al salir. */
+function recordarAcceso(tipo) { try { localStorage.setItem(ACCESO_KEY, tipo); } catch { /* sin almacenamiento */ } }
+function olvidarAcceso() { try { localStorage.removeItem(ACCESO_KEY); } catch { /* sin almacenamiento */ } }
+function ultimoAcceso() {
+  try { const t = localStorage.getItem(ACCESO_KEY); return ROL_POR_ACCESO[t] ? t : null; } catch { return null; }
+}
+/** Pantalla de ingreso que corresponde: la del personal si fue la última usada. */
+export function rutaIngreso() {
+  const t = ultimoAcceso();
+  return t ? `/acceso/${t}` : "/login";
+}
+export function usarIngresoPublico() { olvidarAcceso(); }
 
 /** Primer ingreso (HU-001): guarda los datos obligatorios y confirma el alta. */
 export async function completarPerfil({ nombre, apellido, telefono, dni, rol }) {
@@ -370,6 +437,9 @@ function traducirAuth(msg = "") {
   if (m.includes("provider is not enabled") || m.includes("unsupported provider"))
     return "El ingreso con Google todavía no está habilitado en el servidor.";
   if (m.includes("access_denied") || m.includes("cancel")) return "Cancelaste el ingreso con Google.";
+  if (m.includes("invalid login credentials") || m.includes("invalid credentials")) return "Usuario o contraseña incorrectos.";
+  if (m.includes("email not confirmed")) return "La cuenta todavía no fue habilitada por la administración.";
+  if (m.includes("email logins are disabled") || m.includes("email provider")) return "El acceso del personal todavía no está habilitado en el servidor.";
   if (m.includes("rate limit") || m.includes("too many")) return "Demasiados intentos. Esperá unos minutos y volvé a probar.";
   return msg || "No se pudo completar el ingreso.";
 }

@@ -4,7 +4,7 @@ PescaCorral es una **aplicación web progresiva (PWA)** para la gestión de rese
 
 La aplicación permite que pescadores y turistas consulten la disponibilidad de catamaranes, reserven lugares, paguen (pasarela simulada) y obtengan un permiso municipal digital con código QR. Los dueños de embarcaciones administran sus catamaranes y el Municipio cuenta con un panel de indicadores, reportes, alertas de fauna y gestión de usuarios.
 
-El ingreso se realiza **exclusivamente con una cuenta de Google**. La aplicación no recibe ni almacena contraseñas.
+Pescadores, turistas y dueños de catamaranes ingresan **con su cuenta de Google** (la aplicación no recibe sus contraseñas). El personal municipal y el administrador del sistema tienen **accesos propios con usuario y contraseña**: `/Municipio` y `/Admin`.
 
 **Aplicación publicada:** https://carlitox09.github.io/PescaCorral/
 
@@ -32,7 +32,7 @@ No hay servidor propio ni proceso de compilación: el repositorio se sirve tal c
 | HU | Funcionalidad | Dónde está |
 | --- | --- | --- |
 | HU-001 | Registro en el primer ingreso con Google: se crea la cuenta con los datos de Google y se solicitan DNI, teléfono y tipo de cuenta | `#/registro` |
-| HU-002 | Inicio de sesión exclusivo con Google; mensaje de error si se cancela; redirección al ingreso sin sesión | `#/login` |
+| HU-002 | Inicio de sesión con Google para el público y con usuario y contraseña para el personal; mensaje de error si se cancela o las credenciales son incorrectas; redirección al ingreso sin sesión | `#/login`, `/Municipio`, `/Admin` |
 | HU-003 | Alta y edición de catamaranes (estado, precio, capacidad, habilitación) | `#/gestion` |
 | HU-004 | Disponibilidad por fecha y turno con **lugares libres por catamarán** (cada asiento se reserva por fecha y turno) | `#/catamaranes` |
 | HU-005 | Reserva con selección visual de asientos; sin doble reserva (índice único por asiento, fecha y turno) | `#/reserva/:id` |
@@ -54,6 +54,9 @@ No hay servidor propio ni proceso de compilación: el repositorio se sirve tal c
 ```text
 PescaCorral/
 ├── index.html              # Punto de entrada
+├── 404.html                # Redirige /municipio y /admin en cualquier combinación de mayúsculas
+├── Municipio/index.html    # /Municipio: acceso del personal municipal (#/acceso/municipio)
+├── Admin/index.html        # /Admin: acceso del administrador del sistema (#/acceso/admin)
 ├── manifest.webmanifest    # Configuración de la PWA
 ├── service-worker.js       # Caché offline del app shell
 ├── config.js               # Credenciales de Supabase (anon key) y datos del municipio
@@ -73,7 +76,8 @@ PescaCorral/
     └── migrations/         # Para bases creadas con versiones anteriores del esquema
         ├── 002_seguridad_reportes_recordatorios.sql
         ├── 003_ingreso_con_google.sql
-        └── 004_turnos_alertas_reportes.sql
+        ├── 004_turnos_alertas_reportes.sql
+        └── 005_acceso_personal.sql
 ```
 
 ---
@@ -118,17 +122,28 @@ Se configura una sola vez, en dos consolas.
 
 1. **Authentication → Sign In / Providers → Google**: habilitar y pegar el ID de cliente y el secreto.
 2. **Authentication → URL Configuration**: *Site URL* `https://carlitox09.github.io/PescaCorral/`; en *Redirect URLs* agregar `https://carlitox09.github.io/PescaCorral/**` y `http://localhost:8080/**`.
-3. **Authentication → Sign In / Providers → Email**: deshabilitar, para que no puedan crearse cuentas con contraseña por fuera de la aplicación.
+3. **Authentication → Sign In / Providers → Email**: habilitar con *Confirm email* encendido, mínimo de 12 caracteres y contraseñas con minúsculas, mayúsculas, números y símbolos. Lo usa sólo el personal: el trigger `handle_new_user` rechaza cualquier alta con contraseña que no esté autorizada en `personal_autorizado`.
 
 En el primer ingreso de cada persona, el trigger `handle_new_user` crea el perfil con el nombre, el correo y la foto de Google; la aplicación pide DNI, teléfono y tipo de cuenta antes de habilitar el resto de las pantallas.
 
+### Acceso del personal (usuario y contraseña)
+
+El personal municipal ingresa por `https://carlitox09.github.io/PescaCorral/Municipio` y el administrador del sistema por `.../Admin`. El usuario es un nombre corto (`municipio`, `admin`) que la aplicación traduce a `<usuario>@pescacorral.example.com`, un dominio reservado que no recibe correos (`DOMINIO_PERSONAL` en `config.js`). Cada acceso acepta sólo su rol: `/Municipio` → `admin_municipal`, `/Admin` → `admin_sistema`.
+
+Alta de una cuenta (no hay registro abierto):
+
+1. En el SQL Editor (la autorización vence a los 15 minutos y se usa una sola vez):
+   ```sql
+   insert into public.personal_autorizado (usuario, email, rol, nombre, apellido)
+   values ('municipio', 'municipio@pescacorral.example.com', 'admin_municipal', 'Nombre', 'Apellido');
+   ```
+2. **Authentication → Users → Add user → Create new user**: ese correo, la contraseña y *Auto Confirm User* tildado. El trigger crea el perfil con el rol autorizado.
+
+Para el administrador del sistema se repite con `'admin'`, `'admin@pescacorral.example.com'` y `'admin_sistema'`.
+
 ### Roles administrativos
 
-Toda cuenta nueva es *Pescador/Turista* (o *Dueño de catamarán*, si lo elige en el alta). Los roles administrativos no pueden autoasignarse: el trigger `proteger_perfil` impide que un usuario cambie su rol, su correo o su estado. Para otorgar uno, la persona ingresa una vez con Google y luego se ejecuta en el SQL Editor:
-
-```sql
-update public.usuario set rol = 'admin_municipal', perfil_completo = true where email = 'cuenta@gmail.com';
-```
+Toda cuenta nueva de Google es *Pescador/Turista* (o *Dueño de catamarán*, si lo elige en el alta). Los roles administrativos no pueden autoasignarse: el trigger `proteger_perfil` impide que un usuario cambie su rol, su correo o su estado. Las cuentas del personal reciben su rol al crearse, desde `personal_autorizado`.
 
 ### Credenciales
 
@@ -138,7 +153,8 @@ update public.usuario set rol = 'admin_municipal', perfil_completo = true where 
 
 ## Seguridad implementada
 
-* **Sin contraseñas propias**: la identidad la verifica Google (OAuth 2.0 / OpenID Connect). Contraseña, verificación en dos pasos, detección de accesos sospechosos y recuperación de la cuenta quedan a cargo de Google.
+* **Público con Google**: la identidad de pescadores, turistas y dueños la verifica Google (OAuth 2.0 / OpenID Connect). Contraseña, verificación en dos pasos, detección de accesos sospechosos y recuperación de la cuenta quedan a cargo de Google.
+* **Personal con usuario y contraseña**: cuentas creadas sólo por la administración (`personal_autorizado` + trigger), contraseñas de al menos 12 caracteres guardadas cifradas por Supabase Auth, límite de intentos de Supabase y mensaje genérico ante credenciales incorrectas. Cada acceso admite sólo su rol.
 * **Sesiones JWT** emitidas por Supabase Auth, con renovación automática. El flujo PKCE devuelve un código de un solo uso (`?code=`) que la aplicación intercambia por la sesión.
 * **Primer ingreso controlado**: sin DNI y tipo de cuenta confirmados, el enrutador solo permite la pantalla de alta.
 * **Protección del perfil** (trigger `proteger_perfil`): un usuario no puede cambiar su rol, su correo ni el estado de su cuenta; el tipo de cuenta se elige una sola vez.
@@ -151,14 +167,14 @@ update public.usuario set rol = 'admin_municipal', perfil_completo = true where 
 
 ### Cuentas del modo demo
 
-En modo demo, **Continuar con Google** abre un selector con estas cuentas de ejemplo. *Usar otra cuenta* simula el primer ingreso de una persona nueva.
+En modo demo, **Continuar con Google** abre un selector con las cuentas del público. *Usar otra cuenta* simula el primer ingreso de una persona nueva. El personal entra por su acceso con usuario y contraseña.
 
-| Cuenta | Rol |
-| --- | --- |
-| pescador@demo.com | Pescador / Turista |
-| dueno@demo.com | Dueño de catamarán |
-| municipio@demo.com | Administración municipal |
-| admin@demo.com | Administrador del sistema |
+| Cuenta | Rol | Ingreso |
+| --- | --- | --- |
+| pescador@demo.com | Pescador / Turista | Google (simulado) |
+| dueno@demo.com | Dueño de catamarán | Google (simulado) |
+| `municipio` / `Municipio.2026` | Administración municipal | `/Municipio` |
+| `admin` / `Admin.2026` | Administrador del sistema | `/Admin` |
 
 Desde **Perfil → Reiniciar datos de demo** se restauran los datos iniciales.
 

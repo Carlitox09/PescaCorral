@@ -13,6 +13,7 @@ const isAdmin = (rol) => rol === "admin_municipal" || rol === "admin_sistema";
  *   alta: pantalla del primer ingreso, sólo accesible con el perfil incompleto. */
 const ROUTES = {
   login:       { view: V.viewLogin,       auth: false },
+  acceso:      { view: V.viewAcceso,      auth: false },   // personal: #/acceso/municipio | #/acceso/admin
   registro:    { view: V.viewRegistro,    auth: true, alta: true },
   home:        { view: V.viewHome,        auth: true },
   catamaranes: { view: V.viewCatamaranes, auth: true },
@@ -35,6 +36,7 @@ function parseHash() {
   const params = {};
   new URLSearchParams(qs).forEach((v, k) => (params[k] = v));
   if (base === "reserva" || base === "permiso") params.id = segs[1] || "";
+  if (base === "acceso") params.tipo = segs[1] || "municipio";
   return { base, params };
 }
 
@@ -45,7 +47,7 @@ function go(path) {
   else location.hash = target;              // dispara hashchange -> render
 }
 const inicioSegunRol = (rol) => (isAdmin(rol) ? "/admin" : "/home");
-const aLogin = (msg) => go("/login" + (msg ? "?msg=" + encodeURIComponent(msg) : ""));
+const aLogin = (msg) => go(D.rutaIngreso() + (msg ? "?msg=" + encodeURIComponent(msg) : ""));
 
 /* Al volver de Google, un error llega en la URL (?error=… o #error=…).
  * Devuelve el mensaje a mostrar, o null si no hay error. */
@@ -87,7 +89,7 @@ async function render() {
     if (!route.auth) {
       if (session) { go(D.perfilCompleto(session.profile) ? inicioSegunRol(session.profile.rol) : "/registro"); return; }
     } else {
-      if (!session) { go("/login"); return; }
+      if (!session) { go(D.rutaIngreso()); return; }
       const p = session.profile;
       if (!p) throw new Error("No se pudo cargar tu perfil. Volvé a intentar en unos segundos.");
       if (p.activo === false) {
@@ -128,9 +130,11 @@ async function render() {
 window.addEventListener("hashchange", render);
 
 // Re-render ante cambios de sesión o de perfil. La renovación periódica del
-// token no redibuja, para no perder lo que el usuario esté cargando.
+// token no redibuja, para no perder lo que el usuario esté cargando; tampoco
+// durante el ingreso del personal, que valida el rol antes de navegar.
 D.onAuthChange((event) => {
   if (event === "TOKEN_REFRESHED" || event === "INITIAL_SESSION") return;
+  if (D.ingresoPersonalEnCurso) return;
   render();
 });
 

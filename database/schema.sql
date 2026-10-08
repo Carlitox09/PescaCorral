@@ -10,10 +10,12 @@
 --  1. Entrá a tu proyecto en https://supabase.com  ->  SQL Editor.
 --  2. Pegá y ejecutá este archivo (schema.sql) COMPLETO.
 --  3. Luego ejecutá seed.sql para cargar datos de ejemplo (catamaranes, etc.).
---  4. El ingreso se realiza exclusivamente con una cuenta de Google (OAuth 2.0)
---     a través de Supabase Auth, que registra la identidad en auth.users. La
---     aplicación no recibe ni almacena contraseñas. La tabla "usuario" EXTIENDE
---     ese registro con los datos de perfil y el rol.
+--  4. Pescadores, turistas y dueños ingresan con su cuenta de Google (OAuth 2.0)
+--     y la aplicación no recibe sus contraseñas. El personal municipal y el
+--     administrador ingresan por /Municipio y /Admin con usuario y contraseña
+--     (Supabase Auth, proveedor Email), sólo con altas autorizadas en
+--     personal_autorizado. Supabase Auth registra la identidad en auth.users y
+--     la tabla "usuario" EXTIENDE ese registro con los datos de perfil y el rol.
 --
 --  Este script es idempotente: se puede volver a ejecutar sin error.
 -- ============================================================================
@@ -31,6 +33,7 @@ drop view  if exists public.v_reservas_por_dia       cascade;
 drop view  if exists public.v_lugares_ocupados       cascade;
 
 drop table if exists public.intento_acceso cascade;
+drop table if exists public.personal_autorizado cascade;
 drop table if exists public.alerta_fauna   cascade;
 drop table if exists public.notificacion   cascade;
 drop table if exists public.reporte        cascade;
@@ -260,6 +263,23 @@ create table public.alerta_fauna (
     created_at        timestamptz not null default now()
 );
 
+-- ---------------------------------------------------------------------------
+-- PERSONAL_AUTORIZADO  (altas autorizadas de cuentas del personal)
+--   El personal municipal y el administrador ingresan con usuario y contraseña
+--   (/Municipio y /Admin). Sólo puede crearse una cuenta con contraseña si antes
+--   se la autoriza acá; la autorización vence a los 15 minutos y se usa una vez.
+-- ---------------------------------------------------------------------------
+create table public.personal_autorizado (
+    usuario    text primary key check (usuario ~ '^[a-z0-9._-]{3,30}$'),
+    email      text not null unique,
+    rol        text not null check (rol in ('admin_municipal','admin_sistema')),
+    nombre     text not null,
+    apellido   text not null default '',
+    expira     timestamptz not null default (now() + interval '15 minutes'),
+    usado      boolean not null default false,
+    created_at timestamptz not null default now()
+);
+
 -- ============================================================================
 -- 2. SECUENCIA Y FUNCIONES AUXILIARES
 -- ============================================================================
@@ -315,10 +335,11 @@ create trigger trg_reserva_updated   before update on public.reserva
     for each row execute function public.set_updated_at();
 
 -- ----------------------------------------------------------------------------
--- Alta automática del perfil en el primer ingreso con Google.
--- Google entrega nombre completo, correo y foto; DNI, teléfono y tipo de cuenta
--- los completa el usuario. Toda cuenta nueva es "pescador": los roles
--- administrativos sólo se otorgan manualmente (ver README).
+-- Alta automática del perfil.
+--   Google: el perfil se crea con nombre, correo y foto; DNI, teléfono y tipo
+--   de cuenta los completa el usuario. Toda cuenta nueva es "pescador".
+--   Usuario y contraseña (personal): sólo con una autorización vigente en
+--   personal_autorizado, que define el rol; si no, el alta se rechaza.
 -- ----------------------------------------------------------------------------
 create or replace function public.handle_new_user()
 returns trigger
@@ -331,7 +352,25 @@ declare
     v_completo text  := trim(coalesce(v_meta->>'full_name', v_meta->>'name', ''));
     v_nombre   text;
     v_apellido text;
+    v_aut      public.personal_autorizado%rowtype;
 begin
+    -- Cuentas con contraseña: sólo las autorizadas por la administración.
+    if coalesce(new.raw_app_meta_data->>'provider', 'email') = 'email' then
+        select * into v_aut
+        from public.personal_autorizado
+        where lower(email) = lower(new.email) and not usado and expira > now()
+        for update;
+        if not found then
+            raise exception 'Alta no autorizada: las cuentas con contraseña las crea la administración';
+        end if;
+        insert into public.usuario (id, nombre, apellido, email, rol, perfil_completo)
+        values (new.id, v_aut.nombre, v_aut.apellido, lower(new.email), v_aut.rol, true)
+        on conflict (id) do nothing;
+        update public.personal_autorizado set usado = true where usuario = v_aut.usuario;
+        return new;
+    end if;
+
+    -- Cuentas de Google: el perfil se crea con los datos de Google y se completa en la app.
     v_nombre := coalesce(nullif(trim(v_meta->>'given_name'), ''),
                          nullif(split_part(v_completo, ' ', 1), ''),
                          split_part(new.email, '@', 1));
@@ -629,6 +668,8 @@ alter table public.pago           enable row level security;
 alter table public.reporte        enable row level security;
 alter table public.notificacion   enable row level security;
 alter table public.alerta_fauna   enable row level security;
+alter table public.personal_autorizado enable row level security;   -- sin políticas: sólo SQL Editor
+revoke all on public.personal_autorizado from anon, authenticated;
 
 -- ----- USUARIO --------------------------------------------------------------
 create policy usuario_select_propio on public.usuario

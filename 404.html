@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="es-AR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PescaCorral</title>
+  <meta name="robots" content="noindex" />
+  <script>
+    /* GitHub Pages sirve esta página ante cualquier dirección inexistente.
+     * /municipio y /admin (en cualquier combinación de mayúsculas) llevan al
+     * acceso del personal; el resto, al inicio de la aplicación. */
+    (function () {
+      var partes = location.pathname.split("/").filter(Boolean);
+      var base = "/" + (partes.length ? partes[0] + "/" : "");
+      var resto = partes.slice(1).join("/").toLowerCase().replace(/\/?index\.html$/, "");
+      var destino = base;
+      if (resto === "municipio") destino = base + "#/acceso/municipio";
+      else if (resto === "admin") destino = base + "#/acceso/admin";
+      location.replace(destino);
+    })();
+  </script>
+</head>
+<body>
+  <p><a href="./">Ir a PescaCorral</a></p>
+</body>
+</html>

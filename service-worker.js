@@ -6,7 +6,7 @@
  *   - Recursos propios (css/js/icons/vendor): stale-while-revalidate.
  *   - Llamadas a Supabase (/auth, /rest, /realtime): siempre a la red (no se cachean).
  * ========================================================================== */
-const VERSION = "pescacorral-v1.3.0";
+const VERSION = "pescacorral-v1.4.0";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -23,6 +23,8 @@ const APP_SHELL = [
   "./icons/icon-512.png",
   "./icons/apple-touch-icon.png",
   "./icons/favicon-32.png",
+  "./Municipio/",
+  "./Admin/",
 ];
 
 self.addEventListener("install", (event) => {
@@ -56,7 +58,8 @@ self.addEventListener("fetch", (event) => {
   // Navegación: intentar red y, si falla, servir el shell cacheado.
   if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request).catch(() => caches.match("./index.html"))
+      fetch(request).catch(() =>
+        caches.match(request).then((r) => r || caches.match("./index.html")))
     );
     return;
   }
