@@ -146,6 +146,12 @@ Para el administrador del sistema se repite con `'admin'`, `'admin@pescacorral.e
 
 Toda cuenta nueva de Google es *Pescador/Turista* (o *Dueño de catamarán*, si lo elige en el alta). Los roles administrativos no pueden autoasignarse: el trigger `proteger_perfil` impide que un usuario cambie su rol, su correo o su estado. Desde la pantalla Usuarios, la administración sólo cambia el tipo de cuenta (pescador o dueño) y el estado de las cuentas del público. Las cuentas del personal reciben su rol al crearse (en Personal o desde `personal_autorizado`) y ese rol no cambia; sólo el administrador del sistema las da de alta, les cambia la contraseña y las activa o desactiva.
 
+### Uso sin conexión
+
+En el dique la señal es irregular. Para pescadores y dueños, la aplicación guarda en el dispositivo lo último que consultaron (perfil, reservas, permisos, comprobantes, notificaciones y catamaranes). Sin internet la sesión se mantiene y esas pantallas muestran los datos guardados, con un aviso de su fecha; el permiso digital con su código QR se puede mostrar al embarcar. Reservar y pagar necesitan conexión. Al volver internet la aplicación se actualiza sola. Lo guardado se borra al cerrar sesión, y el personal no usa este modo.
+
+La sesión de Google queda abierta en el dispositivo hasta que se cierra. Si se cerró, el ingreso propone continuar con la última cuenta usada ("Continuar como …"), sin pasar por el selector de cuentas de Google; "Usar otra cuenta" lo muestra.
+
 ### Avisos a los usuarios
 
 La administración (municipio y administrador del sistema) publica avisos en **Avisos** (`#/avisos`): título, mensaje y destinatarios (todos los usuarios, pescadores y turistas, dueños de catamarán o una persona). Cada aviso llega como notificación a la campanita de los destinatarios con cuenta activa y queda registrado en la tabla `aviso` (fecha, autor y cantidad de destinatarios). Lo hace la función `publicar_aviso`.

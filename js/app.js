@@ -148,6 +148,11 @@ D.onAuthChange((event) => {
   render();
 });
 
+// Al volver la conexión se redibuja con datos frescos (y se quita el aviso de
+// datos guardados). Si la app estaba usando el cliente sin conexión, se recarga
+// para retomar la sesión real, que se renueva sola.
+window.addEventListener("online", () => (D.usandoClienteSinConexion() ? location.reload() : render()));
+
 // Primer render.
 if (!location.hash) location.hash = "#/home";
 render();

@@ -15,6 +15,8 @@ export const MODE = HAS_SUPABASE ? "supabase" : "demo";
 const DEMO_KEY = "pescacorral.demo.v1";
 const PREF_RECORDATORIOS = "pescacorral.pref.recordatorios";
 const ACCESO_KEY = "pescacorral.acceso";   // último acceso del personal (municipio | admin)
+const OFFLINE_KEY = "pescacorral.offline";  // sesión y datos para usar la app sin conexión
+const CUENTA_GOOGLE_KEY = "pescacorral.cuentaGoogle";   // última cuenta de Google usada en el dispositivo
 
 /* Acceso del personal con usuario y contraseña. El usuario corto se traduce a
  * un correo de un dominio reservado (no recibe mensajes). */
@@ -49,6 +51,93 @@ let sb = null;                 // cliente supabase (lazy)
 const authListeners = new Set();
 
 /* ============================================================================
+ *  SIN CONEXIÓN (pescadores y dueños)
+ *  En el dique la señal es irregular. Lo último que la persona vio (perfil,
+ *  reservas, permisos, comprobantes, notificaciones y catamaranes) queda
+ *  guardado en el dispositivo: sin internet la sesión sigue abierta y esas
+ *  pantallas muestran los datos guardados, con un aviso. Reservar y pagar
+ *  necesitan conexión. Sólo se guardan lecturas de la API de la cuenta del
+ *  público que usa el dispositivo y se borran al cerrar sesión; el personal no
+ *  usa este modo (sus paneles muestran datos de todas las personas).
+ * ========================================================================== */
+const MAX_RESPUESTAS = 80;
+let sinConexionDesde = null;
+/** Fecha (ms) de los datos guardados que se están mostrando sin conexión, o null. */
+export const sinConexion = () => sinConexionDesde;
+
+function leerOffline() { try { return JSON.parse(localStorage.getItem(OFFLINE_KEY) || "null"); } catch { return null; } }
+function escribirOffline(o) { try { localStorage.setItem(OFFLINE_KEY, JSON.stringify(o)); } catch { /* sin espacio: no se guarda */ } }
+function borrarOffline() { try { localStorage.removeItem(OFFLINE_KEY); } catch { /* sin almacenamiento */ } sinConexionDesde = null; }
+const esErrorDeRed = (err) => navigator.onLine === false || err?.name === "AuthRetryableFetchError" || err?.status === 0;
+
+/* Usuario del token de una petición (null si es la clave pública). */
+function usuarioDelToken(headers) {
+  try {
+    const auth = new Headers(headers || {}).get("Authorization") || "";
+    const b64 = auth.replace(/^Bearer\s+/i, "").split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const claims = JSON.parse(atob(b64));
+    return claims.role === "authenticated" ? claims.sub : null;
+  } catch { return null; }
+}
+
+/* fetch del cliente de Supabase: guarda las lecturas (GET a la API) de la cuenta
+ * del público y, si no hay conexión, responde con la última copia guardada. */
+async function fetchConCache(input, init = {}) {
+  const url = typeof input === "string" ? input : input.url;
+  const metodo = (init.method || (typeof input === "string" ? "GET" : input.method) || "GET").toUpperCase();
+  const api = url.includes("/rest/v1/");
+  const lectura = api && metodo === "GET";
+  const off = lectura ? leerOffline() : null;
+  try {
+    const r = await fetch(input, init);
+    if (lectura && r.ok && off?.uid && usuarioDelToken(init.headers) === off.uid) {
+      const body = await r.clone().text();
+      const actual = leerOffline();          // se relee: otras lecturas en paralelo también guardan
+      if (actual?.uid === off.uid) {
+        actual.datos = actual.datos || {};
+        actual.datos[url] = { t: Date.now(), body, rango: r.headers.get("Content-Range") };
+        const urls = Object.keys(actual.datos);
+        if (urls.length > MAX_RESPUESTAS)
+          urls.sort((a, b) => actual.datos[a].t - actual.datos[b].t).slice(0, urls.length - MAX_RESPUESTAS).forEach((u) => delete actual.datos[u]);
+        escribirOffline(actual);
+      }
+    }
+    return r;
+  } catch (err) {
+    const copia = off?.datos?.[url];
+    const uid = usuarioDelToken(init.headers);
+    if (copia && (!uid || uid === off.uid)) {
+      sinConexionDesde = sinConexionDesde ? Math.min(sinConexionDesde, copia.t) : copia.t;
+      const headers = { "Content-Type": "application/json" };
+      if (copia.rango) headers["Content-Range"] = copia.rango;
+      return new Response(copia.body, { status: 200, headers });
+    }
+    // Sin conexión y sin copia: se responde enseguida (sin los reintentos del
+    // cliente, que demoran varios segundos) con un mensaje claro.
+    if (api && navigator.onLine === false) {
+      return new Response(JSON.stringify({ code: "SIN_CONEXION", message: "Sin conexión a internet: esta acción la necesita. Conectate y volvé a intentar." }),
+        { status: 504, headers: { "Content-Type": "application/json" } });
+    }
+    throw err;
+  }
+}
+
+/* Última cuenta de Google usada en el dispositivo: el ingreso la propone para
+ * entrar con un toque, sin pasar por el selector de cuentas. */
+function recordarCuentaGoogle(user, profile) {
+  try {
+    localStorage.setItem(CUENTA_GOOGLE_KEY, JSON.stringify({
+      email: user.email, nombre: [profile?.nombre, profile?.apellido].filter(Boolean).join(" "), avatar: user.avatar || null,
+    }));
+  } catch { /* sin almacenamiento */ }
+}
+export function cuentaGoogleRecordada() {
+  if (MODE !== "supabase") return null;
+  try { return JSON.parse(localStorage.getItem(CUENTA_GOOGLE_KEY) || "null"); } catch { return null; }
+}
+export function olvidarCuentaGoogle() { try { localStorage.removeItem(CUENTA_GOOGLE_KEY); } catch { /* sin almacenamiento */ } }
+
+/* ============================================================================
  *  INICIALIZACIÓN
  * ========================================================================== */
 let _ready = null;
@@ -63,21 +152,43 @@ function cargarScript(src) {
     document.head.appendChild(s);
   });
 }
+/* Sin conexión se usa un cliente sin sesión que sólo lee las copias guardadas:
+ * el cliente con sesión intentaría renovar un token vencido con reintentos de
+ * hasta medio minuto y la app quedaría esperando. La sesión real queda intacta
+ * en el dispositivo y, al volver internet, la app se recarga y la retoma. */
+let clienteSinConexion = false;
+/** true si la app está usando el cliente sin sesión (sin conexión). */
+export const usandoClienteSinConexion = () => clienteSinConexion;
+function crearClienteSinConexion() {
+  clienteSinConexion = true;
+  return window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, {
+    global: { fetch: fetchConCache },
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: "pescacorral-sin-conexion" },
+  });
+}
+/* Clave con la que supabase-js guarda la sesión (sb-<proyecto>-auth-token). */
+const claveSesion = () => `sb-${new URL(CFG.SUPABASE_URL).hostname.split(".")[0]}-auth-token`;
+
 function ready() {
   if (_ready) return _ready;
   _ready = (async () => {
     if (MODE === "supabase") {
       if (!window.supabase) await cargarScript("vendor/supabase.min.js");
+      if (navigator.onLine === false) { sb = crearClienteSinConexion(); return; }
       const { createClient } = window.supabase;
       sb = createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, {
+        global: { fetch: fetchConCache },
         // Flujo PKCE: al volver de Google la sesión llega como ?code= en la URL
         // (no como #token), lo que no interfiere con el enrutador por hash.
         auth: { flowType: "pkce", persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
       });
       // Se difiere el aviso para no llamar al cliente desde dentro de su propio evento.
       sb.auth.onAuthStateChange((event) => {
+        if (clienteSinConexion) return;
         setTimeout(() => authListeners.forEach((fn) => fn(event)), 0);
       });
+      // Si se corta la conexión con la app abierta, se pasa al cliente sin sesión.
+      window.addEventListener("offline", () => { if (!clienteSinConexion) sb = crearClienteSinConexion(); });
     } else {
       seedDemo();
     }
@@ -269,16 +380,38 @@ export function onAuthChange(fn) {
 export async function getSession() {
   await ready();
   if (MODE === "supabase") {
-    const { data } = await sb.auth.getSession();
-    if (!data.session) return null;
-    const user = data.session.user;
-    const meta = user.user_metadata || {};
-    const profile = await fetchProfileSupabase(user.id);
-    const metodo = metodoDeIngreso(data.session);
-    return {
-      user: { id: user.id, email: user.email, avatar: meta.avatar_url || meta.picture || null, metodo },
-      profile,
-    };
+    sinConexionDesde = null;
+    const { data, error } = await sb.auth.getSession();
+    if (!data.session) {
+      // Sin internet la sesión no se pudo renovar, pero sigue guardada y se
+      // renueva sola al volver la conexión: mientras tanto se usa la última copia.
+      const off = leerOffline();
+      if (off?.sesion && (clienteSinConexion || esErrorDeRed(error))) {
+        sinConexionDesde = off.sesion.t;
+        return { user: off.sesion.user, profile: off.sesion.profile, sinConexion: true };
+      }
+      if (!clienteSinConexion && !esErrorDeRed(error)) borrarOffline();
+      return null;
+    }
+    const u = data.session.user;
+    const meta = u.user_metadata || {};
+    const user = { id: u.id, email: u.email, avatar: meta.avatar_url || meta.picture || null, metodo: metodoDeIngreso(data.session) };
+    const off = leerOffline();
+    let profile = await fetchProfileSupabase(u.id);
+    if (!profile && off?.uid === u.id && off.sesion) {      // sin conexión: perfil guardado
+      profile = off.sesion.profile;
+      sinConexionDesde = sinConexionDesde || off.sesion.t;
+    }
+    if (profile && !esRolPersonal(profile.rol)) {
+      if (!sinConexionDesde) {
+        const actual = leerOffline();        // se relee: la lectura del perfil también se guardó
+        escribirOffline({ uid: u.id, datos: actual?.uid === u.id ? actual.datos : {}, sesion: { user, profile, t: Date.now() } });
+      }
+      if (user.metodo === "google") recordarCuentaGoogle(user, profile);
+    } else if (profile) {
+      borrarOffline();
+    }
+    return { user, profile, ...(sinConexionDesde ? { sinConexion: true } : {}) };
   }
   const u = demoSessionUser();
   return u ? { user: { id: u.id, email: u.email, avatar: null, metodo: DB.session.metodo || "google" }, profile: u } : null;
@@ -341,15 +474,18 @@ async function googleHabilitado() {
 
 /** Inicia el ingreso con Google: redirige a la pantalla de Google y, al
  *  autorizar, vuelve a la aplicación con la sesión iniciada. */
-export async function signInWithGoogle() {
+export async function signInWithGoogle({ otraCuenta = false } = {}) {
   await ready();
   if (MODE !== "supabase") throw new Error("En modo demostración elegí una de las cuentas de ejemplo.");
+  if (navigator.onLine === false) throw new Error("Sin conexión a internet. Conectate para ingresar con Google.");
   olvidarAcceso();
+  const recordada = otraCuenta ? null : cuentaGoogleRecordada();
   if (!(await googleHabilitado()))
     throw new Error("El ingreso con Google todavía no está habilitado en el servidor. Intentá más tarde.");
   const { error } = await sb.auth.signInWithOAuth({
     provider: "google",
-    options: { redirectTo: redirectURL(), queryParams: { prompt: "select_account" } },
+    // Con la cuenta recordada, Google entra directo con ella; si no, muestra el selector.
+    options: { redirectTo: redirectURL(), queryParams: recordada ? { login_hint: recordada.email } : { prompt: "select_account" } },
   });
   if (error) throw new Error(traducirAuth(error.message));
 }
@@ -406,7 +542,7 @@ export async function signInPersonal({ usuario, clave, tipo } = {}) {
       // cierra antes en este dispositivo: así una renovación de ese token, en esta
       // pestaña o en otra, no pisa la sesión nueva.
       const { data: previa } = await sb.auth.getSession();
-      if (previa.session) await sb.auth.signOut({ scope: "local" });
+      if (previa.session) { borrarOffline(); await sb.auth.signOut({ scope: "local" }); }
       const { data, error } = await sb.auth.signInWithPassword({ email, password: clave });
       if (error) throw new Error(traducirAuth(error.message));
       // El rol se verifica con el token recién emitido, no con la sesión guardada.
@@ -469,7 +605,17 @@ export async function completarPerfil({ nombre, apellido, telefono, dni, rol }) 
 
 export async function signOut() {
   await ready();
-  if (MODE === "supabase") { await sb.auth.signOut(); return; }
+  if (MODE === "supabase") {
+    borrarOffline();
+    if (clienteSinConexion) {                // sin conexión: se borra la sesión de este dispositivo
+      try { localStorage.removeItem(claveSesion()); } catch { /* sin almacenamiento */ }
+      emitAuth("SIGNED_OUT");
+      return;
+    }
+    const { error } = await sb.auth.signOut();
+    if (error) await sb.auth.signOut({ scope: "local" });
+    return;
+  }
   DB.session = null; persist(); emitAuth("SIGNED_OUT");
 }
 

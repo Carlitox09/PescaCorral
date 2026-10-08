@@ -72,6 +72,7 @@ const ICONS = {
   dots:        '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   megaphone:   '<path d="M3.5 10.5v3a1 1 0 0 0 1 1H7l7 4.5v-14L7 9.5H4.5a1 1 0 0 0-1 1Z"/><path d="M17.5 9a4 4 0 0 1 0 6M7.5 14.5l1.4 4.5h2.4l-1.1-3.6"/>',
   key:         '<circle cx="8" cy="15" r="4.5"/><path d="M11.2 11.8 20 3M16.5 6.5l2.5 2.5M14 9l2 2"/>',
+  "wifi-off":  '<path d="M3 3l18 18M8.5 15.5a5 5 0 0 1 7 0M5 12a10 10 0 0 1 4.2-2.5M14.5 9.6A10 10 0 0 1 19 12M2 8.5a15 15 0 0 1 4.6-3M10.6 4.6A15 15 0 0 1 22 8.5"/><circle cx="12" cy="19" r=".8"/>',
 };
 
 /** Devuelve el markup de un ícono. `name` debe existir en ICONS. */

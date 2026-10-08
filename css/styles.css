@@ -342,6 +342,13 @@ a { color: inherit; text-decoration: none; }
 .field__hint { color: var(--muted); font-size: .78rem; margin-top: 5px; }
 textarea.input { min-height: 110px; resize: vertical; line-height: 1.45; }
 
+/* Sin conexión: aviso de datos guardados */
+.offline-bar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: var(--ocre-100); color: var(--text); font-size: .8rem; font-weight: 600; line-height: 1.35; }
+.offline-bar svg { flex: none; color: var(--granate-700); }
+/* Ingreso: otra cuenta de Google */
+.auth__otra { text-align: center; margin-top: 10px; font-size: .85rem; }
+.link { background: none; border: 0; padding: 0; color: var(--agua-700); font-weight: 700; text-decoration: underline; cursor: pointer; }
+
 /* Filtros (fecha / turno) */
 .filters { display: flex; gap: 10px; margin-bottom: 16px; }
 .filters .input, .filters .select { background: #fff; box-shadow: var(--shadow-sm); }

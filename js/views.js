@@ -64,8 +64,10 @@ function bottomNav(active, rol) {
 
 function appShell({ active = null, rol = "pescador", topbarHtml = "", bodyHtml = "" }) {
   const showNav = active !== null && !isAdmin(rol);
+  const offline = D.sinConexion();
   return `<div class="app"><div class="shell">
     ${topbarHtml}
+    ${offline ? `<div class="offline-bar" role="status">${U.icon("wifi-off", { size: 16 })}<span>Sin conexión · datos guardados el ${U.fmtDateTime(new Date(offline).toISOString())}. Para reservar y pagar necesitás internet.</span></div>` : ""}
     <div class="shell__body${showNav ? "" : " no-nav"}">${bodyHtml}</div>
     ${showNav ? bottomNav(active, rol) : ""}
   </div></div>`;
@@ -148,6 +150,8 @@ const GOOGLE_G = `<svg class="g-logo" viewBox="0 0 48 48" width="20" height="20"
 
 export async function viewLogin(ctx) {
   const demo = D.MODE === "demo";
+  const recordada = D.cuentaGoogleRecordada();
+  const textoBoton = recordada ? `Continuar como ${recordada.nombre || recordada.email}` : "Continuar con Google";
   U.mount(`<div class="auth">
     <div class="auth__head">
       <span class="logo">${U.logoMark(52)}</span>
@@ -158,7 +162,8 @@ export async function viewLogin(ctx) {
       <div class="auth__card">
         <h2>Ingresá a tu cuenta</h2>
         <p class="sub">Usá tu cuenta de Google para reservar lugares y gestionar tus permisos de pesca. Si es tu primer ingreso, la cuenta se crea en el momento.</p>
-        <button class="btn btn--google btn--block btn--lg" id="btn-google" type="button">${GOOGLE_G}<span>Continuar con Google</span></button>
+        <button class="btn btn--google btn--block btn--lg" id="btn-google" type="button">${GOOGLE_G}<span>${U.esc(textoBoton)}</span></button>
+        ${recordada ? `<p class="auth__otra"><small class="muted">${U.esc(recordada.email)}</small> · <button type="button" class="link" id="btn-otra">Usar otra cuenta</button></p>` : ""}
         <div class="field__error hide mt-12" id="login-err"></div>
         <ul class="auth__points">
           <li>${U.icon("shield", { size: 16 })}<span>PescaCorral no recibe ni guarda tu contraseña.</span></li>
@@ -186,8 +191,13 @@ export async function viewLogin(ctx) {
       await D.signInWithGoogle();          // redirige a Google
     } catch (err) {
       showErr(errBox, err.message);
-      btn.disabled = false; label.textContent = "Continuar con Google";
+      btn.disabled = false; label.textContent = textoBoton;
     }
+  });
+  U.$("#btn-otra")?.addEventListener("click", async () => {
+    errBox.classList.add("hide");
+    try { await D.signInWithGoogle({ otraCuenta: true }); }   // al volver, queda recordada la cuenta elegida
+    catch (err) { showErr(errBox, err.message); }
   });
 }
 
