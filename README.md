@@ -75,10 +75,8 @@ PescaCorral/
 └── database/
     ├── schema.sql          # Esquema completo (tablas, funciones, vistas, RLS, pg_cron)
     ├── seed.sql            # Datos iniciales (especies, catamaranes y sus lugares)
-    ├── seed_actividad_demo.sql   # Reservas, permisos y alertas para presentar el panel
     ├── verificar_base.sql  # Chequeo de sólo lectura: compara la base con schema.sql y revisa los datos
-    ├── pruebas_seguridad.sql     # Pruebas de acceso con cada perfil (no deja datos)
-    └── migrations/         # Cambios para la base ya en uso (009_seguridad.sql, 010_avisos_personal.sql)
+    └── pruebas_seguridad.sql     # Pruebas de acceso con cada perfil (no deja datos)
 ```
 
 ---
@@ -148,7 +146,7 @@ Toda cuenta nueva de Google es *Pescador/Turista* (o *Dueño de catamarán*, si 
 
 ### Uso sin conexión
 
-En el dique la señal es irregular. Para pescadores y dueños, la aplicación guarda en el dispositivo lo último que consultaron (perfil, reservas, permisos, comprobantes, notificaciones y catamaranes). Sin internet la sesión se mantiene y esas pantallas muestran los datos guardados, con un aviso de su fecha; el permiso digital con su código QR se puede mostrar al embarcar. Reservar y pagar necesitan conexión. Al volver internet la aplicación se actualiza sola. Lo guardado se borra al cerrar sesión, y el personal no usa este modo.
+En el dique la señal es irregular. Para pescadores y dueños, la aplicación guarda en el dispositivo lo último que consultaron (perfil, reservas, permisos, comprobantes, notificaciones y catamaranes). Sin internet la sesión se mantiene y esas pantallas muestran los datos guardados, con un aviso de su fecha; el permiso digital con su código QR se puede mostrar al embarcar. Con señal débil, si la red no responde en unos segundos también se muestran los datos guardados. Reservar y pagar necesitan conexión. Al volver internet la aplicación se actualiza sola. Lo guardado se borra al cerrar sesión, y el personal no usa este modo.
 
 La sesión de Google queda abierta en el dispositivo hasta que se cierra. Si se cerró, el ingreso propone continuar con la última cuenta usada ("Continuar como …"), sin pasar por el selector de cuentas de Google; "Usar otra cuenta" lo muestra.
 
@@ -174,7 +172,12 @@ La administración (municipio y administrador del sistema) publica avisos en **A
 * **Escrituras sólo por funciones**: reservas, lugares, permisos y pagos se crean y anulan únicamente con `crear_reserva_completa` y `anular_reserva`, que validan fecha, catamarán, lugares libres, pago y permiso.
 * **Privilegios mínimos**: sin sesión no se accede a ninguna tabla, vista ni función; con sesión sólo se ejecutan las funciones que usa la aplicación.
 * **Frontend**: política de seguridad de contenido (CSP) que sólo admite código propio y conexiones a Supabase; el cliente de Supabase es una copia local con versión fija; todo dato se muestra escapado; los mensajes de error no se toman de la dirección.
+* **Sesiones del personal**: se cierran solas después de 30 minutos sin actividad, para que no queden abiertas en una computadora compartida.
 * **Pruebas**: `database/pruebas_seguridad.sql` verifica estos controles con 86 casos.
+
+## Accesibilidad
+
+Todas las pantallas se revisaron con axe-core (criterios WCAG 2.1 A y AA y buenas prácticas) sin incumplimientos: campos con etiqueta, botones y selectores con nombre accesible, diálogos con título, gráficos con una descripción de sus datos, una región principal y un título de nivel 1 por pantalla, y jerarquía de títulos ordenada.
 
 ---
 
@@ -192,10 +195,6 @@ En modo demo, **Continuar con Google** abre un selector con las cuentas del púb
 | `admin` / `Admin.2026` | Administrador del sistema | `/Admin` |
 
 Desde **Perfil → Reiniciar datos de demo** se restauran los datos iniciales.
-
-### Actividad para presentar el panel (modo Supabase)
-
-`database/seed_actividad_demo.sql` genera reservas de los últimos 30 días y de los próximos 3, con pagos, permisos, notificaciones y alertas de fauna de demostración. Requiere que la cuenta de pescador ya haya ingresado con Google: se reemplaza su correo en la variable `v_email` y se ejecuta el archivo en el SQL Editor.
 
 ### Pasarela de pago simulada
 

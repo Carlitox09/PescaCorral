@@ -143,10 +143,10 @@ export function modal({ title = "", body = "", actions = [], dismissable = true 
   ).join("");
 
   backdrop.innerHTML = `
-    <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-titulo">
       <div class="modal__head">
-        <h3>${esc(title)}</h3>
-        ${dismissable ? `<button class="topbar__btn" data-close style="color:var(--muted)">${icon("x", { size: 20 })}</button>` : ""}
+        <h2 id="modal-titulo">${esc(title)}</h2>
+        ${dismissable ? `<button class="topbar__btn" data-close aria-label="Cerrar" style="color:var(--muted)">${icon("x", { size: 20 })}</button>` : ""}
       </div>
       <div class="modal__body">${body}</div>
       ${actions.length ? `<div class="modal__foot">${actionsHtml}</div>` : ""}

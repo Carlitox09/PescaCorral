@@ -29,10 +29,10 @@ function topbar({ title, back = false, bell = true, plain = false, unread = 0 })
     ${back
       ? `<button class="topbar__btn" data-back aria-label="Volver">${U.icon("chevron-left", { size: 22 })}</button>`
       : `<span class="topbar__logo">${U.logoMark(34)}</span>`}
-    <span class="topbar__title">${U.esc(title)}</span>
+    <h1 class="topbar__title">${U.esc(title)}</h1>
     <span class="topbar__spacer"></span>
     ${bell
-      ? `<button class="topbar__btn bell" data-bell aria-label="Notificaciones">
+      ? `<button class="topbar__btn bell" data-bell aria-label="Notificaciones${unread ? `, ${unread > 9 ? "9+" : unread} sin leer` : ""}">
            ${U.icon("bell", { size: 22 })}
            ${unread ? `<span class="bell__dot">${unread > 9 ? "9+" : unread}</span>` : ""}
          </button>`
@@ -67,8 +67,8 @@ function appShell({ active = null, rol = "pescador", topbarHtml = "", bodyHtml =
   const offline = D.sinConexion();
   return `<div class="app"><div class="shell">
     ${topbarHtml}
-    ${offline ? `<div class="offline-bar" role="status">${U.icon("wifi-off", { size: 16 })}<span>Sin conexión · datos guardados el ${U.fmtDateTime(new Date(offline).toISOString())}. Para reservar y pagar necesitás internet.</span></div>` : ""}
-    <div class="shell__body${showNav ? "" : " no-nav"}">${bodyHtml}</div>
+    ${offline ? `<div class="offline-bar" role="status">${U.icon("wifi-off", { size: 16 })}<span>Sin conexión estable · datos guardados el ${U.fmtDateTime(new Date(offline).toISOString())}. Para reservar y pagar necesitás internet.</span></div>` : ""}
+    <main class="shell__body${showNav ? "" : " no-nav"}">${bodyHtml}</main>
     ${showNav ? bottomNav(active, rol) : ""}
   </div></div>`;
 }
@@ -152,7 +152,7 @@ export async function viewLogin(ctx) {
   const demo = D.MODE === "demo";
   const recordada = D.cuentaGoogleRecordada();
   const textoBoton = recordada ? `Continuar como ${recordada.nombre || recordada.email}` : "Continuar con Google";
-  U.mount(`<div class="auth">
+  U.mount(`<main class="auth">
     <div class="auth__head">
       <span class="logo">${U.logoMark(52)}</span>
       <h1>PescaCorral</h1>
@@ -175,7 +175,7 @@ export async function viewLogin(ctx) {
       </div>` : ""}
     </div>
     <div class="auth__foot">${U.esc(CFG.MUNICIPIO || "Municipio de Coronel Moldes")}</div>
-  </div>`);
+  </main>`);
 
   const errBox = U.$("#login-err");
   const previo = U.aviso();
@@ -211,7 +211,7 @@ export async function viewAcceso(ctx) {
   const sub = tipo === "admin"
     ? "Ingreso del administrador del sistema."
     : `Ingreso del personal del ${U.esc(CFG.MUNICIPIO || "Municipio de Coronel Moldes")}.`;
-  U.mount(`<div class="auth">
+  U.mount(`<main class="auth">
     <div class="auth__head">
       <span class="logo">${U.logoMark(52)}</span>
       <h1>PescaCorral</h1>
@@ -239,7 +239,7 @@ export async function viewAcceso(ctx) {
       </div>` : ""}
     </div>
     <div class="auth__foot"><a href="#/login" data-publico>¿Sos pescador, turista o dueño de catamarán? Ingresá con Google</a></div>
-  </div>`);
+  </main>`);
 
   const errBox = U.$("#acc-err");
   const previo = U.aviso();
@@ -323,7 +323,7 @@ export async function viewRegistro(ctx) {
   const p = ctx.session.profile || {};
   const admin = isAdmin(p.rol);
   const avatar = ctx.session.user.avatar;
-  U.mount(`<div class="auth">
+  U.mount(`<main class="auth">
     <div class="auth__head" style="clip-path:polygon(0 0,100% 0,100% 86%,0 100%);padding-bottom:54px">
       <span class="logo">${avatar
         ? `<img class="auth__avatar" src="${U.esc(avatar)}" alt="" referrerpolicy="no-referrer"/>`
@@ -363,7 +363,7 @@ export async function viewRegistro(ctx) {
       </div>
     </div>
     <div class="auth__foot">* Campos obligatorios</div>
-  </div>`);
+  </main>`);
 
   const dni = U.$("#r-dni");
   dni.addEventListener("blur", () => { if (soloDigitos(dni.value)) dni.value = formatoDNI(dni.value); });
@@ -483,8 +483,8 @@ export async function viewCatamaranes(ctx) {
     topbarHtml: topbar({ title: "Catamaranes", bell: true, unread }),
     bodyHtml: `
       <div class="filters">
-        <input class="input" type="date" id="f-fecha" value="${fecha}" min="${U.todayISO()}" />
-        <select class="select turno" id="f-turno">
+        <input class="input" type="date" id="f-fecha" aria-label="Fecha de la salida" value="${fecha}" min="${U.todayISO()}" />
+        <select class="select turno" id="f-turno" aria-label="Turno">
           <option value="manana"${turno === "manana" ? " selected" : ""}>Mañana</option>
           <option value="tarde"${turno === "tarde" ? " selected" : ""}>Tarde</option>
         </select>
@@ -516,7 +516,7 @@ function boatCard(c, fecha, turno) {
   return `<div class="boat" style="margin-bottom:12px">
     <div class="boat__img">${U.icon("boat", { size: 46, stroke: 1.6 })}</div>
     <div class="boat__main">
-      <h3>${U.esc(c.nombre)}</h3>
+      <h2>${U.esc(c.nombre)}</h2>
       <div class="boat__meta">${U.icon("users", { size: 13 })} ${c.capacidad} lugares ${c.habilitacion ? "· Hab. " + U.esc(c.habilitacion) : ""}</div>
       <div class="boat__price">${U.fmtMoney(c.precio)} <small>/ lugar</small></div>
       ${mantenimiento ? "" : dispo}
@@ -570,7 +570,7 @@ export async function viewReserva(ctx) {
       <div class="card">
         <div class="reserva-head">
           <div>
-            <h3>${U.esc(cat.nombre)}</h3>
+            <h2>${U.esc(cat.nombre)}</h2>
             <div class="muted" style="font-weight:600;margin-top:2px">${U.fmtMoney(cat.precio)} / lugar · ${cat.capacidad} lugares</div>
           </div>
           <div class="boat__img" style="width:54px;height:54px">${U.icon("boat", { size: 30, stroke: 1.6 })}</div>
@@ -1115,7 +1115,7 @@ export async function viewHistorial(ctx) {
     return `<div class="row-item row-item--wrap">
       <div class="row-item__ic">${U.icon("boat", { size: 20 })}</div>
       <div class="row-item__main">
-        <h4>${U.esc(r.catamaran_nombre)}</h4>
+        <h2>${U.esc(r.catamaran_nombre)}</h2>
         ${r.numero ? `<small>${U.esc(r.numero)}</small>` : ""}
         <small>${U.fmtDate(r.fecha)} · ${U.turnoLabel(r.turno)} · ${r.cantidad_lugares} lugar${r.cantidad_lugares > 1 ? "es" : ""} · ${U.fmtMoney(r.monto_total)}</small>
       </div>
@@ -1133,7 +1133,7 @@ export async function viewHistorial(ctx) {
     const b = U.estadoPermisoBadge(per.estado);
     return `<a class="permit-mini" href="#/permiso/${per.id}" style="margin-bottom:10px">
       <div class="permit-mini__badge ${cls}">${U.icon("ticket", { size: 22 })}</div>
-      <div class="grow"><h4>${U.esc(per.numero)}</h4><small>${U.esc(per.especie_nombre)} · ${per.fecha ? U.fmtDate(per.fecha) : "—"}</small></div>
+      <div class="grow"><h2>${U.esc(per.numero)}</h2><small>${U.esc(per.especie_nombre)} · ${per.fecha ? U.fmtDate(per.fecha) : "—"}</small></div>
       <span class="badge ${b.cls}">${b.label}</span>
     </a>`;
   }).join("") : emptyState("Sin permisos todavía", "Tus permisos digitales aparecerán acá.", "ticket");
@@ -1188,11 +1188,11 @@ export async function viewPerfil(ctx) {
       <div class="card card--flat">
         <form id="f-perfil">
           <div class="flex gap-12">
-            <div class="field grow"><label>Nombre</label><input class="input" id="pf-nombre" value="${U.esc(p.nombre)}"/></div>
-            <div class="field grow"><label>Apellido</label><input class="input" id="pf-apellido" value="${U.esc(p.apellido || "")}"/></div>
+            <div class="field grow"><label for="pf-nombre">Nombre</label><input class="input" id="pf-nombre" value="${U.esc(p.nombre)}"/></div>
+            <div class="field grow"><label for="pf-apellido">Apellido</label><input class="input" id="pf-apellido" value="${U.esc(p.apellido || "")}"/></div>
           </div>
-          <div class="field"><label>Teléfono</label><input class="input" id="pf-tel" value="${U.esc(p.telefono || "")}"/></div>
-          <div class="field"><label>DNI</label><input class="input" id="pf-dni" value="${U.esc(p.dni || "")}"/></div>
+          <div class="field"><label for="pf-tel">Teléfono</label><input class="input" id="pf-tel" value="${U.esc(p.telefono || "")}"/></div>
+          <div class="field"><label for="pf-dni">DNI</label><input class="input" id="pf-dni" value="${U.esc(p.dni || "")}"/></div>
           <button class="btn btn--primary btn--block" type="submit">${U.icon("check", { size: 18 })} Guardar cambios</button>
         </form>
       </div>
@@ -1264,7 +1264,7 @@ async function openNotificaciones(ctx) {
   const body = notifs.length ? `<div class="notif-list">${notifs.map((n) => `
     <div class="notif ${n.leida ? "" : "unread"}">
       ${n.tipo === "aviso" ? `<span class="notif__tag">${U.icon("megaphone", { size: 14 })} Aviso del ${U.esc(CFG.MUNICIPIO || "municipio")}</span>` : ""}
-      <h4>${U.esc(n.titulo)}</h4>
+      <h3>${U.esc(n.titulo)}</h3>
       <p>${U.esc(n.mensaje)}</p>
       <small>${U.fmtRelative(n.created_at)}</small>
     </div>`).join("")}</div>`
@@ -1333,17 +1333,17 @@ export async function viewAdmin(ctx) {
       </div>
       <div class="grid-2">
         <div class="panel">
-          <h3>Reservas por día · ${U.fmtDate(from)} a ${U.fmtDate(to)}</h3>
+          <h2>Reservas por día · ${U.fmtDate(from)} a ${U.fmtDate(to)}</h2>
           ${barChart(serie, { height: 230, color: "#8E1F2F" })}
         </div>
         <div class="panel">
-          <h3>Permisos por especie</h3>
+          <h2>Permisos por especie</h2>
           ${donutChart(especieData, { centerTop: String(resumen.permisos_total), centerSub: "permisos" })}
         </div>
       </div>
       <div class="grid-2">
         <div class="panel">
-          <h3>Ocupación por catamarán · ${U.fmtDate(to)} (mañana y tarde)</h3>
+          <h2>Ocupación por catamarán · ${U.fmtDate(to)} (mañana y tarde)</h2>
           <table class="table">
             <thead><tr><th>Catamarán</th><th>Ocupación</th><th style="text-align:right">Lugares</th></tr></thead>
             <tbody>${ocupacion.map((o) => {
@@ -1354,7 +1354,7 @@ export async function viewAdmin(ctx) {
           </table>
         </div>
         <div class="panel">
-          <h3>Últimos permisos emitidos</h3>
+          <h2>Últimos permisos emitidos</h2>
           <table class="table">
             <thead><tr><th>N°</th><th>Especie</th><th>Estado</th></tr></thead>
             <tbody>${ultimos.map((u) => {
@@ -1419,16 +1419,16 @@ export async function viewReportes(ctx) {
       </div>
       <div class="grid-2">
         <div class="panel">
-          <h3>Evolución mensual de reservas</h3>
+          <h2>Evolución mensual de reservas</h2>
           ${barChart(mesData, { height: 230, color: "#C9821E" })}
         </div>
         <div class="panel">
-          <h3>Distribución de permisos por especie</h3>
+          <h2>Distribución de permisos por especie</h2>
           ${donutChart(especieData, { centerTop: String(resumen.permisos_total), centerSub: "permisos" })}
         </div>
       </div>
       <div class="panel">
-        <h3>${U.icon("alert-triangle", { size: 18 })} Monitoreo de fauna · presión pesquera</h3>
+        <h2>${U.icon("alert-triangle", { size: 18 })} Monitoreo de fauna · presión pesquera</h2>
         ${alertas.length ? alertas.map((a) => {
           const pct = a.umbral ? Math.round((a.permisos_emitidos / a.umbral) * 100) : 0;
           return `<div style="margin-bottom:16px">
@@ -1442,7 +1442,7 @@ export async function viewReportes(ctx) {
         <p class="panel__foot">La alerta se genera automáticamente cuando los permisos del mes de una especie alcanzan el 80 % del umbral, que se configura según los estudios de la dirección de fauna.</p>
       </div>
       <div class="panel">
-        <h3>${U.icon("mail", { size: 18 })} Reportes enviados al municipio</h3>
+        <h2>${U.icon("mail", { size: 18 })} Reportes enviados al municipio</h2>
         <table class="table">
           <thead><tr><th>Fecha</th><th>Reporte</th><th>Destinatario</th><th>Origen</th></tr></thead>
           <tbody>${enviados.map((r) => `<tr>
@@ -1501,12 +1501,12 @@ export async function viewUsuarios(ctx) {
           <td><small class="muted">${U.esc(u.email)}<br>${U.esc(u.telefono || "—")}</small></td>
           <td>${U.esc(u.dni || "—")}</td>
           <td>
-            <select class="select" data-rol="${u.id}" style="padding:8px 10px;font-size:.85rem">
+            <select class="select" data-rol="${u.id}" aria-label="Tipo de cuenta de ${U.esc(u.nombre)}" style="padding:8px 10px;font-size:.85rem">
               ${roles.map((r) => `<option value="${r}"${u.rol === r ? " selected" : ""}>${U.rolLabel(r)}</option>`).join("")}
             </select>
           </td>
           <td>
-            <select class="select" data-activo="${u.id}" style="padding:8px 10px;font-size:.85rem">
+            <select class="select" data-activo="${u.id}" aria-label="Estado de la cuenta de ${U.esc(u.nombre)}" style="padding:8px 10px;font-size:.85rem">
               <option value="1"${u.activo !== false ? " selected" : ""}>Activa</option>
               <option value="0"${u.activo === false ? " selected" : ""}>Desactivada</option>
             </select>
@@ -1546,7 +1546,7 @@ export async function viewAvisos(ctx) {
     title: "Avisos",
     subtitle: "Mensajes de la administración para los usuarios",
     body: `<div class="panel">
-        <h3>${U.icon("megaphone", { size: 18 })} Nuevo aviso</h3>
+        <h2>${U.icon("megaphone", { size: 18 })} Nuevo aviso</h2>
         <form id="av-form" novalidate>
           <div class="field"><label for="av-destino">Destinatarios</label>
             <select class="select" id="av-destino">
@@ -1568,7 +1568,7 @@ export async function viewAvisos(ctx) {
         </form>
       </div>
       <div class="panel">
-        <h3>Avisos publicados</h3>
+        <h2>Avisos publicados</h2>
         <table class="table">
           <thead><tr><th>Fecha</th><th>Aviso</th><th>Destinatarios</th><th>Publicado por</th></tr></thead>
           <tbody>${avisos.map((a) => `<tr>
@@ -1621,14 +1621,14 @@ export async function viewPersonal(ctx) {
     actions: `<button class="btn btn--cta btn--sm" data-nueva>${U.icon("plus", { size: 16 })} Nueva cuenta</button>`,
     body: `<div class="panel">
       <table class="table">
-        <thead><tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Ingresa por</th><th>Cuenta</th><th></th></tr></thead>
+        <thead><tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Ingresa por</th><th>Cuenta</th><th><span class="sr-only">Acciones</span></th></tr></thead>
         <tbody>${personal.map((u) => `<tr>
           <td><b>${U.esc(D.usuarioPersonal(u.email))}</b></td>
           <td>${U.esc(`${u.nombre} ${u.apellido || ""}`.trim())}</td>
           <td>${U.esc(U.rolLabel(u.rol))}</td>
           <td><small class="muted">${u.rol === "admin_sistema" ? "/Admin" : "/Municipio"}</small></td>
           <td>${u.id === yo ? "Activa (tu cuenta)" : `
-            <select class="select" data-activo="${u.id}" style="padding:8px 10px;font-size:.85rem">
+            <select class="select" data-activo="${u.id}" aria-label="Estado de la cuenta de ${U.esc(u.nombre)}" style="padding:8px 10px;font-size:.85rem">
               <option value="1"${u.activo !== false ? " selected" : ""}>Activa</option>
               <option value="0"${u.activo === false ? " selected" : ""}>Desactivada</option>
             </select>`}</td>
@@ -1748,7 +1748,7 @@ export async function viewGestion(ctx) {
     <div class="boat" style="margin-bottom:12px">
       <div class="boat__img">${U.icon("boat", { size: 46, stroke: 1.6 })}</div>
       <div class="boat__main">
-        <h3>${U.esc(c.nombre)}</h3>
+        <h2>${U.esc(c.nombre)}</h2>
         <div class="boat__meta">${U.icon("users", { size: 13 })} ${c.capacidad} lugares · ${U.fmtMoney(c.precio)}/lugar</div>
         <span class="badge ${c.estado === "activa" ? "badge--ok" : c.estado === "mantenimiento" ? "badge--warn" : "badge--muted"}" style="margin-top:6px">${estadoCatLabel(c.estado)}</span>
       </div>
@@ -1784,14 +1784,14 @@ function catamaranModal(ctx, cat) {
   U.modal({
     title: edit ? "Editar catamarán" : "Nuevo catamarán",
     body: `
-      <div class="field"><label>Nombre</label><input class="input" id="c-nombre" value="${U.esc(cat?.nombre || "")}" placeholder="Don Juan II"/></div>
-      <div class="field"><label>Descripción</label><input class="input" id="c-desc" value="${U.esc(cat?.descripcion || "")}" placeholder="Catamarán techado…"/></div>
+      <div class="field"><label for="c-nombre">Nombre</label><input class="input" id="c-nombre" value="${U.esc(cat?.nombre || "")}" placeholder="Don Juan II"/></div>
+      <div class="field"><label for="c-desc">Descripción</label><input class="input" id="c-desc" value="${U.esc(cat?.descripcion || "")}" placeholder="Catamarán techado…"/></div>
       <div class="flex gap-12">
-        <div class="field grow"><label>Capacidad</label><input class="input" id="c-cap" type="number" min="1" value="${cat?.capacidad || 12}" ${edit ? "disabled" : ""}/></div>
-        <div class="field grow"><label>Precio / lugar</label><input class="input" id="c-precio" type="number" min="0" value="${cat?.precio || 8000}"/></div>
+        <div class="field grow"><label for="c-cap">Capacidad</label><input class="input" id="c-cap" type="number" min="1" value="${cat?.capacidad || 12}" ${edit ? "disabled" : ""}/></div>
+        <div class="field grow"><label for="c-precio">Precio / lugar</label><input class="input" id="c-precio" type="number" min="0" value="${cat?.precio || 8000}"/></div>
       </div>
-      <div class="field"><label>N° de habilitación</label><input class="input" id="c-hab" value="${U.esc(cat?.habilitacion || "")}" placeholder="HAB-2024-000"/></div>
-      <div class="field"><label>Estado</label>
+      <div class="field"><label for="c-hab">N° de habilitación</label><input class="input" id="c-hab" value="${U.esc(cat?.habilitacion || "")}" placeholder="HAB-2024-000"/></div>
+      <div class="field"><label for="c-estado">Estado</label>
         <select class="select" id="c-estado">
           ${["activa", "mantenimiento", "inactiva"].map((e) => `<option value="${e}"${cat?.estado === e ? " selected" : ""}>${estadoCatLabel(e)}</option>`).join("")}
         </select>

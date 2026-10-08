@@ -5,8 +5,8 @@
 --  Carga catamaranes, asientos (lugar) y especies. Las alertas de fauna no se
 --  cargan: las genera el disparador actualizar_alerta_fauna con los permisos reales.
 --  No carga usuarios: las cuentas se crean desde la app (Supabase Auth) o
---  desde Authentication -> Users en el panel de Supabase. Para generar
---  reservas y permisos de demostración, ver seed_actividad_demo.sql.
+--  desde Authentication -> Users en el panel de Supabase. Las reservas y
+--  los permisos los generan los usuarios desde la aplicación.
 -- ============================================================================
 
 -- Limpieza de datos de ejemplo previos (no borra usuarios reales).

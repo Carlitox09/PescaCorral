@@ -253,7 +253,7 @@ a { color: inherit; text-decoration: none; }
 }
 .boat__img svg { width: 40px; height: 40px; opacity: .92; }
 .boat__main { flex: 1; min-width: 0; }
-.boat__main h3 { font-size: 1.04rem; font-weight: 800; }
+.boat__main h2, .boat__main h3 { font-size: 1.04rem; font-weight: 800; }
 .boat__meta { color: var(--muted); font-size: .82rem; font-weight: 600; margin-top: 2px; }
 .boat__price { font-size: 1.2rem; font-weight: 800; margin-top: 6px; letter-spacing: -.3px; color: var(--granate-700); }
 .boat__price small { font-size: .72rem; color: var(--muted); font-weight: 700; }
@@ -271,7 +271,7 @@ a { color: inherit; text-decoration: none; }
 .dot { width: 8px; height: 8px; border-radius: 999px; background: currentColor; }
 
 /* Íconos dentro de una línea de texto: en línea con el texto, no en bloque */
-.muted > svg, .boat__meta > svg, .kpi__delta > svg, .field__hint > svg, .panel__foot > svg, .panel h3 > svg {
+.muted > svg, .boat__meta > svg, .kpi__delta > svg, .field__hint > svg, .panel__foot > svg, .panel h2 > svg, .panel h3 > svg {
   display: inline-block; vertical-align: -2px; margin-right: 4px;
 }
 
@@ -359,7 +359,7 @@ textarea.input { min-height: 110px; resize: vertical; line-height: 1.45; }
  *  RESERVA DE LUGARES (plano del catamarán, permiso y medio de pago)
  * ========================================================================== */
 .reserva-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.reserva-head h3 { font-size: 1.1rem; font-weight: 800; }
+.reserva-head h2, .reserva-head h3 { font-size: 1.1rem; font-weight: 800; }
 .field-label { display: block; font-size: .82rem; font-weight: 700; color: var(--text-2); margin-bottom: 6px; }
 .paso {
   display: inline-grid; place-items: center; width: 26px; height: 26px; margin-right: 9px; border-radius: 50%;
@@ -570,7 +570,7 @@ button.chip:hover { border-color: var(--granate-500); color: var(--granate-700);
 .permit-mini__badge { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; flex: none; background: var(--verde-100); color: var(--verde-700); }
 .permit-mini__badge.is-vencido { background: var(--surface-2); color: var(--muted); }
 .permit-mini__badge.is-anulado { background: var(--rojo-100); color: var(--rojo-700); }
-.permit-mini h4 { font-size: .96rem; font-weight: 800; }
+.permit-mini h2, .permit-mini h4 { font-size: .96rem; font-weight: 800; }
 .permit-mini small { color: var(--muted); font-weight: 600; }
 
 /* ============================================================================
@@ -588,7 +588,7 @@ button.chip:hover { border-color: var(--granate-500); color: var(--granate-700);
 .row-item + .row-item { margin-top: 10px; }
 .row-item__ic { width: 42px; height: 42px; border-radius: 11px; display: grid; place-items: center; flex: none; background: var(--agua-100); color: var(--agua-700); }
 .row-item__main { flex: 1; min-width: 0; }
-.row-item__main h4 { font-size: .96rem; font-weight: 800; }
+.row-item__main h2, .row-item__main h4 { font-size: .96rem; font-weight: 800; }
 .row-item__main small { color: var(--muted); font-weight: 600; display: block; }
 .row-item--wrap { flex-wrap: wrap; }
 .row-item--wrap > .badge { align-self: flex-start; }
@@ -646,7 +646,9 @@ button.chip:hover { border-color: var(--granate-500); color: var(--granate-700);
 
 .grid-2 { display: grid; grid-template-columns: 1.6fr 1fr; gap: 16px; margin-bottom: 18px; align-items: start; }
 .panel { background: #fff; border: 1px solid var(--border); border-radius: var(--r); padding: 20px; box-shadow: var(--shadow-sm); }
-.panel h3 { font-size: 1.05rem; font-weight: 800; margin-bottom: 16px; }
+.panel h2, .panel h3 { font-size: 1.05rem; font-weight: 800; margin-bottom: 16px; }
+/* Texto sólo para lectores de pantalla */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .panel__foot { color: var(--muted); font-size: .82rem; margin-top: 12px; text-align: center; }
 
 /* Tabla */
@@ -689,7 +691,7 @@ button.chip:hover { border-color: var(--granate-500); color: var(--granate-700);
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 .modal { background: #fff; border-radius: 20px; box-shadow: var(--shadow-lg); width: min(440px, 100%); max-height: 88dvh; overflow: auto; border-top: 4px solid var(--granate-600); }
 .modal__head { padding: 18px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
-.modal__head h3 { font-weight: 800; font-size: 1.1rem; }
+.modal__head h2, .modal__head h3 { font-weight: 800; font-size: 1.1rem; }
 .modal__body { padding: 18px 20px; }
 .modal__foot { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: flex-end; }
 
@@ -697,7 +699,7 @@ button.chip:hover { border-color: var(--granate-500); color: var(--granate-700);
 .notif-list { display: grid; gap: 8px; }
 .notif { padding: 12px 14px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); }
 .notif.unread { background: var(--granate-50); border-color: var(--granate-100); box-shadow: inset 3px 0 0 var(--granate-600); }
-.notif h4 { font-size: .92rem; font-weight: 800; }
+.notif h3, .notif h4 { font-size: .92rem; font-weight: 800; }
 .notif p { font-size: .84rem; color: var(--text-2); margin-top: 2px; }
 .notif small { color: var(--muted); font-size: .74rem; }
 .notif__tag { display: inline-flex; align-items: center; gap: 5px; margin-bottom: 4px; font-size: .72rem; font-weight: 800; letter-spacing: .2px; color: var(--granate-700); }

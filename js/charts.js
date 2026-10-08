@@ -50,7 +50,8 @@ export function barChart(data = [], opts = {}) {
       </g>`;
   }).join("");
 
-  return `<svg class="chart" viewBox="0 0 ${W} ${height}" preserveAspectRatio="xMidYMid meet" role="img">
+  const resumen = data.map((d) => `${d.label}: ${d.value}`).join("; ");
+  return `<svg class="chart" viewBox="0 0 ${W} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(resumen)}">
     ${gridLines}${bars}
   </svg>`;
 }
@@ -101,7 +102,7 @@ export function donutChart(data = [], opts = {}) {
   }).join("");
 
   return `<div class="flex gap-12 items-center" style="flex-wrap:wrap;justify-content:center">
-    <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img">
+    <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="${esc(data.map((d) => `${d.label}: ${d.value}`).join("; "))}">
       <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#F1E9E0" stroke-width="${thickness}"/>
       ${arcs}${center}
     </svg>
@@ -111,7 +112,7 @@ export function donutChart(data = [], opts = {}) {
 
 /* ------------------------------ Auxiliares ------------------------------- */
 function emptyChart(height) {
-  return `<svg class="chart" viewBox="0 0 280 ${height}" role="img">
+  return `<svg class="chart" viewBox="0 0 280 ${height}" role="img" aria-label="Sin datos">
     <text x="140" y="${height / 2}" text-anchor="middle" fill="#A8978F" font-size="13" font-weight="600">Sin datos en el período</text>
   </svg>`;
 }

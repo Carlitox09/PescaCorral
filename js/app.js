@@ -153,6 +153,27 @@ D.onAuthChange((event) => {
 // para retomar la sesión real, que se renueva sola.
 window.addEventListener("online", () => (D.usandoClienteSinConexion() ? location.reload() : render()));
 
+// Personal (usuario y contraseña): la sesión se cierra tras 30 minutos sin
+// actividad, para que no quede abierta en una computadora compartida del
+// municipio. La última actividad se comparte entre pestañas (localStorage).
+const INACTIVIDAD_MS = 30 * 60 * 1000, ACTIVIDAD_KEY = "pescacorral.actividad";
+const registrarActividad = () => { try { localStorage.setItem(ACTIVIDAD_KEY, String(Date.now())); } catch {} };
+["pointerdown", "keydown"].forEach((ev) => window.addEventListener(ev, registrarActividad, { passive: true }));
+async function controlarInactividad() {
+  let ultima = 0;
+  try { ultima = Number(localStorage.getItem(ACTIVIDAD_KEY)) || 0; } catch {}
+  if (!ultima) { registrarActividad(); return; }
+  if (Date.now() - ultima < INACTIVIDAD_MS) return;
+  const s = await D.getSession().catch(() => null);
+  if (s?.user?.metodo === "clave") {
+    await D.signOut();
+    aLogin("Por seguridad, la sesión se cerró después de 30 minutos sin actividad.");
+  }
+  registrarActividad();
+}
+setInterval(controlarInactividad, 60 * 1000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") controlarInactividad(); });
+
 // Primer render.
 if (!location.hash) location.hash = "#/home";
 render();

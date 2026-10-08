@@ -61,6 +61,10 @@ const authListeners = new Set();
  *  usa este modo (sus paneles muestran datos de todas las personas).
  * ========================================================================== */
 const MAX_RESPUESTAS = 80;
+// Con señal débil y una copia guardada: espera máxima de la red; después de un
+// corte por demora, las lecturas siguientes esperan menos durante un minuto.
+const ESPERA_MAX_MS = 6000, ESPERA_LENTA_MS = 2500;
+let redLentaHasta = 0;
 let sinConexionDesde = null;
 /** Fecha (ms) de los datos guardados que se están mostrando sin conexión, o null. */
 export const sinConexion = () => sinConexionDesde;
@@ -89,7 +93,17 @@ async function fetchConCache(input, init = {}) {
   const lectura = api && metodo === "GET";
   const off = lectura ? leerOffline() : null;
   try {
-    const r = await fetch(input, init);
+    let r;
+    if (off?.datos?.[url] && !init.signal) {
+      // Con una copia guardada no se deja la pantalla esperando: si la red no
+      // responde a tiempo, se corta y se muestra la copia (catch).
+      const ctrl = new AbortController();
+      const espera = Date.now() < redLentaHasta ? ESPERA_LENTA_MS : ESPERA_MAX_MS;
+      const timer = setTimeout(() => { redLentaHasta = Date.now() + 60000; ctrl.abort(); }, espera);
+      try { r = await fetch(input, { ...init, signal: ctrl.signal }); } finally { clearTimeout(timer); }
+    } else {
+      r = await fetch(input, init);
+    }
     if (lectura && r.ok && off?.uid && usuarioDelToken(init.headers) === off.uid) {
       const body = await r.clone().text();
       const actual = leerOffline();          // se relee: otras lecturas en paralelo también guardan
@@ -135,7 +149,6 @@ export function cuentaGoogleRecordada() {
   if (MODE !== "supabase") return null;
   try { return JSON.parse(localStorage.getItem(CUENTA_GOOGLE_KEY) || "null"); } catch { return null; }
 }
-export function olvidarCuentaGoogle() { try { localStorage.removeItem(CUENTA_GOOGLE_KEY); } catch { /* sin almacenamiento */ } }
 
 /* ============================================================================
  *  INICIALIZACIÓN

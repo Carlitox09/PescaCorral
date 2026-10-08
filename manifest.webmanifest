@@ -4,6 +4,7 @@
   "description": "Gestión digital de reservas de pesca deportiva y permisos municipales en el Dique Cabra Corral.",
   "lang": "es-AR",
   "dir": "ltr",
+  "id": "./",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
