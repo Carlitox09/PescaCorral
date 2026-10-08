@@ -997,7 +997,7 @@ export async function viewComprobante(ctx) {
   U.$("[data-print]").addEventListener("click", () => window.print());
   U.$("[data-share]").addEventListener("click", () => U.compartir({
     titulo: `Reserva ${c.numero}`, texto: textoComprobante(c),
-    imagen: () => imagenComprobante(c), archivo: `reserva-${c.numero}.png`,
+    imagen: imagenComprobante(c), archivo: `reserva-${c.numero}.png`,
   }));
 }
 
@@ -1075,7 +1075,7 @@ export async function viewPermiso(ctx) {
   U.$("[data-print]")?.addEventListener("click", () => window.print());
   U.$("[data-share]")?.addEventListener("click", () => U.compartir({
     titulo: `Permiso ${permiso.numero}`, texto: textoPermiso(permiso),
-    imagen: () => imagenPermiso(permiso), archivo: `permiso-${permiso.numero}.png`,
+    imagen: imagenPermiso(permiso), archivo: `permiso-${permiso.numero}.png`,
   }));
 }
 function permitRow(label, value) {

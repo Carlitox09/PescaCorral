@@ -9,7 +9,7 @@
  *   - Recursos externos (librería de Supabase): stale-while-revalidate.
  *   - Llamadas a Supabase (/auth, /rest, /realtime): siempre a la red (no se cachean).
  * ========================================================================== */
-const VERSION = "pescacorral-v1.7.3";
+const VERSION = "pescacorral-v1.7.4";
 const APP_SHELL = [
   "./",
   "./index.html",

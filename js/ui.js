@@ -281,7 +281,8 @@ function qrModulos(texto) {
 const recortar = (t, max) => { t = String(t ?? ""); return t.length > max ? t.slice(0, max - 1) + "…" : t; };
 
 /**
- * Genera la imagen de una tarjeta. Devuelve una promesa con un Blob PNG.
+ * Genera la imagen de una tarjeta. Devuelve { vista, png }: vista es la imagen
+ * en SVG (para mostrarla al instante) y png() la convierte en un Blob PNG.
  *  banda: { texto, color }  · qr: texto a codificar (opcional)
  *  titulo: número destacado · destacado: { label, valor } (opcional, p. ej. el total)
  *  filas: [[etiqueta, valor], ...] · pie: texto final
@@ -328,18 +329,19 @@ export function tarjetaImagen({ banda, qr = null, titulo = "", destacado = null,
     <text x="${W / 2}" y="201" text-anchor="middle" font-size="23" font-weight="800" fill="#fff" letter-spacing="2">${esc(banda.texto)}</text>
     ${cuerpo}
   </svg>`;
-  return new Promise((resolve, reject) => {
+  const vista = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  const png = () => new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
       const k = 2, c = document.createElement("canvas");
       c.width = W * k; c.height = H * k;
-      const ctx = c.getContext("2d");
-      ctx.drawImage(img, 0, 0, c.width, c.height);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
       c.toBlob((b) => (b ? resolve(b) : reject(new Error("No se pudo generar la imagen."))), "image/png");
     };
     img.onerror = () => reject(new Error("No se pudo generar la imagen."));
-    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+    img.src = vista;
   });
+  return { vista, png };
 }
 
 /* ------------------------------ Compartir -------------------------------- */
@@ -347,12 +349,12 @@ export function tarjetaImagen({ banda, qr = null, titulo = "", destacado = null,
  * Hoja para compartir, como en las redes sociales: WhatsApp, Telegram, correo,
  * copiar el texto, guardar la imagen y "Más opciones" (la hoja del sistema,
  * que envía la imagen a cualquier aplicación instalada).
- *  titulo, texto: lo que se comparte · imagen: () => Promise<Blob> · archivo: nombre del PNG
+ *  titulo, texto: lo que se comparte · imagen: { vista, png } de tarjetaImagen · archivo: nombre del PNG
  */
 export function compartir({ titulo, texto, imagen = null, archivo = "pescacorral.png" }) {
   const url = location.origin + location.pathname.replace(/index\.html$/, "");
   const conSistema = typeof navigator.share === "function";
-  let blob = null, objUrl = null;
+  let blob = null;
   const opciones = [
     ["wa", "message", "WhatsApp", "share-op--wa"],
     ["tg", "send", "Telegram", "share-op--tg"],
@@ -364,19 +366,15 @@ export function compartir({ titulo, texto, imagen = null, archivo = "pescacorral
   const m = modal({
     title: titulo,
     body: `
-      ${imagen ? `<div class="share-preview" id="share-prev"><div class="skeleton" style="width:150px;height:200px"></div></div>` : ""}
+      ${imagen ? `<div class="share-preview"><img src="${imagen.vista}" alt="Vista previa de la imagen a compartir"/></div>` : ""}
       <div class="share-grid">
         ${opciones.map(([k, ic, label, cls]) => `<button class="share-op ${cls}" type="button" data-share-op="${k}">
           <span class="share-op__ic">${icon(ic, { size: 22 })}</span><span>${esc(label)}</span></button>`).join("")}
       </div>
       <p class="field__hint center mt-12">WhatsApp, Telegram y correo envían el texto; con "Más opciones" o "Guardar imagen" se comparte la imagen con el código QR.</p>`,
   });
-  const listo = imagen ? imagen().then((b) => {
-    blob = b; objUrl = URL.createObjectURL(b);
-    const prev = $("#share-prev", m.root);
-    if (prev) prev.innerHTML = `<img src="${objUrl}" alt="Vista previa de la imagen a compartir"/>`;
-    return b;
-  }).catch(() => { const prev = $("#share-prev", m.root); if (prev) prev.remove(); return null; }) : Promise.resolve(null);
+  // El PNG se prepara enseguida, para tenerlo listo al tocar "Más opciones".
+  const listo = imagen ? imagen.png().then((b) => (blob = b)).catch(() => null) : Promise.resolve(null);
 
   const abrir = (href) => window.open(href, "_blank", "noopener");
   $$("[data-share-op]", m.root).forEach((b) => b.addEventListener("click", async () => {
@@ -405,9 +403,6 @@ export function compartir({ titulo, texto, imagen = null, archivo = "pescacorral
       catch (e) { if (e?.name !== "AbortError") toast("No se pudo abrir el menú para compartir", "err"); }
     }
   }));
-  const quitar = () => { if (objUrl) URL.revokeObjectURL(objUrl); };
-  const obs = new MutationObserver(() => { if (!document.body.contains(m.root)) { quitar(); obs.disconnect(); } });
-  obs.observe(document.body, { childList: true });
 }
 
 /* ---------------------------- Varios ------------------------------------- */
