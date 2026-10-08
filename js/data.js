@@ -263,7 +263,7 @@ export async function getSession() {
     const user = data.session.user;
     const meta = user.user_metadata || {};
     const profile = await fetchProfileSupabase(user.id);
-    const metodo = user.app_metadata?.provider === "email" ? "clave" : "google";
+    const metodo = metodoDeIngreso(data.session);
     return {
       user: { id: user.id, email: user.email, avatar: meta.avatar_url || meta.picture || null, metodo },
       profile,
@@ -271,6 +271,19 @@ export async function getSession() {
   }
   const u = demoSessionUser();
   return u ? { user: { id: u.id, email: u.email, avatar: null, metodo: DB.session.metodo || "google" }, profile: u } : null;
+}
+
+/* Cómo inició esta sesión: "clave" (usuario y contraseña) o "google". Se lee del
+ * token (amr), porque app_metadata.provider guarda el primer proveedor de la
+ * cuenta y no el usado en este ingreso. */
+function metodoDeIngreso(session) {
+  try {
+    const b64 = session.access_token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const m = (JSON.parse(atob(b64)).amr || [])[0]?.method;
+    if (m === "password") return "clave";
+    if (m === "oauth") return "google";
+  } catch { /* token ilegible: se usa el proveedor de la cuenta */ }
+  return session.user.app_metadata?.provider === "email" ? "clave" : "google";
 }
 
 async function fetchProfileSupabase(id) {

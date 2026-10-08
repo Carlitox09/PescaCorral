@@ -109,10 +109,12 @@ hallazgos(tipo, objeto, detalle) as (
         where not exists (select 1 from public.usuario p where p.id = u.id)
     union all select 'Cuenta pública con contraseña', p.email, 'el público ingresa sólo con Google' from public.usuario p
         join auth.users u on u.id = p.id
-        where p.rol in ('pescador', 'dueno') and coalesce(u.raw_app_meta_data ->> 'provider', '') = 'email'
-    union all select 'Personal ingresando con Google', p.email, 'el personal ingresa con usuario y contraseña' from public.usuario p
-        join auth.users u on u.id = p.id
-        where p.rol in ('admin_municipal', 'admin_sistema') and coalesce(u.raw_app_meta_data ->> 'provider', '') <> 'email'
+        where p.rol in ('pescador', 'dueno')
+          and (coalesce(u.encrypted_password, '') <> ''
+               or exists (select 1 from auth.identities i where i.user_id = u.id and i.provider = 'email'))
+    union all select 'Personal con ingreso por Google', p.email, 'el personal ingresa con usuario y contraseña' from public.usuario p
+        where p.rol in ('admin_municipal', 'admin_sistema')
+          and exists (select 1 from auth.identities i where i.user_id = p.id and i.provider <> 'email')
     union all select 'Autorización vencida sin usar', usuario, 'personal_autorizado' from public.personal_autorizado
         where not usado and expira < now()
 

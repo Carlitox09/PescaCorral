@@ -80,7 +80,8 @@ PescaCorral/
         ├── 004_turnos_alertas_reportes.sql
         ├── 005_acceso_personal.sql
         ├── 006_permiso_propio_comprobante.sql
-        └── 007_mantenimiento_datos_al_dia.sql
+        ├── 007_mantenimiento_datos_al_dia.sql
+        └── 008_cuentas_publicas_solo_google.sql
 ```
 
 ---
@@ -104,7 +105,7 @@ Abrir `http://localhost:8080`.
 
 1. Crear un proyecto en https://supabase.com.
 2. **SQL Editor → New query**: pegar y ejecutar `database/schema.sql` completo, y luego `database/seed.sql`.
-3. Si la base ya existía con una versión anterior del esquema, ejecutar en cambio las migraciones de `database/migrations/` en orden (son idempotentes): 002 a 007.
+3. Si la base ya existía con una versión anterior del esquema, ejecutar en cambio las migraciones de `database/migrations/` en orden (son idempotentes): 002 a 008.
 4. Para comprobar que la base coincide con el esquema y que los datos están al día, ejecutar `database/verificar_base.sql` (no modifica nada): devuelve una fila por cada diferencia, o "OK".
 5. (Opcional) **Database → Extensions**: habilitar `pg_cron` para que el reporte mensual y los recordatorios diarios se generen sin intervención. Si no está habilitado, la app los genera al ingresar a Reportes y a la pantalla principal.
 
