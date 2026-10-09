@@ -7,7 +7,10 @@
 --  avance de las secuencias de números de reserva y de permiso.
 --
 --  Devuelve una fila por caso (perfil, operación, resultado esperado, resultado
---  obtenido y OK / FALLA) y una fila final con el resumen.
+--  obtenido y OK / FALLA), con las fallas primero, y una fila final con el resumen.
+--
+--  Las comprobaciones miran sólo los datos creados por la prueba: la base real
+--  puede tener avisos, dueños y cuentas de Google (sin contraseña) propios.
 --
 --  Perfiles de prueba: sin sesión, pescadores A y B, dueño D (con su
 --  catamarán y sus gastos), municipio M, administrador del sistema S, pescador
@@ -319,7 +322,7 @@ begin
             ('Municipio', m, 'Publicar un aviso para todos (llega solo a cuentas activas del público)', 'permitido', format(avisar, 'todos', null), 'cambio',
                 format('select ((count(*) filter (where id_usuario in (%L, %L, %L))) = 3 and (count(*) filter (where id_usuario in (%L, %L, %L, %L))) = 0)::int from public.notificacion where tipo = ''aviso''', a, b, d, x, m, s, mx)),
             ('Municipio', m, 'Publicar un aviso para un usuario', 'permitido', format(avisar, 'usuario', a), 'cambio',
-                format('select ((count(*) filter (where id_usuario = %L)) = 1 and count(*) = 1)::int from public.notificacion where tipo = ''aviso''', a)),
+                format('select ((count(*) filter (where id_usuario = %L)) = 1 and count(*) = 1)::int from public.notificacion where tipo = ''aviso'' and created_at = now()', a)),
             ('Municipio', m, 'Dar de alta una cuenta del personal', 'rechazo', format(alta, 'prueba.nueva', clave), 'cambio', null),
             ('Municipio', m, 'Cambiar la contraseña del administrador del sistema', 'rechazo', format('select public.cambiar_clave_personal(%L, %L)', s, clave), 'cambio', null),
 
@@ -331,13 +334,13 @@ begin
             ('Administrador', s, 'Desactivar una cuenta del personal', 'permitido', format('update public.usuario set activo = false where id = %L', m), 'cambio', null),
             ('Administrador', s, 'Cambiar el rol de una cuenta del personal', 'rechazo', format('update public.usuario set rol = ''admin_sistema'' where id = %L', m), 'cambio', null),
             ('Administrador', s, 'Publicar un aviso para los dueños', 'permitido', format(avisar, 'dueno', null), 'cambio',
-                format('select ((count(*) filter (where id_usuario = %L)) = 1 and count(*) = 1)::int from public.notificacion where tipo = ''aviso''', d)),
+                format('select ((count(*) filter (where id_usuario = %L)) = 1 and (count(*) filter (where id_usuario in (%L, %L, %L, %L, %L, %L))) = 0)::int from public.notificacion where tipo = ''aviso'' and created_at = now()', d, a, b, x, m, s, mx)),
             ('Administrador', s, 'Dar de alta una cuenta del personal', 'permitido', format(alta, 'prueba.nueva', clave), 'cambio',
-                format('select count(*)::int from public.usuario u join auth.users au on au.id = u.id join auth.identities i on i.user_id = u.id and i.provider = ''email'' where u.email = ''prueba.nueva@pescacorral.example.com'' and u.rol = ''admin_municipal'' and u.perfil_completo and au.email_confirmed_at is not null and au.confirmation_token = '''' and au.encrypted_password = crypt(%L, au.encrypted_password)', clave)),
+                format('select count(*)::int from public.usuario u join auth.users au on au.id = u.id join auth.identities i on i.user_id = u.id and i.provider = ''email'' where u.email = ''prueba.nueva@pescacorral.example.com'' and u.rol = ''admin_municipal'' and u.perfil_completo and au.email_confirmed_at is not null and au.confirmation_token = '''' and au.encrypted_password = crypt(%L, nullif(au.encrypted_password, ''''))', clave)),
             ('Administrador', s, 'Dar de alta con una contraseña débil', 'rechazo', format(alta, 'prueba.nueva', 'corta'), 'cambio', null),
             ('Administrador', s, 'Dar de alta un usuario que ya existe', 'rechazo', format(alta, 'pc-prueba-m', clave), 'cambio', null),
             ('Administrador', s, 'Cambiar la contraseña de una cuenta del personal', 'permitido', format('select public.cambiar_clave_personal(%L, %L)', m, clave), 'cambio',
-                format('select count(*)::int from auth.users where id = %L and encrypted_password = crypt(%L, encrypted_password)', m, clave)),
+                format('select count(*)::int from auth.users where id = %L and encrypted_password = crypt(%L, nullif(encrypted_password, ''''))', m, clave)),
             ('Administrador', s, 'Cambiar la contraseña de un pescador', 'rechazo', format('select public.cambiar_clave_personal(%L, %L)', a, clave), 'cambio', null),
 
             -- Cuentas desactivadas
@@ -374,11 +377,15 @@ begin
     from jsonb_array_elements(v_res) with ordinality as e(v, n);
 end $$;
 
-select n as "N°", perfil, caso, esperado, obtenido, resultado
-from _pruebas_seguridad
-union all
-select null, 'Resumen', count(*) || ' casos', '',
-       count(*) filter (where resultado = 'FALLA') || ' fallas',
-       case when count(*) filter (where resultado = 'FALLA') = 0 then 'OK' else 'FALLA' end
-from _pruebas_seguridad
-order by 1 nulls last;
+-- Las fallas, si las hay, se muestran primero; el resumen va al final.
+select "N°", perfil, caso, esperado, obtenido, resultado
+from (
+    select n as "N°", perfil, caso, esperado, obtenido, resultado
+    from _pruebas_seguridad
+    union all
+    select null, 'Resumen', count(*) || ' casos', '',
+           count(*) filter (where resultado = 'FALLA') || ' fallas',
+           case when count(*) filter (where resultado = 'FALLA') = 0 then 'OK' else 'FALLA' end
+    from _pruebas_seguridad
+) r
+order by (r.resultado = 'FALLA' and r."N°" is not null) desc, r."N°" nulls last;
