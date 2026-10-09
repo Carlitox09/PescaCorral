@@ -28,6 +28,12 @@ const CLAVES_DEMO = {
   admin:     { email: "admin@demo.com",     clave: "Admin.2026" },
 };
 
+/* Fotos de ejemplo de la demostración (catamaranes en el Dique Cabra Corral,
+ * recortadas): José Luis Fernández, Wikimedia Commons, licencia CC BY 3.0. */
+const FOTOS_DEMO = { donJuan: ["img/demo/catamaran-blanco.jpg", "img/demo/muelle-conea.jpg"], elPato: ["img/demo/catamaran-amarillo.jpg"] };
+export const CREDITO_FOTOS_DEMO = "Fotos de ejemplo: José Luis Fernández, Wikimedia Commons (CC BY 3.0)";
+export const esFotoDemo = (ruta) => String(ruta || "").startsWith("img/demo/");
+
 /* Tarifas de los permisos en modo demo (en Supabase, tabla tarifa_permiso). */
 const TARIFAS_DEMO = { diario: 5000, semanal: 15000, anual: 45000 };
 
@@ -245,7 +251,7 @@ const todayISO = () => dateISO(new Date());
 
 function seedDemo() {
   DB = loadDB();
-  if (DB && DB.__v === 7) return;
+  if (DB && DB.__v === 8) return;
 
   const rnd = mulberry32(20260628);
   const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
@@ -268,8 +274,8 @@ function seedDemo() {
 
   /* --- Catamaranes (datos de los prototipos del TFG) --- */
   const catData = [
-    { nombre: "Don Juan II", capacidad: 20, precio: 8000, estado: "activa",        prop: uDueno.id, hab: "HAB-2024-018", desc: "Catamarán techado con baño y cocina. Salidas diarias al espejo de agua." },
-    { nombre: "El Pato",     capacidad: 16, precio: 7500, estado: "activa",        prop: uDueno.id, hab: "HAB-2024-007", desc: "Embarcación familiar, ideal para grupos pequeños y principiantes." },
+    { nombre: "Don Juan II", capacidad: 20, precio: 8000, estado: "activa",        prop: uDueno.id, hab: "HAB-2024-018", desc: "Catamarán techado con baño y cocina. Salidas diarias al espejo de agua.", fotos: FOTOS_DEMO.donJuan },
+    { nombre: "El Pato",     capacidad: 16, precio: 7500, estado: "activa",        prop: uDueno.id, hab: "HAB-2024-007", desc: "Embarcación familiar, ideal para grupos pequeños y principiantes.", fotos: FOTOS_DEMO.elPato },
     { nombre: "La Victoria", capacidad: 18, precio: 8500, estado: "activa",        prop: null,      hab: "HAB-2023-031", desc: "Cubierta amplia y sombra. Equipamiento de pesca incluido." },
     { nombre: "Don Pescador",capacidad: 12, precio: 9500, estado: "activa",        prop: null,      hab: "HAB-2024-022", desc: "Salidas premium con guía de pesca especializado." },
     { nombre: "Lago Azul",   capacidad: 14, precio: 8000, estado: "mantenimiento", prop: null,      hab: "HAB-2022-014", desc: "Temporalmente fuera de servicio por mantenimiento de motor." },
@@ -277,7 +283,7 @@ function seedDemo() {
   const catamaranes = [], lugares = [];
   for (const c of catData) {
     const id = uid();
-    catamaranes.push({ id, id_propietario: c.prop, nombre: c.nombre, descripcion: c.desc, capacidad: c.capacidad, precio: c.precio, habilitacion: c.hab, estado: c.estado, created_at: isoFromOffset(-150).toISOString() });
+    catamaranes.push({ id, id_propietario: c.prop, nombre: c.nombre, descripcion: c.desc, capacidad: c.capacidad, precio: c.precio, habilitacion: c.hab, estado: c.estado, fotos: c.fotos || [], created_at: isoFromOffset(-150).toISOString() });
     for (let n = 1; n <= c.capacidad; n++)
       lugares.push({ id: uid(), id_catamaran: id, numero: n, ubicacion: ubicacionLugar(n, c.capacidad), activo: true });
   }
@@ -383,7 +389,7 @@ function seedDemo() {
     { id: uid(), id_especie: especies[2].id, periodo, permisos_emitidos: 210, umbral: 300, estado: "activa", created_at: isoFromOffset(-5).toISOString() },
   ];
 
-  DB = { __v: 7, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, gastos, reportes: [], tarifas: { ...TARIFAS_DEMO }, seq, seqReserva, session: null };
+  DB = { __v: 8, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, gastos, reportes: [], tarifas: { ...TARIFAS_DEMO }, seq, seqReserva, session: null };
   saveDB(DB);
 }
 
@@ -646,6 +652,8 @@ export async function completarPerfil({ nombre, apellido, telefono, dni, rol }) 
 export async function signOut() {
   await ready();
   if (MODE === "supabase") {
+    // Con señal débil no se demora la salida: la función de envío da de baja las suscripciones vencidas.
+    if (!clienteSinConexion) await Promise.race([desactivarPush().catch(() => {}), new Promise((r) => setTimeout(r, 4000))]);
     borrarOffline();
     if (clienteSinConexion) {                // sin conexión: se borra la sesión de este dispositivo
       try { localStorage.removeItem(claveSesion()); } catch { /* sin almacenamiento */ }
@@ -856,17 +864,36 @@ export async function validarPermiso(numero, fecha) {
   return validarPermisoDemo(demoSessionUser(), numero, fecha);
 }
 
+/* Acompañantes (lista de embarque): [{ nombre, dni }] para cada lugar después del
+ * primero, que es el del titular. Las mismas reglas que crear_reserva_completa. */
+const soloDigitosDni = (v) => String(v || "").replace(/\D/g, "");
+export const formatoDni = (v) => soloDigitosDni(v).replace(/^(\d{1,2})(\d{3})(\d{3})$/, "$1.$2.$3");
+export function validarAcompanantes(acompanantes, cantidadLugares, dniTitular = "") {
+  if (!Array.isArray(acompanantes) || acompanantes.length !== cantidadLugares - 1)
+    throw new Error("Completá el nombre y el DNI de cada acompañante (uno por cada lugar además del tuyo).");
+  const vistos = new Set([soloDigitosDni(dniTitular)]);
+  acompanantes.forEach((a, i) => {
+    const nombre = String(a?.nombre || "").trim(), dni = soloDigitosDni(a?.dni);
+    if (nombre.length < 3 || nombre.length > 80) throw new Error(`Ingresá el nombre y apellido del acompañante ${i + 1}.`);
+    if (dni.length < 7 || dni.length > 8) throw new Error(`El DNI del acompañante ${i + 1} debe tener 7 u 8 dígitos.`);
+    if (vistos.has(dni)) throw new Error("Hay un DNI repetido entre los pasajeros.");
+    vistos.add(dni);
+  });
+  return acompanantes.map((a) => ({ nombre: String(a.nombre).trim(), dni: formatoDni(a.dni) }));
+}
+
 /* Reserva completa (HU-005, HU-006 y HU-007). Con numeroPermiso, la salida queda
  * amparada por ese permiso ("Ya tengo permiso"); sin él, se compra un permiso
- * nuevo del tipo elegido y su tarifa se suma al total. */
-export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo = "tarjeta", tipoPermiso = "diario", especieId = null, numeroPermiso = null, autorizacion = null }) {
+ * nuevo del tipo elegido y su tarifa se suma al total. `lugares`: el primero es
+ * el del titular; `acompanantes`, quienes ocupan los demás, en el mismo orden. */
+export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo = "tarjeta", tipoPermiso = "diario", especieId = null, numeroPermiso = null, autorizacion = null, acompanantes = [] }) {
   await ready();
   const propio = String(numeroPermiso || "").trim();
   if (MODE === "supabase") {
     const args = {
       p_id_catamaran: catamaranId, p_fecha: fecha, p_turno: turno,
       p_lugares: lugares, p_metodo_pago: metodo, p_tipo_permiso: tipoPermiso, p_id_especie: especieId,
-      p_numero_permiso: propio || null, p_autorizacion: autorizacion,
+      p_numero_permiso: propio || null, p_autorizacion: autorizacion, p_acompanantes: acompanantes,
     };
     const { data, error } = await sb.rpc("crear_reserva_completa", args);
     if (error) throw new Error(error.message);
@@ -887,6 +914,7 @@ export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo 
     const ocupado = DB.reserva_lugar.some((rl) => rl.id_lugar === lid && rl.fecha === fecha && (rl.turno || "manana") === turno && rl.estado === "confirmada");
     if (ocupado) throw new Error("Uno de los lugares ya fue reservado. Actualizá la grilla.");
   }
+  const pasajeros = validarAcompanantes(acompanantes, lugares.length, u.dni);
   const existente = propio ? validarPermisoDemo(u, propio, fecha) : null;
   const tarifas = { ...TARIFAS_DEMO, ...(DB.tarifas || {}) };
   const montoPermiso = existente ? 0 : Number(tarifas[tipoPermiso] || 0);
@@ -895,8 +923,10 @@ export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo 
   const nroReserva = numeroReserva(DB.seqReserva++);
   const reserva = { id: rId, numero: nroReserva, id_usuario: u.id, id_catamaran: cat.id, fecha, turno, estado: "confirmada", cantidad_lugares: lugares.length, monto_total: monto, monto_permiso: montoPermiso, id_permiso: existente?.id || null, created_at: new Date().toISOString() };
   DB.reservas.push(reserva);
-  for (const lid of lugares)
-    DB.reserva_lugar.push({ id: uid(), id_reserva: rId, id_lugar: lid, fecha, turno, estado: "confirmada" });
+  lugares.forEach((lid, i) => DB.reserva_lugar.push({
+    id: uid(), id_reserva: rId, id_lugar: lid, fecha, turno, estado: "confirmada",
+    pasajero_nombre: i ? pasajeros[i - 1].nombre : null, pasajero_dni: i ? pasajeros[i - 1].dni : null,
+  }));
   const comprobante = "CMP-" + rId.replace(/-/g, "").slice(0, 10).toUpperCase();
   DB.pagos.push({ id: uid(), id_reserva: rId, monto, metodo, estado: "aprobado", comprobante, autorizacion, fecha_pago: new Date().toISOString() });
 
@@ -978,7 +1008,7 @@ function scopeReservasDemo(u) {
  * aunque no se haya abierto antes. El personal no usa ese modo y consulta cada
  * una por separado. */
 const CAMPOS_PERMISO_RESERVA = "id,numero,tipo,estado,codigo_qr,fecha_emision,fecha_vencimiento,especie(nombre)";
-const SEL_RESERVA = `*, catamaran(nombre,habilitacion,capacidad), usuario(nombre,apellido,dni,email), reserva_lugar(lugar(numero)), pago(*), permiso!permiso_id_reserva_fkey(${CAMPOS_PERMISO_RESERVA})`;
+const SEL_RESERVA = `*, catamaran(nombre,habilitacion,capacidad), usuario(nombre,apellido,dni,email), reserva_lugar(pasajero_nombre, pasajero_dni, lugar(numero)), pago(*), permiso!permiso_id_reserva_fkey(${CAMPOS_PERMISO_RESERVA})`;
 const SEL_PERMISO = "*, especie(nombre,nombre_cientifico), reserva!permiso_id_reserva_fkey(id,fecha,turno,cantidad_lugares,monto_total,catamaran(nombre),pago(comprobante,metodo,estado)), usuario(nombre,apellido,dni)";
 const reservasCompletas = () => sb.from("reserva").select(SEL_RESERVA).order("fecha", { ascending: false });
 const permisosCompletos = () => sb.from("permiso").select(SEL_PERMISO).order("fecha_emision", { ascending: false });
@@ -1108,7 +1138,10 @@ function mapPermisoSupabase(p, full = false) {
  * ========================================================================== */
 const numeroReservaDe = (r) => r.numero || "RES-" + String(r.id).replace(/-/g, "").slice(0, 8).toUpperCase();
 
-function armarComprobante(r, { cat, titular, lugares, pago, permiso, propio }) {
+/* Acompañantes de una reserva a partir de sus lugares: [{ lugar, nombre, dni }]. */
+const acompanantesDe = (filas) => filas.filter((x) => x.nombre).sort((a, b) => a.lugar - b.lugar);
+
+function armarComprobante(r, { cat, titular, lugares, pago, permiso, propio, acompanantes = [] }) {
   const montoPermiso = Number(r.monto_permiso || 0);
   const montoLugares = Number(r.monto_total || 0) - montoPermiso;
   const per = permiso ? applyPermisoEstado(permiso) : null;
@@ -1116,6 +1149,7 @@ function armarComprobante(r, { cat, titular, lugares, pago, permiso, propio }) {
     id: r.id, id_usuario: r.id_usuario, numero: numeroReservaDe(r), fecha: r.fecha, turno: r.turno, estado: r.estado, created_at: r.created_at,
     catamaran: cat?.nombre || "—", habilitacion: cat?.habilitacion || "", capacidad: Number(cat?.capacidad || 0),
     lugares: lugares.slice().sort((a, b) => a - b),
+    acompanantes,
     titular: titular ? { nombre: `${titular.nombre || ""} ${titular.apellido || ""}`.trim(), dni: titular.dni || "—", email: titular.email || "" } : null,
     monto_total: Number(r.monto_total || 0), monto_permiso: montoPermiso, monto_lugares: montoLugares,
     precio_lugar: r.cantidad_lugares ? montoLugares / r.cantidad_lugares : 0, cantidad_lugares: r.cantidad_lugares,
@@ -1144,6 +1178,7 @@ export async function getComprobante(reservaId) {
     return armarComprobante(r, {
       cat: r.catamaran, titular: r.usuario, pago, permiso, propio,
       lugares: (r.reserva_lugar || []).map((x) => x.lugar?.numero).filter(Boolean),
+      acompanantes: acompanantesDe((r.reserva_lugar || []).map((x) => ({ lugar: x.lugar?.numero, nombre: x.pasajero_nombre, dni: x.pasajero_dni }))),
     });
   }
   const u = demoSessionUser();
@@ -1161,6 +1196,8 @@ export async function getComprobante(reservaId) {
     permiso: permiso ? { ...permiso, especie_nombre: esp?.nombre } : null,
     propio: Boolean(permiso && propia?.id !== permiso.id),
     lugares: DB.reserva_lugar.filter((x) => x.id_reserva === r.id).map((x) => byId(DB.lugares, x.id_lugar)?.numero).filter(Boolean),
+    acompanantes: ajena ? [] : acompanantesDe(DB.reserva_lugar.filter((x) => x.id_reserva === r.id)
+      .map((x) => ({ lugar: byId(DB.lugares, x.id_lugar)?.numero, nombre: x.pasajero_nombre, dni: x.pasajero_dni }))),
   });
 }
 
@@ -1734,7 +1771,9 @@ export async function avisarPasajeros({ catamaranId, fecha, turno, titulo, mensa
   return avisados.size;
 }
 
-/** Lista de embarque de una salida: [{ numero, lugares[], cantidad_lugares, nombre, apellido, dni }]. */
+/** Lista de embarque de una salida, un pasajero por lugar:
+ *  [{ numero, lugar, pasajero, dni, titular }] (pasajero nulo: lugar de una
+ *  reserva anterior sin acompañante cargado). */
 export async function listaEmbarque(catamaranId, fecha, turno) {
   await ready();
   if (MODE === "supabase") {
@@ -1744,14 +1783,25 @@ export async function listaEmbarque(catamaranId, fecha, turno) {
     return data || [];
   }
   if (!catamaranDeLaSesionDemo(catamaranId)) throw new Error("No autorizado para ver la lista de embarque de este catamarán.");
-  return DB.reservas
+  const filas = [];
+  DB.reservas
     .filter((r) => r.id_catamaran === catamaranId && r.fecha === fecha && r.turno === turno && (r.estado === "confirmada" || r.estado === "completada"))
-    .map((r) => {
+    .forEach((r) => {
       const t = byId(DB.usuarios, r.id_usuario) || {};
-      const lugares = DB.reserva_lugar.filter((x) => x.id_reserva === r.id).map((x) => byId(DB.lugares, x.id_lugar)?.numero).filter(Boolean).sort((a, b) => a - b);
-      return { numero: r.numero, lugares, cantidad_lugares: r.cantidad_lugares, nombre: t.nombre || "", apellido: t.apellido || "", dni: t.dni || "" };
-    })
-    .sort((a, b) => (a.lugares[0] || 0) - (b.lugares[0] || 0));
+      const asientos = DB.reserva_lugar.filter((x) => x.id_reserva === r.id)
+        .map((x) => ({ ...x, numero: byId(DB.lugares, x.id_lugar)?.numero })).sort((a, b) => a.numero - b.numero);
+      let titularListo = false;
+      asientos.forEach((x) => {
+        const esTitular = !x.pasajero_nombre && !titularListo;
+        if (esTitular) titularListo = true;
+        filas.push({
+          numero: r.numero, lugar: x.numero, titular: esTitular,
+          pasajero: x.pasajero_nombre || (esTitular ? [t.apellido, t.nombre].filter(Boolean).join(", ") : null),
+          dni: x.pasajero_dni || (esTitular ? t.dni || null : null),
+        });
+      });
+    });
+  return filas.sort((a, b) => a.lugar - b.lugar);
 }
 
 /* ---- Fotos de los catamaranes (Supabase Storage, depósito "catamaranes") ---- */
@@ -1805,6 +1855,64 @@ export async function setFotosCatamaran(catamaranId, rutas) {
   const antes = c.fotos || [];
   c.fotos = rutas.slice();
   try { saveDB(DB); } catch { c.fotos = antes; throw new Error("No hay espacio para guardar más fotos en la demostración."); }
+  return true;
+}
+
+/* ============================================================================
+ *  AVISOS AL TELÉFONO (Web Push, HU-011)
+ *  El usuario habilita el teléfono; la base guarda la suscripción
+ *  (registrar_push) y la función enviar-push de Supabase manda cada aviso, aviso
+ *  de una salida o recordatorio aunque la aplicación esté cerrada.
+ * ========================================================================== */
+const claveServidor = (b64) => {
+  const t = atob((b64 + "===".slice((b64.length + 3) % 4)).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(t, (c) => c.charCodeAt(0));
+};
+const pushSoportado = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const suscripcionActual = async () => {
+  const reg = await navigator.serviceWorker?.getRegistration?.();
+  return reg ? reg.pushManager.getSubscription() : null;
+};
+
+/** Estado en este dispositivo: activo | inactivo | bloqueado | instalar (iPhone sin instalar) | no-disponible. */
+export async function estadoPush() {
+  if (MODE !== "supabase" || !CFG.VAPID_PUBLIC_KEY) return "no-disponible";
+  if (!pushSoportado()) {
+    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    const instalada = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+    return ios && !instalada ? "instalar" : "no-disponible";
+  }
+  if (Notification.permission === "denied") return "bloqueado";
+  try { return (await suscripcionActual()) ? "activo" : "inactivo"; } catch { return "inactivo"; }
+}
+
+export async function activarPush() {
+  await ready();
+  if (MODE !== "supabase" || !CFG.VAPID_PUBLIC_KEY || !pushSoportado()) throw new Error("Este navegador no admite avisos en el teléfono.");
+  if (await Notification.requestPermission() !== "granted")
+    throw new Error("Para recibir avisos, permití las notificaciones de PescaCorral en el navegador.");
+  const reg = await navigator.serviceWorker.ready;
+  const opciones = { userVisibleOnly: true, applicationServerKey: claveServidor(CFG.VAPID_PUBLIC_KEY) };
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) {
+    try { sub = await reg.pushManager.subscribe(opciones); }
+    catch { await (await reg.pushManager.getSubscription())?.unsubscribe(); sub = await reg.pushManager.subscribe(opciones); }
+  }
+  const j = sub.toJSON();
+  const { error } = await sb.rpc("registrar_push", { p_endpoint: j.endpoint, p_p256dh: j.keys.p256dh, p_auth: j.keys.auth });
+  if (error) throw new Error(error.message);
+  return true;
+}
+
+export async function desactivarPush() {
+  await ready();
+  let sub = null;
+  try { sub = await suscripcionActual(); } catch { /* sin service worker */ }
+  if (!sub) return true;
+  if (MODE === "supabase") {
+    try { await sb.rpc("borrar_push", { p_endpoint: sub.endpoint }); } catch { /* sin conexión: el envío la dará de baja */ }
+  }
+  try { await sub.unsubscribe(); } catch { /* ya no existía */ }
   return true;
 }
 

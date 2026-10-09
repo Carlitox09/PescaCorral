@@ -34,6 +34,7 @@ drop view  if exists public.v_lugares_ocupados       cascade;
 
 drop table if exists public.intento_acceso cascade;
 drop table if exists public.personal_autorizado cascade;
+drop table if exists public.suscripcion_push cascade;
 drop table if exists public.aviso          cascade;
 drop table if exists public.gasto          cascade;
 drop table if exists public.alerta_fauna   cascade;
@@ -54,6 +55,8 @@ drop sequence if exists public.seq_numero_reserva cascade;
 
 -- Funciones de versiones anteriores (otra firma u objetos que ya no se usan).
 drop function if exists public.crear_reserva_completa(uuid, date, text, uuid[], text, text, uuid);
+drop function if exists public.crear_reserva_completa(uuid, date, text, uuid[], text, text, uuid, text, text);
+drop function if exists public.lista_embarque(uuid, date, text);
 drop function if exists public.registrar_intento_acceso(text, boolean);
 drop function if exists public.acceso_bloqueado(text);
 
@@ -174,6 +177,8 @@ create index idx_reserva_fecha     on public.reserva (fecha);
 -- RESERVA_LUGAR  (asientos concretos de una reserva · normaliza reserva.lugares)
 --   Incluye "fecha" y "turno" (denormalizados) para impedir la doble reserva
 --   del mismo asiento en la misma salida mediante un índice único parcial.
+--   pasajero_nombre y pasajero_dni: acompañante que ocupa el lugar (nulos en el
+--   lugar del titular de la reserva); con ellos se arma la lista de embarque.
 -- ---------------------------------------------------------------------------
 create table public.reserva_lugar (
     id          uuid primary key default gen_random_uuid(),
@@ -184,7 +189,10 @@ create table public.reserva_lugar (
                     constraint reserva_lugar_turno_check check (turno in ('manana','tarde')),
     estado      text not null default 'confirmada'
                     check (estado in ('confirmada','cancelada')),
-    created_at  timestamptz not null default now()
+    pasajero_nombre text check (char_length(pasajero_nombre) between 3 and 80),
+    pasajero_dni    text check (pasajero_dni ~ '^[0-9]{1,2}[.][0-9]{3}[.][0-9]{3}$'),
+    created_at  timestamptz not null default now(),
+    constraint reserva_lugar_pasajero_check check ((pasajero_nombre is null) = (pasajero_dni is null))
 );
 create index idx_reserva_lugar_reserva on public.reserva_lugar (id_reserva);
 create index idx_reserva_lugar_lugar   on public.reserva_lugar (id_lugar);
@@ -282,6 +290,7 @@ create table public.notificacion (
     titulo      text not null,
     mensaje     text not null,
     leida       boolean not null default false,
+    push_enviada timestamptz,                -- aviso al teléfono ya enviado (Web Push, función enviar-push)
     created_at  timestamptz not null default now()
 );
 create index idx_notificacion_usuario on public.notificacion (id_usuario, leida);
@@ -302,6 +311,21 @@ create table public.aviso (
     publicado_por   uuid references public.usuario (id) on delete set null,
     created_at      timestamptz not null default now()
 );
+
+-- ---------------------------------------------------------------------------
+-- SUSCRIPCION_PUSH  (HU-011 · avisos al teléfono aunque la aplicación esté cerrada)
+--   Cada teléfono o navegador que el usuario habilita para recibir avisos
+--   (Web Push). Se registra y se borra sólo con registrar_push y borrar_push.
+-- ---------------------------------------------------------------------------
+create table public.suscripcion_push (
+    id          uuid primary key default gen_random_uuid(),
+    id_usuario  uuid not null references public.usuario (id) on delete cascade,
+    endpoint    text not null unique check (endpoint ~ '^https://' and char_length(endpoint) <= 1000),
+    p256dh      text not null check (char_length(p256dh) between 1 and 200),
+    auth        text not null check (char_length(auth) between 1 and 100),
+    created_at  timestamptz not null default now()
+);
+create index idx_suscripcion_push_usuario on public.suscripcion_push (id_usuario);
 
 -- ---------------------------------------------------------------------------
 -- ALERTA_FAUNA  (HU-015 · alertas de umbral por especie)
@@ -681,7 +705,9 @@ $$;
 --     5. Crea una notificación para el usuario.
 --   Devuelve los números de reserva, permiso y comprobante.
 --
---   p_lugares: arreglo de UUID de asientos (lugar.id).
+--   p_lugares: arreglo de UUID de asientos (lugar.id); el primero es el del titular.
+--   p_acompanantes: [{"nombre", "dni"}] de quien ocupa cada uno de los demás
+--   lugares, en el mismo orden (uno menos que la cantidad de lugares).
 -- ----------------------------------------------------------------------------
 create or replace function public.crear_reserva_completa(
     p_id_catamaran   uuid,
@@ -692,7 +718,8 @@ create or replace function public.crear_reserva_completa(
     p_tipo_permiso   text default 'diario',
     p_id_especie     uuid default null,
     p_numero_permiso text default null,
-    p_autorizacion   text default null
+    p_autorizacion   text default null,
+    p_acompanantes   jsonb default '[]'::jsonb
 )
 returns jsonb
 language plpgsql
@@ -721,6 +748,10 @@ declare
     v_vence       timestamptz;
     v_permiso     uuid;
     v_comprobante text;
+    v_acomp       jsonb := coalesce(p_acompanantes, '[]'::jsonb);
+    v_nombre      text;
+    v_dni         text;
+    v_dnis        text[];
 begin
     if v_cant = 0 then
         raise exception 'Debe seleccionar al menos un lugar';
@@ -750,6 +781,27 @@ begin
     if exists (select 1 from public.lugar where id = any (p_lugares) and not activo) then
         raise exception 'Uno de los lugares ya no está disponible en ese catamarán. Actualizá el plano';
     end if;
+
+    -- Acompañantes (lista de embarque): nombre y DNI de quien ocupa cada lugar
+    -- además del titular, sin DNI repetidos entre los pasajeros.
+    if jsonb_typeof(v_acomp) <> 'array' or jsonb_array_length(v_acomp) <> v_cant - 1 then
+        raise exception 'Completá el nombre y el DNI de cada acompañante (uno por cada lugar además del tuyo)';
+    end if;
+    select array[regexp_replace(coalesce(dni, ''), '[^0-9]', '', 'g')] into v_dnis from public.usuario where id = v_uid;
+    for i in 0 .. v_cant - 2 loop
+        v_nombre := trim(coalesce(v_acomp -> i ->> 'nombre', ''));
+        v_dni    := regexp_replace(coalesce(v_acomp -> i ->> 'dni', ''), '[^0-9]', '', 'g');
+        if char_length(v_nombre) not between 3 and 80 then
+            raise exception 'Ingresá el nombre y apellido del acompañante %', i + 1;
+        end if;
+        if char_length(v_dni) not between 7 and 8 then
+            raise exception 'El DNI del acompañante % debe tener 7 u 8 dígitos', i + 1;
+        end if;
+        if v_dni = any (v_dnis) then
+            raise exception 'Hay un DNI repetido entre los pasajeros';
+        end if;
+        v_dnis := v_dnis || v_dni;
+    end loop;
 
     -- Permiso: el que ya tiene el pescador (se valida) o uno nuevo (se cobra la tarifa).
     if v_nuevo then
@@ -785,9 +837,15 @@ begin
             v_cant, v_total, v_tarifa, v_permiso)
     returning id, numero into v_reserva, v_nro_reserva;
 
-    foreach v_lugar in array p_lugares loop
-        insert into public.reserva_lugar (id_reserva, id_lugar, fecha, turno, estado)
-        values (v_reserva, v_lugar, p_fecha, v_turno, 'confirmada');
+    for i in 1 .. v_cant loop
+        v_nombre := null; v_dni := null;
+        if i > 1 then
+            v_nombre := trim(v_acomp -> (i - 2) ->> 'nombre');
+            v_dni    := regexp_replace(regexp_replace(v_acomp -> (i - 2) ->> 'dni', '[^0-9]', '', 'g'),
+                                       '^([0-9]{1,2})([0-9]{3})([0-9]{3})$', '\1.\2.\3');
+        end if;
+        insert into public.reserva_lugar (id_reserva, id_lugar, fecha, turno, estado, pasajero_nombre, pasajero_dni)
+        values (v_reserva, p_lugares[i], p_fecha, v_turno, 'confirmada', v_nombre, v_dni);
     end loop;
 
     v_comprobante := 'CMP-' || upper(substr(replace(v_reserva::text, '-', ''), 1, 10));
@@ -1093,18 +1151,20 @@ end;
 $$;
 
 -- ----------------------------------------------------------------------------
--- lista_embarque (HU-003): titulares de las reservas de una salida, con su
--- nombre, apellido y DNI y los lugares, para el control de embarque (por
--- ejemplo, ante Prefectura). Sólo el dueño del catamarán y la administración;
--- no entrega correo, teléfono, pago ni permiso.
+-- lista_embarque (HU-003): pasajeros de una salida, uno por lugar: el titular
+-- de cada reserva (nombre, apellido y DNI de su perfil) y los acompañantes que
+-- cargó al reservar. Un lugar de una reserva anterior sin acompañante cargado
+-- sale sin nombre. Sólo el dueño del catamarán y la administración; no entrega
+-- correo, teléfono, pago ni permiso.
 -- ----------------------------------------------------------------------------
 create or replace function public.lista_embarque(p_id_catamaran uuid, p_fecha date, p_turno text)
-returns table (numero text, lugares integer[], cantidad_lugares integer, nombre text, apellido text, dni text)
+returns table (numero text, lugar integer, pasajero text, dni text, titular boolean)
 language plpgsql
 stable
 security definer
 set search_path = public
 as $$
+#variable_conflict use_column
 declare
     v_uid  uuid := public.exigir_cuenta_activa();
     v_prop uuid;
@@ -1117,15 +1177,25 @@ begin
         raise exception 'No autorizado para ver la lista de embarque de este catamarán';
     end if;
     return query
-    select r.numero, array_agg(l.numero order by l.numero), r.cantidad_lugares, u.nombre, u.apellido, u.dni
-    from public.reserva r
-    join public.usuario u        on u.id = r.id_usuario
-    join public.reserva_lugar rl on rl.id_reserva = r.id
-    join public.lugar l          on l.id = rl.id_lugar
-    where r.id_catamaran = p_id_catamaran and r.fecha = p_fecha and r.turno = p_turno
-      and r.estado in ('confirmada', 'completada')
-    group by r.id, r.numero, r.cantidad_lugares, u.nombre, u.apellido, u.dni
-    order by min(l.numero);
+    with asientos as (
+        select r.numero as nro, l.numero as nlugar, u.nombre as t_nombre, u.apellido as t_apellido, u.dni as t_dni,
+               rl.pasajero_nombre as p_nombre, rl.pasajero_dni as p_dni,
+               row_number() over (partition by r.id, rl.pasajero_nombre is null order by l.numero) as orden
+        from public.reserva r
+        join public.usuario u        on u.id = r.id_usuario
+        join public.reserva_lugar rl on rl.id_reserva = r.id
+        join public.lugar l          on l.id = rl.id_lugar
+        where r.id_catamaran = p_id_catamaran and r.fecha = p_fecha and r.turno = p_turno
+          and r.estado in ('confirmada', 'completada')
+    )
+    select a.nro, a.nlugar,
+           case when a.p_nombre is not null then a.p_nombre
+                when a.orden = 1 then trim(both ', ' from coalesce(a.t_apellido, '') || ', ' || coalesce(a.t_nombre, '')) end,
+           case when a.p_nombre is not null then a.p_dni
+                when a.orden = 1 then a.t_dni end,
+           (a.p_nombre is null and a.orden = 1)
+    from asientos a
+    order by a.nlugar;
 end;
 $$;
 
@@ -1249,6 +1319,7 @@ alter table public.alerta_fauna   enable row level security;
 alter table public.tarifa_permiso enable row level security;
 alter table public.aviso          enable row level security;
 alter table public.gasto          enable row level security;
+alter table public.suscripcion_push enable row level security;
 alter table public.personal_autorizado enable row level security;   -- sin políticas ni privilegios: sólo SQL Editor (sección 6)
 
 -- ----- USUARIO --------------------------------------------------------------
@@ -1278,6 +1349,10 @@ create policy catamaran_delete on public.catamaran
 -- ----- LUGAR  (lectura pública; se escriben sólo con las funciones) ----------
 create policy lugar_select on public.lugar
     for select using (true);
+
+-- ----- SUSCRIPCION_PUSH  (cada usuario ve sus dispositivos; se escriben con funciones)
+create policy suscripcion_push_propia on public.suscripcion_push
+    for select using (id_usuario = auth.uid());
 
 -- ----- GASTO  (privados: sólo su dueño, y en sus propios catamaranes) --------
 create policy gasto_dueno on public.gasto
@@ -1373,6 +1448,7 @@ grant  update (leida) on public.notificacion to authenticated;
 revoke insert, update on public.catamaran from authenticated;
 grant  update (nombre, descripcion, precio, habilitacion, estado, fotos) on public.catamaran to authenticated;
 revoke insert, update, delete on public.lugar from authenticated;
+revoke insert, update, delete on public.suscripcion_push from authenticated;
 
 -- ============================================================================
 -- 7. (OPCIONAL) Realtime: descomentar para recibir cambios en vivo en la app.
@@ -1752,6 +1828,83 @@ begin
 end;
 $$;
 
+-- ---- 8.7 Avisos al teléfono (Web Push, HU-011) ---------------------------------
+-- registrar_push / borrar_push: el usuario habilita o deshabilita un teléfono o
+-- navegador. Un mismo dispositivo queda asociado a la última cuenta que lo
+-- registró; hasta 10 dispositivos por cuenta.
+create or replace function public.registrar_push(p_endpoint text, p_p256dh text, p_auth text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_uid uuid := public.exigir_cuenta_activa();
+begin
+    if coalesce(p_endpoint, '') !~ '^https://' or char_length(p_endpoint) > 1000
+       or coalesce(p_p256dh, '') = '' or coalesce(p_auth, '') = '' then
+        raise exception 'La suscripción para avisos no es válida';
+    end if;
+    delete from public.suscripcion_push where endpoint = p_endpoint;
+    insert into public.suscripcion_push (id_usuario, endpoint, p256dh, auth)
+    values (v_uid, p_endpoint, p_p256dh, p_auth);
+    delete from public.suscripcion_push
+    where id in (select id from public.suscripcion_push where id_usuario = v_uid
+                 order by created_at desc offset 10);
+end;
+$$;
+
+create or replace function public.borrar_push(p_endpoint text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_uid uuid := public.exigir_cuenta_activa();
+begin
+    delete from public.suscripcion_push where endpoint = p_endpoint and id_usuario = v_uid;
+end;
+$$;
+
+-- enviar_push (disparador): por cada aviso, aviso de una salida o recordatorio
+-- nuevo de un usuario con teléfonos habilitados, pide a la función enviar-push
+-- (Edge Function de Supabase) que lo mande. Sólo envía el id: la función lee la
+-- notificación con permisos de servicio y la marca como enviada (una sola vez).
+-- La llamada es asincrónica (pg_net) y nunca impide crear la notificación.
+-- Dirección de la función en el proyecto de Supabase (cambiarla si se usa otro).
+create or replace function public.enviar_push()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+    if exists (select 1 from public.suscripcion_push where id_usuario = new.id_usuario) then
+        perform net.http_post(
+            url  := 'https://xllcpqjhvlzqfvfrrbld.supabase.co/functions/v1/enviar-push',
+            body := jsonb_build_object('id', new.id));
+    end if;
+    return null;
+exception when others then
+    raise warning 'Aviso al teléfono no enviado: %', sqlerrm;
+    return null;
+end;
+$$;
+
+create trigger trg_notificacion_push
+    after insert on public.notificacion
+    for each row when (new.tipo in ('salida', 'aviso', 'recordatorio'))
+    execute function public.enviar_push();
+
+-- pg_net (llamadas HTTP desde la base): incluido en Supabase.
+do $$
+begin
+    create extension if not exists pg_net;
+exception when others then
+    raise notice 'pg_net no disponible (%). Los avisos al teléfono no se envían.', sqlerrm;
+end $$;
+
 -- ---- 8.6 Automatización con pg_cron (opcional) ------------------------------
 -- Requiere habilitar la extensión en Supabase -> Database -> Extensions. Si no
 -- está disponible, la app genera el reporte mensual al ingresar a Reportes y
@@ -1761,7 +1914,7 @@ begin
     create extension if not exists pg_cron;
     perform cron.schedule('pescacorral-reporte-mensual',   '0 3 1 * *',
         $c$ select public.generar_reporte_municipal('general', 'automatico') $c$);
-    perform cron.schedule('pescacorral-recordatorios',     '0 8 * * *',
+    perform cron.schedule('pescacorral-recordatorios',     '0 11 * * *',   -- 8:00 de Salta
         $c$ select public.generar_recordatorios(false) $c$);
     raise notice 'pg_cron: tareas programadas.';
 exception when others then
@@ -1777,7 +1930,9 @@ end $$;
 -- ============================================================================
 revoke execute on all functions in schema public from public, anon, authenticated;
 grant execute on function
-    public.crear_reserva_completa(uuid, date, text, uuid[], text, text, uuid, text, text),
+    public.crear_reserva_completa(uuid, date, text, uuid[], text, text, uuid, text, text, jsonb),
+    public.registrar_push(text, text, text),
+    public.borrar_push(text),
     public.validar_permiso(text, date),
     public.anular_reserva(uuid),
     public.crear_catamaran(text, text, integer, numeric, text, text),

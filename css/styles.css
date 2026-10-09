@@ -664,6 +664,26 @@ details.salida[open] summary::after { content: "Ocultar"; }
 .galeria { display: flex; gap: 8px; overflow-x: auto; scroll-snap-type: x mandatory; margin: 12px -4px 0; padding: 0 4px 4px; }
 .galeria img, .galeria .foto-respaldo { flex: 0 0 82%; max-width: 320px; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 12px; scroll-snap-align: start; background: var(--grad-lago); color: var(--agua-700); }
 .galeria img:only-child { flex-basis: 100%; max-width: none; }
+.credito-fotos { color: var(--muted); font-size: .7rem; text-align: right; margin: 4px 2px 0; }
+
+/* Reserva: pasajeros (acompañantes) */
+#r-pasajeros:not(:empty) { margin-top: 16px; padding: 14px; border-radius: var(--r); background: #fff; border: 1px solid var(--border); box-shadow: var(--shadow-sm); }
+.pasajeros__titulo { font-size: 1rem; font-weight: 800; margin-bottom: 4px; }
+#r-pasajeros-error:empty { display: none; }
+.pasajero { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--surface-2); }
+.pasajero:first-of-type { border-top: none; }
+.pasajero__lugar { flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: var(--granate-600); color: #fff; font-weight: 800; font-size: .85rem; }
+.pasajero .input { min-width: 0; padding: 10px 12px; }
+.pasajero__dni { flex: 0 0 34%; }
+.pasajeros-lista > div { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; }
+.pasajeros-lista b { flex: none; min-width: 24px; text-align: center; border-radius: 7px; background: var(--granate-600); color: #fff; font-size: .78rem; }
+.pasajeros-lista span { font-weight: 700; }
+.pasajeros-lista small { color: var(--muted); margin-left: auto; white-space: nowrap; }
+
+/* Perfil: avisos al teléfono */
+.push-panel { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--surface-2); }
+.push-panel > span { flex: 1; }
+.push-panel .btn { flex: none; }
 .fotos-editor { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .field label.btn { display: inline-flex; margin: 8px 0 0; color: var(--text); font-size: .85rem; }
 .foto-mini { position: relative; aspect-ratio: 4 / 3; border-radius: 10px; overflow: hidden; background: var(--surface-2); }

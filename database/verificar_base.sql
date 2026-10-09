@@ -16,7 +16,7 @@ with
 esperado_tabla(n) as (values
     ('alerta_fauna'), ('aviso'), ('catamaran'), ('especie'), ('gasto'), ('lugar'), ('notificacion'), ('pago'),
     ('permiso'), ('personal_autorizado'), ('reporte'), ('reserva'), ('reserva_lugar'),
-    ('tarifa_permiso'), ('usuario')),
+    ('suscripcion_push'), ('tarifa_permiso'), ('usuario')),
 esperado_vista(n) as (values
     ('v_dashboard_resumen'), ('v_lugares_ocupados'), ('v_ocupacion_catamaran'),
     ('v_permisos_por_especie'), ('v_reservas_por_dia')),
@@ -25,14 +25,14 @@ esperado_funcion(n, args) as (values
     ('asignar_propietario', 2), ('avisar_pasajeros', 5), ('es_foto_propia', 1), ('lista_embarque', 3),
     ('validar_fotos_catamaran', 0), ('cambiar_capacidad', 2), ('cambiar_clave_personal', 2), ('cerrar_sesiones_desactivada', 0),
     ('clave_segura', 1), ('crear_catamaran', 6), ('crear_cuenta_personal', 5),
-    ('crear_reserva_completa', 9), ('es_admin', 0),
+    ('crear_reserva_completa', 10), ('registrar_push', 3), ('borrar_push', 1), ('enviar_push', 0), ('es_admin', 0),
     ('exigir_cuenta_activa', 0), ('generar_numero_permiso', 0), ('publicar_aviso', 4),
     ('generar_recordatorios', 1), ('generar_reporte_municipal', 2), ('handle_new_user', 0),
     ('proteger_perfil', 0), ('rol_actual', 0), ('set_updated_at', 0),
     ('ubicacion_lugar', 2), ('validar_permiso', 2)),
 -- Funciones que pueden ejecutar los usuarios con sesión (las demás son internas).
 esperado_funcion_api(n) as (values
-    ('anular_reserva'), ('asignar_propietario'), ('avisar_pasajeros'), ('es_foto_propia'), ('lista_embarque'),
+    ('anular_reserva'), ('asignar_propietario'), ('registrar_push'), ('borrar_push'), ('avisar_pasajeros'), ('es_foto_propia'), ('lista_embarque'),
     ('cambiar_capacidad'), ('cambiar_clave_personal'), ('crear_catamaran'),
     ('crear_cuenta_personal'), ('crear_reserva_completa'), ('es_admin'), ('generar_recordatorios'),
     ('generar_reporte_municipal'), ('publicar_aviso'), ('rol_actual'), ('validar_permiso')),
@@ -40,12 +40,12 @@ esperado_disparador(t, n) as (values
     ('usuario', 'trg_usuario_updated'), ('usuario', 'trg_usuario_proteger'),
     ('usuario', 'trg_usuario_cerrar_sesiones'),
     ('catamaran', 'trg_catamaran_updated'), ('catamaran', 'trg_catamaran_fotos'), ('reserva', 'trg_reserva_updated'),
-    ('permiso', 'trg_permiso_alerta_fauna'), ('auth.users', 'on_auth_user_created')),
+    ('permiso', 'trg_permiso_alerta_fauna'), ('notificacion', 'trg_notificacion_push'), ('auth.users', 'on_auth_user_created')),
 esperado_indice(n) as (values
     ('idx_reserva_usuario'), ('idx_reserva_catamaran'), ('idx_reserva_fecha'),
     ('idx_reserva_lugar_reserva'), ('idx_reserva_lugar_lugar'), ('uq_lugar_fecha_turno_activa'),
     ('uq_reserva_numero'), ('idx_permiso_usuario'), ('idx_permiso_especie'), ('idx_permiso_estado'),
-    ('idx_notificacion_usuario'), ('idx_notificacion_reserva'), ('idx_gasto_propietario')),
+    ('idx_notificacion_usuario'), ('idx_notificacion_reserva'), ('idx_gasto_propietario'), ('idx_suscripcion_push_usuario')),
 esperado_secuencia(n) as (values ('seq_numero_permiso'), ('seq_numero_reserva')),
 esperado_politica(t, n) as (values
     ('usuario', 'usuario_select_propio'), ('usuario', 'usuario_update_propio'),
@@ -57,7 +57,7 @@ esperado_politica(t, n) as (values
     ('reporte', 'reporte_admin'), ('notificacion', 'notificacion_select'),
     ('notificacion', 'notificacion_update'), ('tarifa_permiso', 'tarifa_permiso_select'),
     ('tarifa_permiso', 'tarifa_permiso_admin'), ('alerta_fauna', 'alerta_fauna_admin'),
-    ('aviso', 'aviso_select')),
+    ('aviso', 'aviso_select'), ('suscripcion_push', 'suscripcion_push_propia')),
 esperado_cron(n) as (values ('pescacorral-reporte-mensual'), ('pescacorral-recordatorios')),
 -- Fotos de los catamaranes (Supabase Storage): políticas del depósito "catamaranes".
 esperado_politica_fotos(n) as (values
@@ -122,6 +122,8 @@ hallazgos(tipo, objeto, detalle) as (
     union all select 'Tarea pg_cron sobrante', n, '' from real_cron where n not in (select n from esperado_cron)
     union all select 'Falta el depósito de fotos', 'catamaranes', 'público, hasta 2 MB, imágenes' where not exists (
         select 1 from storage.buckets where id = 'catamaranes' and public and file_size_limit <= 2097152)
+    union all select 'Falta pg_net', 'net.http_post', 'avisos al teléfono: habilitar la extensión pg_net' where not exists (
+        select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'net' and p.proname = 'http_post')
     union all select 'Falta política de fotos', n, 'storage.objects' from esperado_politica_fotos
         where n not in (select policyname from pg_policies where schemaname = 'storage' and tablename = 'objects')
 
@@ -137,7 +139,7 @@ hallazgos(tipo, objeto, detalle) as (
                or has_table_privilege('anon', r.oid, 'update') or has_table_privilege('anon', r.oid, 'delete'))
     union all select 'Escritura directa habilitada', t.n || ' · ' || p.p, 'sólo mediante las funciones de negocio'
         from (values ('reserva'), ('reserva_lugar'), ('permiso'), ('pago'), ('notificacion'),
-                     ('catamaran'), ('lugar'), ('personal_autorizado'), ('aviso')) t(n)
+                     ('catamaran'), ('lugar'), ('personal_autorizado'), ('aviso'), ('suscripcion_push')) t(n)
         cross join (values ('insert'), ('update'), ('delete')) p(p)
         where has_table_privilege('authenticated', 'public.' || t.n, p.p)
           and not (t.n = 'catamaran' and p.p = 'delete')
@@ -145,7 +147,7 @@ hallazgos(tipo, objeto, detalle) as (
         where has_table_privilege('authenticated', 'public.personal_autorizado', 'select')
     union all select 'Políticas de escritura', tablename || '.' || policyname, 'esa tabla se escribe sólo con funciones'
         from pg_policies where schemaname = 'public'
-          and tablename in ('reserva', 'reserva_lugar', 'permiso', 'pago', 'aviso', 'lugar') and cmd <> 'SELECT'
+          and tablename in ('reserva', 'reserva_lugar', 'permiso', 'pago', 'aviso', 'lugar', 'suscripcion_push') and cmd <> 'SELECT'
 
     -- Cuentas
     union all select 'Cuenta sin perfil', u.email, 'está en auth.users y no en usuario' from auth.users u

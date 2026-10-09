@@ -92,6 +92,11 @@ declare
                      'p_tipo_permiso => ''diario'')';
     avisar_s text := 'select public.avisar_pasajeros(%L, %L, %L, ''Salida suspendida'', ''Se suspende por viento.'')';
     embarque text := 'select * from public.lista_embarque(%L, %L, %L)';
+    reservar2 text := 'select public.crear_reserva_completa(p_id_catamaran => %L, p_fecha => %L, '
+                     'p_turno => ''tarde'', p_lugares => array[%L, %L]::uuid[], p_metodo_pago => ''efectivo'', '
+                     'p_tipo_permiso => ''diario'', p_acompanantes => %L::jsonb)';
+    ep_a  text := 'https://push.prueba.invalid/a';
+    ep_b  text := 'https://push.prueba.invalid/b';
     foto    text := 'select 1 where public.es_foto_propia(%L)';
     asignar text := 'select public.asignar_propietario(%L, %L)';
     altacat text := 'select public.crear_catamaran(%L, ''Catamarán de prueba'', %s, 1000, ''HAB-PRUEBA'', ''activa'')';
@@ -135,23 +140,27 @@ begin
         values (ra1, 'RES-PRUEBA-A1', a, cat_d, hoy + 1, 'manana', 'confirmada', 1, 6000, 5000),
                (ra2, 'RES-PRUEBA-A2', a, cat_d, hoy - 3, 'manana', 'completada', 1, 6000, 5000),
                (rb1, 'RES-PRUEBA-B1', b, cat_d, hoy + 1, 'tarde',  'confirmada', 1, 6000, 5000),
-               (rb2, 'RES-PRUEBA-B2', b, cat_d, hoy + 2, 'manana', 'confirmada', 1, 6000, 5000);
+               (rb2, 'RES-PRUEBA-B2', b, cat_d, hoy + 2, 'manana', 'confirmada', 2, 7000, 5000);
         insert into public.reserva_lugar (id_reserva, id_lugar, fecha, turno, estado)
         values (ra1, l1, hoy + 1, 'manana', 'confirmada'),
                (ra2, l1, hoy - 3, 'manana', 'confirmada'),
                (rb1, l1, hoy + 1, 'tarde',  'confirmada'),
                (rb2, l3, hoy + 2, 'manana', 'confirmada');
+        insert into public.reserva_lugar (id_reserva, id_lugar, fecha, turno, estado, pasajero_nombre, pasajero_dni)
+        values (rb2, l2, hoy + 2, 'manana', 'confirmada', 'Acompañante Prueba', '30.555.666');
         insert into public.pago (id_reserva, monto, metodo, estado, comprobante)
         values (ra1, 6000, 'efectivo', 'aprobado', 'CMP-PRUEBA-A1'),
                (ra2, 6000, 'efectivo', 'aprobado', 'CMP-PRUEBA-A2'),
                (rb1, 6000, 'efectivo', 'aprobado', 'CMP-PRUEBA-B1'),
-               (rb2, 6000, 'efectivo', 'aprobado', 'CMP-PRUEBA-B2');
+               (rb2, 7000, 'efectivo', 'aprobado', 'CMP-PRUEBA-B2');
         insert into public.permiso (id, id_reserva, id_usuario, numero, tipo, codigo_qr, fecha_vencimiento, estado)
         values (pa1, ra1, a, 'PCC-PRUEBA-A1', 'diario', 'PCC-PRUEBA-A1',
                 ((hoy + 1) + time '23:59') at time zone 'America/Argentina/Salta', 'vigente');
         update public.reserva set id_permiso = pa1 where id = ra1;
         insert into public.notificacion (id_usuario, tipo, titulo, mensaje)
         values (a, 'sistema', 'Aviso de prueba', 'Aviso de prueba');
+        insert into public.suscripcion_push (id_usuario, endpoint, p256dh, auth)
+        values (a, ep_a, 'clave-a', 'auth-a'), (b, ep_b, 'clave-b', 'auth-b');
         insert into public.gasto (id_propietario, id_catamaran, fecha, categoria, descripcion, monto)
         values (d, cat_d, hoy, 'mantenimiento', 'Gasto de prueba', 10000);
 
@@ -182,6 +191,8 @@ begin
             ('Sin sesión', null, 'Leer los gastos de los dueños', 'rechazo', 'select * from public.gasto', 'lectura', null),
             ('Sin sesión', null, 'Avisar a los pasajeros de una salida', 'rechazo', format(avisar_s, cat_d, hoy + 1, 'manana'), 'cambio', null),
             ('Sin sesión', null, 'Ver una lista de embarque', 'rechazo', format(embarque, cat_d, hoy + 1, 'manana'), 'lectura', null),
+            ('Sin sesión', null, 'Registrar un teléfono para avisos', 'rechazo', 'select public.registrar_push(''https://push.prueba.invalid/x'', ''k'', ''a'')', 'cambio', null),
+            ('Sin sesión', null, 'Leer los teléfonos registrados', 'rechazo', 'select * from public.suscripcion_push', 'lectura', null),
 
             -- Pescador B sobre los datos del pescador A
             ('Pescador B', b, 'Leer la reserva de otro pescador', 'rechazo', format('select * from public.reserva where id = %L', ra1), 'lectura', null),
@@ -203,6 +214,16 @@ begin
             ('Pescador A', a, 'Reservar un lugar de otro catamarán', 'rechazo', format(reservar, cat_d, hoy + 1, 'tarde', o1), 'cambio', null),
             ('Pescador A', a, 'Reservar un lugar ocupado', 'rechazo', format(reservar, cat_d, hoy + 1, 'manana', l1), 'cambio', null),
             ('Pescador A', a, 'Reservar un lugar fuera de servicio', 'rechazo', format(reservar, cat_o, hoy + 1, 'manana', o2), 'cambio', null),
+            ('Pescador A', a, 'Reservar dos lugares sin los datos del acompañante', 'rechazo', format(reservar2, cat_d, hoy + 1, l2, l3, '[]'), 'cambio', null),
+            ('Pescador A', a, 'Reservar dos lugares con el nombre y el DNI del acompañante', 'permitido', format(reservar2, cat_d, hoy + 1, l2, l3, '[{"nombre": "Ana Acompañante", "dni": "31222333"}]'), 'cambio',
+                'select count(*)::int from public.reserva_lugar where pasajero_nombre = ''Ana Acompañante'' and pasajero_dni = ''31.222.333'''),
+            ('Pescador A', a, 'Reservar con un DNI repetido entre los pasajeros', 'rechazo', format(reservar2, cat_d, hoy + 1, l2, l3, '[{"nombre": "Otro Nombre", "dni": "90000001"}]'), 'cambio', null),
+            ('Pescador A', a, 'Registrar su teléfono para avisos', 'permitido', 'select public.registrar_push(''https://push.prueba.invalid/a2'', ''k'', ''a'')', 'cambio',
+                format('select count(*)::int from public.suscripcion_push where id_usuario = %L', a)),
+            ('Pescador A', a, 'Registrar un teléfono directo en la tabla', 'rechazo', format('insert into public.suscripcion_push (id_usuario, endpoint, p256dh, auth) values (%L, ''https://push.prueba.invalid/z'', ''k'', ''a'')', a), 'cambio', null),
+            ('Pescador A', a, 'Leer los teléfonos de otro usuario', 'rechazo', format('select * from public.suscripcion_push where id_usuario = %L', b), 'lectura', null),
+            ('Pescador A', a, 'Borrar el teléfono de otro usuario', 'rechazo', format('select public.borrar_push(%L)', ep_b), 'cambio',
+                format('select (count(*) = 0)::int from public.suscripcion_push where endpoint = %L', ep_b)),
             ('Pescador A', a, 'Crear una reserva sin pagar (directo en la tabla)', 'rechazo', format('insert into public.reserva (id_usuario, id_catamaran, fecha, turno, cantidad_lugares, monto_total) values (%L, %L, %L, ''manana'', 1, 0)', a, cat_d, hoy + 2), 'cambio', null),
             ('Pescador A', a, 'Ocupar un lugar sin reservarlo', 'rechazo', format('insert into public.reserva_lugar (id_reserva, id_lugar, fecha, turno) values (%L, %L, %L, ''manana'')', ra1, l3, hoy + 1), 'cambio', null),
             ('Pescador A', a, 'Bajar el monto de su reserva', 'rechazo', format('update public.reserva set monto_total = 0 where id = %L', ra1), 'cambio', null),
@@ -254,6 +275,9 @@ begin
             ('Dueño', d, 'Avisar sobre una salida que ya pasó', 'rechazo', format(avisar_s, cat_d, hoy - 3, 'manana'), 'cambio', null),
             ('Dueño', d, 'Avisar a los pasajeros de un catamarán ajeno', 'rechazo', format(avisar_s, cat_o, hoy + 1, 'manana'), 'cambio', null),
             ('Dueño', d, 'Ver la lista de embarque de su salida (nombre y DNI)', 'permitido', format('select 1 from public.lista_embarque(%L, %L, ''manana'') where dni = ''90000001''', cat_d, hoy + 1), 'lectura', null),
+            ('Dueño', d, 'Ver en la lista de embarque a cada pasajero (titular y acompañante)', 'permitido', format('select 1 from public.lista_embarque(%L, %L, ''manana'') where dni in (''90000002'', ''30.555.666'')', cat_d, hoy + 2), 'lectura', null),
+            ('Dueño', d, 'Avisar a los pasajeros: el aviso sale hacia el teléfono', 'permitido', format(avisar_s, cat_d, hoy + 1, 'manana'), 'cambio',
+                'select count(*)::int from net.http_request_queue where url like ''%/functions/v1/enviar-push'''),
             ('Dueño', d, 'Ver la lista de embarque de un catamarán ajeno', 'rechazo', format(embarque, cat_o, hoy + 1, 'manana'), 'lectura', null),
             ('Dueño', d, 'Subir una foto de su catamarán', 'permitido', format(foto, cat_d || '/foto.jpg'), 'lectura', null),
             ('Dueño', d, 'Subir una foto a un catamarán ajeno', 'rechazo', format(foto, cat_o || '/foto.jpg'), 'lectura', null),

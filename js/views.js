@@ -464,6 +464,7 @@ export async function viewHome(ctx) {
 
       <h2 class="section-title mt-24">Catamaranes hoy <a class="muted-link" href="#/catamaranes">Ver todos</a></h2>
       ${disponibles.map((c) => boatCard(c, hoy, "manana")).join("") || `<p class="muted">No hay catamaranes disponibles.</p>`}
+      ${creditoFotos(disponibles)}
     `,
   }));
   wireChrome(ctx);
@@ -492,6 +493,7 @@ export async function viewCatamaranes(ctx) {
       </div>
       <p class="muted" style="margin:-6px 2px 14px;font-weight:600">${U.icon("calendar", { size: 14 })} ${U.fmtDateLong(fecha)} · Turno ${U.turnoLabel(turno)}</p>
       <div id="boat-list">${cats.map((c) => boatCard(c, fecha, turno)).join("")}</div>
+      ${creditoFotos(cats)}
     `,
   }));
   wireChrome(ctx);
@@ -578,8 +580,8 @@ export async function viewReserva(ctx) {
           <div class="boat__img" style="width:54px;height:54px">${portada(cat, 30)}</div>
         </div>
         ${cat.descripcion ? `<p class="boat__desc" style="-webkit-line-clamp:4">${U.esc(cat.descripcion)}</p>` : ""}
-        ${(cat.fotos || []).length ? `<div class="galeria" role="group" aria-label="Fotos de ${U.esc(cat.nombre)}">${cat.fotos.map((f, i) =>
-          `<img src="${U.esc(D.urlFoto(f))}" alt="Foto ${i + 1} de ${U.esc(cat.nombre)}" loading="lazy" data-foto>`).join("")}</div>` : ""}
+        ${(cat.fotos || []).length ? `<div class="galeria" role="region" tabindex="0" aria-label="Fotos de ${U.esc(cat.nombre)}">${cat.fotos.map((f, i) =>
+          `<img src="${U.esc(D.urlFoto(f))}" alt="Foto ${i + 1} de ${U.esc(cat.nombre)}" loading="lazy" data-foto>`).join("")}</div>${creditoFotos([cat])}` : ""}
         <div class="field mt-12" style="margin-bottom:10px"><label for="r-fecha">Fecha de la salida</label>
           <input class="input" type="date" id="r-fecha" value="${fecha}" min="${U.todayISO()}"/></div>
         <label class="field-label">Turno</label>
@@ -596,6 +598,7 @@ export async function viewReserva(ctx) {
         <span><i class="lg-occ"></i>Ocupado</span>
         <span><i class="lg-mio"></i>Tuyo</span>
       </div>
+      <div id="r-pasajeros"></div>
 
       <h2 class="section-title mt-24"><span><span class="paso">2</span>Permiso de pesca</span></h2>
       <div class="opciones opciones--2" role="radiogroup" aria-label="Permiso de pesca">
@@ -663,7 +666,9 @@ export async function viewReserva(ctx) {
       <div class="flex between mt-8 total"><span><b>Total a pagar</b></span><b>${U.fmtMoney(total)}</b></div>
       ${n ? `<div class="muted mt-8" style="font-size:.8rem">Lugares: ${nums.sort((a, b) => a - b).map((x) => `${x} (${D.ubicacionLugar(x, lugares.length)})`).join(", ")} · Turno ${U.turnoLabel(turno).toLowerCase()} · ${U.fmtDate(fecha)}</div>` : ""}`;
     U.$("#paybar-total").textContent = U.fmtMoney(total);
-    const falta = !n ? "Elegí tus lugares" : modoPermiso === "propio" && !permisoValido ? "Verificá tu permiso" : null;
+    const falta = !n ? "Elegí tus lugares"
+      : n > 1 && errorAcompanantes() ? "Completá los pasajeros"
+      : modoPermiso === "propio" && !permisoValido ? "Verificá tu permiso" : null;
     U.$("#paybar-cant").textContent = falta || `${n} lugar${n > 1 ? "es" : ""} · ${U.turnoLabel(turno).toLowerCase()}`;
     confirmBtn.disabled = Boolean(falta);
   };
@@ -695,9 +700,49 @@ export async function viewReserva(ctx) {
     U.$("#seatmap").innerHTML = planoCatamaran(lugares, ocup, seleccion, propios);
   };
 
+  // Pasajeros (lista de embarque): el primer lugar es del titular; para cada uno
+  // más se piden el nombre y el DNI de quien lo ocupa.
+  const acompanantes = new Map();   // id del lugar -> { nombre, dni }
+  const lugaresOrdenados = () => [...seleccion].sort((a, b) => numeroDe(a) - numeroDe(b));
+  const listaAcompanantes = () => lugaresOrdenados().slice(1).map((id) => acompanantes.get(id) || { nombre: "", dni: "" });
+  function errorAcompanantes() {
+    try { D.validarAcompanantes(listaAcompanantes(), seleccion.size, p.dni); return null; } catch (e) { return e.message; }
+  }
+  const pintarPasajeros = () => {
+    const ids = lugaresOrdenados();
+    const box = U.$("#r-pasajeros");
+    if (ids.length < 2) { box.innerHTML = ""; return; }
+    box.innerHTML = `<h3 class="pasajeros__titulo">Pasajeros</h3>
+      <p class="muted" style="font-size:.84rem;margin:0 2px 10px">Para la lista de embarque del catamarán: nombre y DNI de quien ocupa cada lugar.</p>
+      <div class="pasajero"><span class="pasajero__lugar">${numeroDe(ids[0])}</span>
+        <span class="grow"><b>${U.esc(`${p.nombre} ${p.apellido || ""}`.trim())}</b><small class="muted d-block">Vos, titular de la reserva · DNI ${U.esc(p.dni || "—")}</small></span></div>
+      ${ids.slice(1).map((id) => {
+        const a = acompanantes.get(id) || {}, n = numeroDe(id);
+        return `<div class="pasajero"><span class="pasajero__lugar">${n}</span>
+          <input class="input grow" data-acomp="${id}" data-campo="nombre" value="${U.esc(a.nombre || "")}" placeholder="Nombre y apellido" maxlength="80" autocomplete="off" aria-label="Nombre y apellido de quien ocupa el lugar ${n}"/>
+          <input class="input pasajero__dni" data-acomp="${id}" data-campo="dni" value="${U.esc(a.dni || "")}" placeholder="DNI" inputmode="numeric" maxlength="10" autocomplete="off" aria-label="DNI de quien ocupa el lugar ${n}"/>
+        </div>`;
+      }).join("")}
+      <p class="field__error" id="r-pasajeros-error" role="alert"></p>`;
+    avisarPasajeros();
+  };
+  // Con todos los datos escritos, se dice qué falta corregir (por ejemplo, un DNI repetido).
+  const avisarPasajeros = () => {
+    const el = U.$("#r-pasajeros-error");
+    if (!el) return;
+    const completos = listaAcompanantes().every((a) => String(a.nombre || "").trim() && String(a.dni || "").trim());
+    el.textContent = completos ? errorAcompanantes() || "" : "";
+  };
+  U.$("#r-pasajeros").addEventListener("input", (e) => {
+    const el = e.target.closest("[data-acomp]");
+    if (!el) return;
+    acompanantes.set(el.dataset.acomp, { ...(acompanantes.get(el.dataset.acomp) || {}), [el.dataset.campo]: el.value });
+    avisarPasajeros(); refreshSummary();
+  });
+
   const cargar = async () => {
     [ocupacion, mios] = await Promise.all([D.ocupacionPorTurno(catId, fecha), D.misLugares(catId, fecha)]);
-    pintarTurnos(); pintarMios(); pintarAsientos(); refreshSummary();
+    pintarTurnos(); pintarMios(); pintarAsientos(); pintarPasajeros(); refreshSummary();
   };
   await cargar();
 
@@ -708,13 +753,13 @@ export async function viewReserva(ctx) {
     if (seleccion.has(id)) seleccion.delete(id); else seleccion.add(id);
     btn.classList.toggle("seat--selected", seleccion.has(id));
     btn.setAttribute("aria-pressed", String(seleccion.has(id)));
-    refreshSummary();
+    pintarPasajeros(); refreshSummary();
   });
 
   const cambiarTurno = async (t) => {
     if (t === turno) return;
     turno = t; seleccion.clear();
-    pintarTurnos(); pintarMios(); pintarAsientos(); refreshSummary();
+    pintarTurnos(); pintarMios(); pintarAsientos(); pintarPasajeros(); refreshSummary();
   };
   U.$("#r-turno").addEventListener("click", (e) => { const b = e.target.closest("[data-turno]"); if (b) cambiarTurno(b.dataset.turno); });
   U.$("#r-mios").addEventListener("click", (e) => { const b = e.target.closest("[data-ir-turno]"); if (b) cambiarTurno(b.dataset.irTurno); });
@@ -772,6 +817,8 @@ export async function viewReserva(ctx) {
   const labelBtn = `${U.icon("credit-card", { size: 20 })} Pagar y confirmar`;
   confirmBtn.addEventListener("click", async () => {
     if (!seleccion.size) return;
+    const errorPasajeros = seleccion.size > 1 ? errorAcompanantes() : null;
+    if (errorPasajeros) { U.toast(errorPasajeros, "err"); U.$("#r-pasajeros input")?.focus(); return; }
     if (modoPermiso === "propio" && !permisoValido) { await verificar(); if (!permisoValido) return; }
     const montoPermiso = modoPermiso === "comprar" ? Number(tarifas[tipoActual()] || 0) : 0;
     const monto = seleccion.size * cat.precio + montoPermiso;
@@ -782,7 +829,8 @@ export async function viewReserva(ctx) {
     try {
       const res = await D.crearReserva({
         catamaranId: catId, fecha, turno,
-        lugares: [...seleccion],
+        lugares: lugaresOrdenados(),
+        acompanantes: listaAcompanantes(),
         metodo,
         tipoPermiso: tipoActual(),
         especieId: U.$("#r-especie").value,
@@ -929,6 +977,7 @@ function textoComprobante(c) {
     `Catamarán: ${c.catamaran}`,
     `Salida: ${U.fmtDate(c.fecha)} · turno ${U.turnoLabel(c.turno).toLowerCase()}`,
     `Lugares: ${c.lugares.map((n) => `${n} (${D.ubicacionLugar(n, c.capacidad || c.lugares.length)})`).join(", ")}`,
+    c.acompanantes?.length ? `Acompañantes: ${c.acompanantes.map((a) => `${a.nombre} (lugar ${a.lugar})`).join(", ")}` : "",
     c.permiso ? `Permiso de pesca: ${c.permiso.numero} (${U.tipoPermisoLabel(c.permiso.tipo).toLowerCase()})` : "",
     c.pago ? `Pago: ${c.pago.comprobante} · ${U.metodoPagoLabel(c.pago.metodo)} · ${U.fmtMoney(c.monto_total)}` : "",
     CFG.MUNICIPIO || "Municipio de Coronel Moldes",
@@ -993,6 +1042,7 @@ export async function viewComprobante(ctx) {
     active: null, rol: p.rol,
     topbarHtml: topbar({ title: "Comprobante", back: !nuevo, bell: false }),
     bodyHtml: `
+      ${nuevo ? `<div id="invitar-push"></div>` : ""}
       ${nuevo ? `<div class="exito">
         <span class="exito__ic">${U.icon("check", { size: 34, stroke: 3 })}</span>
         <h2>¡Listo! Tu reserva está confirmada</h2>
@@ -1009,6 +1059,8 @@ export async function viewComprobante(ctx) {
           ${fila("Titular", U.esc(c.titular?.nombre || "—"))}
           <div class="permit__row permit__row--col"><span>Lugares</span>
             <div class="chips">${c.lugares.map((n) => `<span class="chip chip--lugar"><b>${n}</b> ${U.esc(D.ubicacionLugar(n, c.capacidad || c.lugares.length))}</span>`).join("")}</div></div>
+          ${c.acompanantes?.length ? `<div class="permit__row permit__row--col"><span>Acompañantes</span>
+            <div class="pasajeros-lista">${c.acompanantes.map((a) => `<div><b>${a.lugar}</b><span>${U.esc(a.nombre)}</span><small>DNI ${U.esc(a.dni)}</small></div>`).join("")}</div></div>` : ""}
         </div>
       </section>
 
@@ -1045,6 +1097,7 @@ export async function viewComprobante(ctx) {
     `,
   }));
   wireChrome(ctx);
+  if (nuevo) invitarAvisos(U.$("#invitar-push"));
   U.$("[data-print]").addEventListener("click", () => window.print());
   U.$("[data-share]").addEventListener("click", () => U.compartir({
     titulo: `Reserva ${c.numero}`, texto: textoComprobante(c),
@@ -1245,6 +1298,7 @@ export async function viewPerfil(ctx) {
           <span><b>Recordatorios de salida</b><br><small class="muted">Aviso el día previo y el día de tu reserva.</small></span>
           <input type="checkbox" id="pf-recordatorios" ${D.prefRecordatorios() ? "checked" : ""} style="width:22px;height:22px;accent-color:var(--blue-600)"/>
         </label>
+        <div id="pf-push"></div>
       </div>
 
       <h2 class="section-title mt-24">Cuenta</h2>
@@ -1266,6 +1320,7 @@ export async function viewPerfil(ctx) {
   }));
   wireChrome(ctx);
 
+  if (!isAdmin(p.rol)) panelAvisosTelefono(U.$("#pf-push"));
   U.$("#f-perfil").addEventListener("submit", async (e) => {
     e.preventDefault();
     const obligatorios = [["#pf-nombre", "nombre"], ["#pf-apellido", "apellido"], ["#pf-dni", "DNI"]];
@@ -1293,6 +1348,47 @@ export async function viewPerfil(ctx) {
     await D.resetDemo(); U.toast("Datos de demo restaurados", "ok"); ctx.go("/login");
   });
   U.$("[data-logout]")?.addEventListener("click", () => salir(ctx));
+}
+
+/* ============================================================================
+ *  AVISOS AL TELÉFONO (Web Push): activar o desactivar en este dispositivo
+ * ========================================================================== */
+const TEXTO_PUSH = {
+  activo: "Activados en este teléfono: te llegan los avisos de tus salidas, del municipio y los recordatorios, aunque la aplicación esté cerrada.",
+  inactivo: "Recibí en el teléfono los avisos de tus salidas (por ejemplo, si se suspende o está por zarpar), del municipio y los recordatorios, aunque la aplicación esté cerrada.",
+  bloqueado: "Las notificaciones de este sitio están bloqueadas. Habilitalas en la configuración del navegador para recibir los avisos.",
+  instalar: "En iPhone, primero agregá PescaCorral a la pantalla de inicio (Compartir › Agregar a inicio) y abrila desde ahí para activar los avisos.",
+};
+
+async function panelAvisosTelefono(box) {
+  if (!box) return;
+  const estado = await D.estadoPush();
+  if (estado === "no-disponible") { box.innerHTML = ""; return; }
+  box.innerHTML = `<div class="push-panel">
+    <span><b>Avisos en el teléfono</b><small class="muted d-block">${U.esc(TEXTO_PUSH[estado])}</small></span>
+    ${estado === "activo" ? `<button type="button" class="btn btn--soft btn--sm" data-push="off">Desactivar</button>`
+      : estado === "inactivo" ? `<button type="button" class="btn btn--primary btn--sm" data-push="on">${U.icon("bell", { size: 16 })} Activar</button>` : ""}
+  </div>`;
+  U.$("[data-push]", box)?.addEventListener("click", async (e) => {
+    const b = e.currentTarget; b.disabled = true;
+    try {
+      if (b.dataset.push === "on") { await D.activarPush(); U.toast("Avisos activados en este teléfono", "ok"); }
+      else { await D.desactivarPush(); U.toast("Avisos desactivados en este teléfono", "ok"); }
+    } catch (err) { U.toast(err.message, "err"); }
+    panelAvisosTelefono(box);
+  });
+}
+
+/* Después de reservar: si el teléfono admite avisos y no están activados, se ofrecen. */
+async function invitarAvisos(box) {
+  if (!box || await D.estadoPush() !== "inactivo") return;
+  box.innerHTML = `<div class="nota nota--agua" style="margin-bottom:14px">${U.icon("bell", { size: 18 })}
+    <span>Activá los avisos en el teléfono para enterarte al instante si tu salida se suspende o está por zarpar.</span>
+    <button type="button" class="btn btn--primary btn--sm" data-push="on">Activar</button></div>`;
+  U.$("[data-push]", box).addEventListener("click", async () => {
+    try { await D.activarPush(); box.innerHTML = ""; U.toast("Avisos activados en este teléfono", "ok"); }
+    catch (err) { U.toast(err.message, "err"); }
+  });
 }
 
 /* ============================================================================
@@ -1845,6 +1941,10 @@ export async function viewGestion(ctx) {
 function estadoCatLabel(e) { return ({ activa: "Activa", inactiva: "Inactiva", mantenimiento: "Mantenimiento" }[e] || e); }
 function byIdMap(arr) { const m = {}; arr.forEach((x) => (m[x.id] = x)); return m; }
 
+/* Crédito de las fotos de ejemplo de la demostración (licencia CC BY 3.0). */
+const creditoFotos = (cats) => (cats.some((c) => (c.fotos || []).some(D.esFotoDemo))
+  ? `<p class="credito-fotos">${U.esc(D.CREDITO_FOTOS_DEMO)}</p>` : "");
+
 /* Foto de portada del catamarán (o el ícono, si no tiene fotos). */
 function portada(c, size = 46) {
   const f = (c.fotos || [])[0];
@@ -1947,6 +2047,7 @@ function flotaCatamaranes(ctx, propios, reservas) {
   const html = propios.length ? `
     <div class="section-title">Tus catamaranes <button class="btn btn--cta btn--sm" data-nuevo>${U.icon("plus", { size: 16 })} Nuevo</button></div>
     ${propios.map((c) => tarjetaCatamaran(c, futuras(c.id))).join("")}
+    ${creditoFotos(propios)}
     <p class="muted center mt-12" style="font-size:.8rem">${U.icon("info", { size: 14 })} Los pescadores ven tus catamaranes activos al reservar, con su descripción, sus lugares y su precio.</p>`
     : `${emptyState("Todavía no cargaste tu catamarán", "Registralo con su descripción, la cantidad de lugares y el precio por lugar para empezar a recibir reservas.", "boat")}
        <button class="btn btn--cta btn--block" data-nuevo>${U.icon("plus", { size: 18 })} Cargar mi catamarán</button>`;
@@ -2053,7 +2154,7 @@ function avisoSalidaModal(ctx, s) {
       </div>
       <div class="field"><label for="av-titulo">Título</label><input class="input" id="av-titulo" maxlength="80"/></div>
       <div class="field"><label for="av-mensaje">Mensaje</label><textarea class="input" id="av-mensaje" maxlength="500" rows="4"></textarea></div>
-      <p class="field__hint">${U.icon("shield", { size: 13 })} Le llega a ${personas} persona${personas === 1 ? "" : "s"} con reserva confirmada en esta salida, en la campanita de la aplicación. No ves sus datos.</p>`,
+      <p class="field__hint">${U.icon("shield", { size: 13 })} Le llega a ${personas} persona${personas === 1 ? "" : "s"} con reserva confirmada en esta salida, en la campanita de la aplicación y, a quienes activaron los avisos, también en el teléfono. No ves sus datos.</p>`,
     actions: [
       { label: "Cancelar", variant: "btn--soft" },
       {
@@ -2090,8 +2191,8 @@ export async function viewEmbarque(ctx) {
   const cat = (await D.listCatamaranes()).find((c) => c.id === catId);
   let filas = [], error = "";
   try { filas = cat ? await D.listaEmbarque(catId, fecha, turno) : []; } catch (e) { error = e.message; }
-  const lugares = filas.reduce((n, f) => n + Number(f.cantidad_lugares || 0), 0);
-  const acompanantes = lugares - filas.length;
+  const reservas = new Set(filas.map((f) => f.numero)).size;
+  const sinRegistrar = filas.filter((f) => !f.pasajero).length;
   const fila = (k, v) => `<div class="permit__row"><span>${U.esc(k)}</span><b>${v}</b></div>`;
 
   U.mount(appShell({
@@ -2105,33 +2206,33 @@ export async function viewEmbarque(ctx) {
           ${cat.habilitacion ? fila("Habilitación", U.esc(cat.habilitacion)) : ""}
           ${fila("Salida", `${U.esc(U.fmtDateLong(fecha))} · turno ${U.esc(U.turnoLabel(turno).toLowerCase())}`)}
           ${fila("Responsable", U.esc(`${p.nombre} ${p.apellido || ""}`.trim()))}
-          ${fila("Pasajeros", `${lugares} lugar${lugares === 1 ? "" : "es"} · ${filas.length} reserva${filas.length === 1 ? "" : "s"}`)}
+          ${fila("Pasajeros", `${filas.length} lugar${filas.length === 1 ? "" : "es"} · ${reservas} reserva${reservas === 1 ? "" : "s"}`)}
         </div>
         ${error ? `<div class="nota nota--error" style="margin:0 18px 16px">${U.icon("alert-triangle", { size: 18 })}<span>${U.esc(error)}</span></div>` : filas.length ? `
         <table class="table embarque__tabla">
-          <thead><tr><th>Lugar</th><th>Titular</th><th>DNI</th></tr></thead>
+          <thead><tr><th>Lugar</th><th>Pasajero</th><th>DNI</th></tr></thead>
           <tbody>${filas.map((f) => `<tr>
-            <td>${U.esc((f.lugares || []).join(", "))}</td>
-            <td><b>${U.esc(`${f.apellido || ""}, ${f.nombre || ""}`.replace(/^, /, ""))}</b>
-              <small class="muted d-block">${U.esc(f.numero)}${f.cantidad_lugares > 1 ? ` · y ${f.cantidad_lugares - 1} acompañante${f.cantidad_lugares > 2 ? "s" : ""}` : ""}</small></td>
+            <td>${f.lugar}</td>
+            <td>${f.pasajero ? `<b>${U.esc(f.pasajero)}</b>` : `<span class="muted">Acompañante sin registrar</span>`}
+              <small class="muted d-block">${f.titular ? "Titular" : "Acompañante"} · ${U.esc(f.numero)}</small></td>
             <td>${U.esc(f.dni || "—")}</td>
           </tr>`).join("")}</tbody>
         </table>
         <p class="embarque__firma">Firma del responsable: ______________________________</p>` : `<p class="muted center" style="padding:0 18px 18px">No hay reservas para esta salida.</p>`}
       </section>
-      ${acompanantes > 0 ? `<p class="muted center mt-12" style="font-size:.8rem">${U.icon("info", { size: 14 })} Figura el titular de cada reserva. Los ${acompanantes} acompañante${acompanantes === 1 ? "" : "s"} de las reservas con más de un lugar no están registrados en la aplicación: anotalos al embarcar.</p>` : ""}
+      ${sinRegistrar > 0 ? `<p class="muted center mt-12" style="font-size:.8rem">${U.icon("info", { size: 14 })} ${sinRegistrar} lugar${sinRegistrar === 1 ? "" : "es"} de reservas hechas antes de que se pidieran los acompañantes: anotá su nombre y DNI al embarcar.</p>` : ""}
       ${filas.length ? `<div class="stack mt-16">
         <button class="btn btn--primary btn--block" data-print>${U.icon("download", { size: 18 })} Imprimir o guardar en PDF</button>
         <button class="btn btn--soft btn--block" data-csv>${U.icon("file-text", { size: 18 })} Descargar CSV (Excel)</button>
       </div>` : ""}
-      <p class="muted center mt-12" style="font-size:.8rem">${U.icon("shield", { size: 14 })} Sólo ves el nombre y el DNI de los titulares de tus salidas. El correo, el teléfono, el pago y el permiso sólo los ven el pasajero y el Municipio.</p>`,
+      <p class="muted center mt-12" style="font-size:.8rem">${U.icon("shield", { size: 14 })} Sólo ves el nombre y el DNI de los pasajeros de tus salidas. El correo, el teléfono, el pago y el permiso sólo los ven el pasajero y el Municipio.</p>`,
   }));
   wireChrome(ctx);
   U.$("[data-print]")?.addEventListener("click", () => window.print());
   U.$("[data-csv]")?.addEventListener("click", () => {
     U.downloadText(`embarque-${(cat.nombre || "salida").replace(/\s+/g, "-").toLowerCase()}-${fecha}-${turno}.csv`, U.toCSV(
-      filas.map((f) => ({ lugares: (f.lugares || []).join(" "), apellido: f.apellido, nombre: f.nombre, dni: f.dni, reserva: f.numero, cantidad: f.cantidad_lugares })),
-      [{ key: "lugares", label: "Lugares" }, { key: "apellido", label: "Apellido" }, { key: "nombre", label: "Nombre" }, { key: "dni", label: "DNI" }, { key: "reserva", label: "Reserva" }, { key: "cantidad", label: "Cantidad de lugares" }]));
+      filas.map((f) => ({ lugar: f.lugar, pasajero: f.pasajero || "(sin registrar)", dni: f.dni || "", tipo: f.titular ? "Titular" : "Acompañante", reserva: f.numero })),
+      [{ key: "lugar", label: "Lugar" }, { key: "pasajero", label: "Pasajero" }, { key: "dni", label: "DNI" }, { key: "tipo", label: "Tipo" }, { key: "reserva", label: "Reserva" }]));
     U.toast("CSV descargado", "ok");
   });
 }

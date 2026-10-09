@@ -26,4 +26,8 @@ window.PESCACORRAL_CONFIG = {
   // Acceso del personal (/Municipio y /Admin): el usuario "municipio" se traduce
   // a municipio@<DOMINIO_PERSONAL>. Es un dominio reservado que no recibe correos.
   DOMINIO_PERSONAL: "pescacorral.example.com",
+
+  // Avisos al teléfono (Web Push): clave pública VAPID. Es pública por diseño; la
+  // privada se guarda sólo como secreto de la función enviar-push en Supabase.
+  VAPID_PUBLIC_KEY: "BAok_z3hQQlO-z7iPAhoGzuQN9SFWeQhSrT_KVB4hWkMTVooV7Y6-eWnLN-prz4gD5Ias4qDpcTOkO6DNDUt0lI",
 };

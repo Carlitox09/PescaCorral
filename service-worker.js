@@ -6,10 +6,12 @@
  *   - Recursos propios (css/js/icons/vendor): network-first revalidando con el
  *     servidor, para que un cambio publicado se vea en la próxima carga; la copia
  *     en caché sólo se usa sin conexión.
- *   - Recursos externos (fotos de perfil de Google): stale-while-revalidate.
+ *   - Recursos externos (fotos de perfil de Google y fotos de los catamaranes
+ *     en Supabase Storage): stale-while-revalidate, así se ven sin conexión.
  *   - Llamadas a Supabase (/auth, /rest, /realtime): siempre a la red (no se cachean).
+ *  Además recibe los avisos al teléfono (Web Push) y abre la aplicación al tocarlos.
  * ========================================================================== */
-const VERSION = "pescacorral-v1.14.0";
+const VERSION = "pescacorral-v1.15.0";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -56,8 +58,10 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
 
-  // No interceptar llamadas a la API de Supabase (auth / datos en tiempo real).
-  if (/supabase\.(co|in)$/.test(url.hostname) || url.hostname.includes("supabase")) {
+  // No interceptar llamadas a la API de Supabase (auth / datos en tiempo real),
+  // salvo las fotos públicas de los catamaranes (Storage), que se guardan.
+  const esSupabase = /supabase\.(co|in)$/.test(url.hostname) || url.hostname.includes("supabase");
+  if (esSupabase && !url.pathname.startsWith("/storage/v1/object/public/")) {
     return;
   }
 
@@ -104,4 +108,31 @@ self.addEventListener("fetch", (event) => {
       return cached || network;
     })
   );
+});
+
+/* ---- Avisos al teléfono (Web Push) ----------------------------------------
+ * Los manda la función enviar-push de Supabase: aviso del municipio, aviso de
+ * un dueño sobre una salida o recordatorio. Llegan aunque la app esté cerrada. */
+self.addEventListener("push", (event) => {
+  let datos = {};
+  try { datos = event.data ? event.data.json() : {}; } catch { datos = { mensaje: event.data && event.data.text() }; }
+  event.waitUntil(self.registration.showNotification(datos.titulo || "PescaCorral", {
+    body: datos.mensaje || "",
+    icon: "icons/icon-192.png",
+    badge: "icons/favicon-32.png",
+    tag: datos.etiqueta || undefined,
+    lang: "es-AR",
+    data: { ruta: datos.ruta || "#/home" },
+  }));
+});
+
+// Al tocar el aviso: se enfoca la aplicación abierta (o se abre) en la pantalla del aviso.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const destino = new URL((event.notification.data && event.notification.data.ruta) || "#/home", self.registration.scope).href;
+  event.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((ventanas) => {
+    const abierta = ventanas.find((v) => v.url.startsWith(self.registration.scope));
+    if (abierta) return abierta.focus().then((v) => (v && "navigate" in v ? v.navigate(destino) : v));
+    return self.clients.openWindow(destino);
+  }));
 });
