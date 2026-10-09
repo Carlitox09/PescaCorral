@@ -696,7 +696,7 @@ export async function viewReserva(ctx) {
         <span class="pasajero__lugar" title="Lugar ${n}">${n}</span>
         <span class="grow">${i
           ? `<b>Acompañante ${i}</b><small class="muted d-block">Lugar ${n} · ${U.esc(D.ubicacionLugar(n, lugares.length))}</small>`
-          : `<b>${U.esc(titularNombre)}</b><small class="muted d-block">Vos, titular · DNI ${U.esc(p.dni || "—")} · lugar ${n}</small>`}</span>
+          : `<b>${U.esc(titularNombre)}</b><small class="muted d-block">Vos, titular · DNI ${U.esc(p.dni || "—")}</small>`}</span>
         <b class="pasajero-card__monto" data-monto="${i}"></b>
       </div>
       ${i ? `<div class="pasajero-card__datos">

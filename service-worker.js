@@ -11,7 +11,7 @@
  *   - Llamadas a Supabase (/auth, /rest, /realtime): siempre a la red (no se cachean).
  *  Además recibe los avisos al teléfono (Web Push) y abre la aplicación al tocarlos.
  * ========================================================================== */
-const VERSION = "pescacorral-v1.16.0";
+const VERSION = "pescacorral-v1.16.1";
 const APP_SHELL = [
   "./",
   "./index.html",
