@@ -1992,11 +1992,11 @@ function flotaFinanzas(ctx, propios, reservas, gastosLeidos) {
   const html = `
     <div class="filters">
       <input class="input" type="month" id="fi-mes" value="${periodo}" max="${mesActual}" aria-label="Mes"/>
-      ${propios.length > 1 ? `<select class="select" id="fi-cat" aria-label="Catamarán">
-        <option value="">Toda la flota</option>
-        ${propios.map((c) => `<option value="${c.id}"${c.id === catSel ? " selected" : ""}>${U.esc(c.nombre)}</option>`).join("")}
-      </select>` : ""}
     </div>
+    ${propios.length > 1 ? `<select class="select" id="fi-cat" aria-label="Catamarán" style="margin:-6px 0 16px">
+      <option value="">Toda la flota</option>
+      ${propios.map((c) => `<option value="${c.id}"${c.id === catSel ? " selected" : ""}>${U.esc(c.nombre)}</option>`).join("")}
+    </select>` : ""}
 
     ${gastosLeidos ? "" : `<div class="nota nota--error" style="margin-bottom:12px">${U.icon("alert-triangle", { size: 18 })}<span>No se pudieron cargar tus gastos: el resultado muestra sólo los ingresos. Volvé a intentar con conexión.</span></div>`}
     <section class="resultado resultado--${gan ? "pos" : "neg"}" aria-live="polite">
