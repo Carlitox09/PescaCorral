@@ -35,6 +35,7 @@ drop view  if exists public.v_lugares_ocupados       cascade;
 drop table if exists public.intento_acceso cascade;
 drop table if exists public.personal_autorizado cascade;
 drop table if exists public.aviso          cascade;
+drop table if exists public.gasto          cascade;
 drop table if exists public.alerta_fauna   cascade;
 drop table if exists public.tarifa_permiso cascade;
 drop table if exists public.notificacion   cascade;
@@ -124,13 +125,15 @@ comment on column public.catamaran.precio is 'Precio por lugar (asiento) de la e
 
 -- ---------------------------------------------------------------------------
 -- LUGAR  (asiento físico dentro de un catamarán)
+--   Los crea crear_catamaran y los ajusta cambiar_capacidad: al quitar lugares,
+--   los que ya tuvieron reservas quedan fuera de servicio (conservan el historial).
 -- ---------------------------------------------------------------------------
 create table public.lugar (
     id            uuid primary key default gen_random_uuid(),
     id_catamaran  uuid not null references public.catamaran (id) on delete cascade,
     numero        integer not null check (numero > 0),
     ubicacion     text,                          -- lugar en el plano, p. ej. 'estribor · centro' (ver ubicacion_lugar)
-    activo        boolean not null default true, -- false = asiento fuera de servicio
+    activo        boolean not null default true, -- false = asiento fuera de servicio (se quitó del catamarán)
     created_at    timestamptz not null default now(),
     unique (id_catamaran, numero)
 );
@@ -312,6 +315,26 @@ create table public.alerta_fauna (
                           check (estado in ('activa','resuelta')),
     created_at        timestamptz not null default now()
 );
+
+-- ---------------------------------------------------------------------------
+-- GASTO  (HU-003 · finanzas del dueño de catamarán)
+--   Gastos que registra el dueño para conocer el resultado de su actividad:
+--   ingresos por lugares vendidos menos gastos, por mes y por catamarán. Sin
+--   catamarán es un gasto general de la flota. Son privados: sólo los ve y los
+--   modifica su dueño.
+-- ---------------------------------------------------------------------------
+create table public.gasto (
+    id              uuid primary key default gen_random_uuid(),
+    id_propietario  uuid not null default auth.uid() references public.usuario (id) on delete cascade,
+    id_catamaran    uuid references public.catamaran (id) on delete set null,
+    fecha           date not null,
+    categoria       text not null
+                        check (categoria in ('combustible','mantenimiento','personal','seguro','amarre','impuestos','otros')),
+    descripcion     text check (char_length(descripcion) <= 120),
+    monto           numeric(12,2) not null check (monto > 0),
+    created_at      timestamptz not null default now()
+);
+create index idx_gasto_propietario on public.gasto (id_propietario, fecha);
 
 -- ---------------------------------------------------------------------------
 -- PERSONAL_AUTORIZADO  (altas autorizadas de cuentas del personal)
@@ -723,6 +746,9 @@ begin
                where l.id is null or l.id_catamaran <> p_id_catamaran) then
         raise exception 'Los lugares elegidos no pertenecen a ese catamarán';
     end if;
+    if exists (select 1 from public.lugar where id = any (p_lugares) and not activo) then
+        raise exception 'Uno de los lugares ya no está disponible en ese catamarán. Actualizá el plano';
+    end if;
 
     -- Permiso: el que ya tiene el pescador (se valida) o uno nuevo (se cobra la tarifa).
     if v_nuevo then
@@ -844,6 +870,121 @@ begin
 end;
 $$;
 
+-- ----------------------------------------------------------------------------
+-- crear_catamaran (HU-003): alta de una embarcación con todos sus lugares, en
+-- una sola operación. El dueño la registra a su nombre; la administración, sin
+-- dueño asignado. Devuelve el id del catamarán.
+-- ----------------------------------------------------------------------------
+create or replace function public.crear_catamaran(
+    p_nombre       text,
+    p_descripcion  text,
+    p_capacidad    integer,
+    p_precio       numeric,
+    p_habilitacion text,
+    p_estado       text default 'activa'
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_uid uuid := public.exigir_cuenta_activa();
+    v_rol text := public.rol_actual();
+    v_id  uuid;
+begin
+    if v_rol not in ('dueno', 'admin_municipal', 'admin_sistema') then
+        raise exception 'Solo un dueño de catamarán o la administración pueden dar de alta catamaranes';
+    end if;
+    if char_length(trim(coalesce(p_nombre, ''))) not between 1 and 60 then
+        raise exception 'Ingresá el nombre del catamarán (hasta 60 caracteres)';
+    end if;
+    if char_length(coalesce(p_descripcion, '')) > 300 then
+        raise exception 'La descripción puede tener hasta 300 caracteres';
+    end if;
+    if p_capacidad is null or p_capacidad not between 1 and 60 then
+        raise exception 'La cantidad de lugares debe ser un número entero entre 1 y 60';
+    end if;
+    if p_precio is null or p_precio < 0 then
+        raise exception 'Ingresá un precio por lugar válido';
+    end if;
+    if trim(coalesce(p_habilitacion, '')) = '' then
+        raise exception 'Ingresá el número de habilitación municipal';
+    end if;
+    if coalesce(p_estado, '') not in ('activa', 'inactiva', 'mantenimiento') then
+        raise exception 'Estado inválido';
+    end if;
+
+    insert into public.catamaran (id_propietario, nombre, descripcion, capacidad, precio, habilitacion, estado)
+    values (case when v_rol = 'dueno' then v_uid end, trim(p_nombre),
+            nullif(trim(coalesce(p_descripcion, '')), ''), p_capacidad, p_precio, trim(p_habilitacion), p_estado)
+    returning id into v_id;
+
+    insert into public.lugar (id_catamaran, numero, ubicacion)
+    select v_id, n, public.ubicacion_lugar(n, p_capacidad)
+    from generate_series(1, p_capacidad) as n;
+    return v_id;
+end;
+$$;
+
+-- ----------------------------------------------------------------------------
+-- cambiar_capacidad (HU-003): cambia la cantidad de lugares de un catamarán.
+--   Al sumar, crea (o vuelve a habilitar) los lugares que faltan. Al quitar, no
+--   permite sacar lugares con reservas desde hoy; los que nunca se reservaron se
+--   borran y los que tienen historial quedan fuera de servicio. En los dos casos
+--   se recalcula la ubicación de cada lugar en el plano.
+-- ----------------------------------------------------------------------------
+create or replace function public.cambiar_capacidad(p_id_catamaran uuid, p_capacidad integer)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_uid    uuid := public.exigir_cuenta_activa();
+    v_hoy    date := (now() at time zone 'America/Argentina/Salta')::date;
+    v_prop   uuid;
+    v_actual integer;
+    v_ocupados text;
+begin
+    select id_propietario, capacidad into v_prop, v_actual
+    from public.catamaran where id = p_id_catamaran for update;
+    if not found then
+        raise exception 'El catamarán no existe';
+    end if;
+    if not (public.es_admin() or (v_prop is not distinct from v_uid and public.rol_actual() = 'dueno')) then
+        raise exception 'No autorizado para modificar este catamarán';
+    end if;
+    if p_capacidad is null or p_capacidad not between 1 and 60 then
+        raise exception 'La cantidad de lugares debe ser un número entero entre 1 y 60';
+    end if;
+    if p_capacidad = v_actual then
+        return;
+    end if;
+
+    select string_agg(numero::text, ', ' order by numero) into v_ocupados
+    from (select distinct l.numero
+          from public.lugar l
+          join public.reserva_lugar rl on rl.id_lugar = l.id
+          where l.id_catamaran = p_id_catamaran and l.numero > p_capacidad
+            and rl.estado = 'confirmada' and rl.fecha >= v_hoy) q;
+    if v_ocupados is not null then
+        raise exception 'Hay reservas desde hoy en lugares que se quitarían (%). Elegí una cantidad mayor o esperá a que pasen esas salidas', v_ocupados;
+    end if;
+
+    delete from public.lugar l
+    where l.id_catamaran = p_id_catamaran and l.numero > p_capacidad
+      and not exists (select 1 from public.reserva_lugar rl where rl.id_lugar = l.id);
+    update public.lugar set activo = (numero <= p_capacidad) where id_catamaran = p_id_catamaran;
+    insert into public.lugar (id_catamaran, numero)
+    select p_id_catamaran, n from generate_series(1, p_capacidad) as n
+    where not exists (select 1 from public.lugar where id_catamaran = p_id_catamaran and numero = n);
+    update public.lugar set ubicacion = public.ubicacion_lugar(numero, p_capacidad)
+    where id_catamaran = p_id_catamaran and activo;
+    update public.catamaran set capacidad = p_capacidad where id = p_id_catamaran;
+end;
+$$;
+
 -- ============================================================================
 -- 4. VISTAS DE REPORTE  (alimentan el Panel Municipal y la pantalla de Reportes)
 -- ============================================================================
@@ -922,6 +1063,7 @@ alter table public.notificacion   enable row level security;
 alter table public.alerta_fauna   enable row level security;
 alter table public.tarifa_permiso enable row level security;
 alter table public.aviso          enable row level security;
+alter table public.gasto          enable row level security;
 alter table public.personal_autorizado enable row level security;   -- sin políticas ni privilegios: sólo SQL Editor (sección 6)
 
 -- ----- USUARIO --------------------------------------------------------------
@@ -941,30 +1083,25 @@ create policy especie_admin on public.especie
 -- Lectura pública (permite explorar disponibilidad).
 create policy catamaran_select on public.catamaran
     for select using (true);
--- El dueño administra sus embarcaciones; el admin, todas.
-create policy catamaran_insert on public.catamaran
-    for insert with check (
-        public.es_admin()
-        or (public.rol_actual() = 'dueno' and id_propietario = auth.uid())
-    );
+-- El dueño administra sus embarcaciones; el admin, todas. El alta y la cantidad
+-- de lugares van por crear_catamaran y cambiar_capacidad (crean los lugares).
 create policy catamaran_update on public.catamaran
-    for update using (id_propietario = auth.uid() or public.es_admin());
+    for update using (public.es_admin() or (id_propietario = auth.uid() and public.rol_actual() = 'dueno'));
 create policy catamaran_delete on public.catamaran
-    for delete using (id_propietario = auth.uid() or public.es_admin());
+    for delete using (public.es_admin() or (id_propietario = auth.uid() and public.rol_actual() = 'dueno'));
 
--- ----- LUGAR ----------------------------------------------------------------
+-- ----- LUGAR  (lectura pública; se escriben sólo con las funciones) ----------
 create policy lugar_select on public.lugar
     for select using (true);
-create policy lugar_admin on public.lugar
-    for all using (
-        public.es_admin()
-        or exists (select 1 from public.catamaran c
-                   where c.id = lugar.id_catamaran and c.id_propietario = auth.uid())
-    )
+
+-- ----- GASTO  (privados: sólo su dueño, y en sus propios catamaranes) --------
+create policy gasto_dueno on public.gasto
+    for all using (id_propietario = auth.uid() and public.rol_actual() = 'dueno')
     with check (
-        public.es_admin()
-        or exists (select 1 from public.catamaran c
-                   where c.id = lugar.id_catamaran and c.id_propietario = auth.uid())
+        id_propietario = auth.uid() and public.rol_actual() = 'dueno'
+        and (id_catamaran is null
+             or exists (select 1 from public.catamaran c
+                        where c.id = gasto.id_catamaran and c.id_propietario = auth.uid()))
     );
 
 -- ----- RESERVA --------------------------------------------------------------
@@ -1046,9 +1183,11 @@ revoke insert, update, delete on public.reserva, public.reserva_lugar, public.pe
 -- Notificaciones: sólo marcarlas como leídas.
 revoke insert, update, delete on public.notificacion from authenticated;
 grant  update (leida) on public.notificacion to authenticated;
--- Catamarán: la capacidad (que define los asientos) y el propietario no se cambian.
-revoke update on public.catamaran from authenticated;
+-- Catamarán: el alta y la capacidad (que define los lugares) van por
+-- crear_catamaran y cambiar_capacidad; el propietario no se cambia.
+revoke insert, update on public.catamaran from authenticated;
 grant  update (nombre, descripcion, precio, habilitacion, estado) on public.catamaran to authenticated;
+revoke insert, update, delete on public.lugar from authenticated;
 
 -- ============================================================================
 -- 7. (OPCIONAL) Realtime: descomentar para recibir cambios en vivo en la app.
@@ -1456,6 +1595,8 @@ grant execute on function
     public.crear_reserva_completa(uuid, date, text, uuid[], text, text, uuid, text, text),
     public.validar_permiso(text, date),
     public.anular_reserva(uuid),
+    public.crear_catamaran(text, text, integer, numeric, text, text),
+    public.cambiar_capacidad(uuid, integer),
     public.generar_reporte_municipal(text, text),
     public.generar_recordatorios(boolean),
     public.publicar_aviso(text, text, text, uuid),

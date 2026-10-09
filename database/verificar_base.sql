@@ -14,7 +14,7 @@
 -- ============================================================================
 with
 esperado_tabla(n) as (values
-    ('alerta_fauna'), ('aviso'), ('catamaran'), ('especie'), ('lugar'), ('notificacion'), ('pago'),
+    ('alerta_fauna'), ('aviso'), ('catamaran'), ('especie'), ('gasto'), ('lugar'), ('notificacion'), ('pago'),
     ('permiso'), ('personal_autorizado'), ('reporte'), ('reserva'), ('reserva_lugar'),
     ('tarifa_permiso'), ('usuario')),
 esperado_vista(n) as (values
@@ -22,17 +22,18 @@ esperado_vista(n) as (values
     ('v_permisos_por_especie'), ('v_reservas_por_dia')),
 esperado_funcion(n, args) as (values
     ('actualizar_alerta_fauna', 0), ('actualizar_estados', 0), ('anular_reserva', 1),
-    ('cambiar_clave_personal', 2), ('cerrar_sesiones_desactivada', 0), ('clave_segura', 1),
-    ('crear_cuenta_personal', 5), ('crear_reserva_completa', 9), ('es_admin', 0),
+    ('cambiar_capacidad', 2), ('cambiar_clave_personal', 2), ('cerrar_sesiones_desactivada', 0),
+    ('clave_segura', 1), ('crear_catamaran', 6), ('crear_cuenta_personal', 5),
+    ('crear_reserva_completa', 9), ('es_admin', 0),
     ('exigir_cuenta_activa', 0), ('generar_numero_permiso', 0), ('publicar_aviso', 4),
     ('generar_recordatorios', 1), ('generar_reporte_municipal', 2), ('handle_new_user', 0),
     ('proteger_perfil', 0), ('rol_actual', 0), ('set_updated_at', 0),
     ('ubicacion_lugar', 2), ('validar_permiso', 2)),
 -- Funciones que pueden ejecutar los usuarios con sesión (las demás son internas).
 esperado_funcion_api(n) as (values
-    ('anular_reserva'), ('cambiar_clave_personal'), ('crear_cuenta_personal'), ('crear_reserva_completa'),
-    ('es_admin'), ('generar_recordatorios'), ('generar_reporte_municipal'), ('publicar_aviso'),
-    ('rol_actual'), ('validar_permiso')),
+    ('anular_reserva'), ('cambiar_capacidad'), ('cambiar_clave_personal'), ('crear_catamaran'),
+    ('crear_cuenta_personal'), ('crear_reserva_completa'), ('es_admin'), ('generar_recordatorios'),
+    ('generar_reporte_municipal'), ('publicar_aviso'), ('rol_actual'), ('validar_permiso')),
 esperado_disparador(t, n) as (values
     ('usuario', 'trg_usuario_updated'), ('usuario', 'trg_usuario_proteger'),
     ('usuario', 'trg_usuario_cerrar_sesiones'),
@@ -42,14 +43,13 @@ esperado_indice(n) as (values
     ('idx_reserva_usuario'), ('idx_reserva_catamaran'), ('idx_reserva_fecha'),
     ('idx_reserva_lugar_reserva'), ('idx_reserva_lugar_lugar'), ('uq_lugar_fecha_turno_activa'),
     ('uq_reserva_numero'), ('idx_permiso_usuario'), ('idx_permiso_especie'), ('idx_permiso_estado'),
-    ('idx_notificacion_usuario'), ('idx_notificacion_reserva')),
+    ('idx_notificacion_usuario'), ('idx_notificacion_reserva'), ('idx_gasto_propietario')),
 esperado_secuencia(n) as (values ('seq_numero_permiso'), ('seq_numero_reserva')),
 esperado_politica(t, n) as (values
     ('usuario', 'usuario_select_propio'), ('usuario', 'usuario_update_propio'),
     ('especie', 'especie_select'), ('especie', 'especie_admin'),
-    ('catamaran', 'catamaran_select'), ('catamaran', 'catamaran_insert'),
-    ('catamaran', 'catamaran_update'), ('catamaran', 'catamaran_delete'),
-    ('lugar', 'lugar_select'), ('lugar', 'lugar_admin'),
+    ('catamaran', 'catamaran_select'), ('catamaran', 'catamaran_update'),
+    ('catamaran', 'catamaran_delete'), ('lugar', 'lugar_select'), ('gasto', 'gasto_dueno'),
     ('reserva', 'reserva_select'), ('reserva_lugar', 'reserva_lugar_select'),
     ('permiso', 'permiso_select'), ('pago', 'pago_select'),
     ('reporte', 'reporte_admin'), ('notificacion', 'notificacion_select'),
@@ -128,15 +128,15 @@ hallazgos(tipo, objeto, detalle) as (
                or has_table_privilege('anon', r.oid, 'update') or has_table_privilege('anon', r.oid, 'delete'))
     union all select 'Escritura directa habilitada', t.n || ' · ' || p.p, 'sólo mediante las funciones de negocio'
         from (values ('reserva'), ('reserva_lugar'), ('permiso'), ('pago'), ('notificacion'),
-                     ('catamaran'), ('personal_autorizado'), ('aviso')) t(n)
+                     ('catamaran'), ('lugar'), ('personal_autorizado'), ('aviso')) t(n)
         cross join (values ('insert'), ('update'), ('delete')) p(p)
         where has_table_privilege('authenticated', 'public.' || t.n, p.p)
-          and not (t.n = 'catamaran' and p.p in ('insert', 'delete'))
+          and not (t.n = 'catamaran' and p.p = 'delete')
     union all select 'Autorizaciones legibles', 'personal_autorizado', 'revocar a authenticated'
         where has_table_privilege('authenticated', 'public.personal_autorizado', 'select')
     union all select 'Políticas de escritura', tablename || '.' || policyname, 'esa tabla se escribe sólo con funciones'
         from pg_policies where schemaname = 'public'
-          and tablename in ('reserva', 'reserva_lugar', 'permiso', 'pago', 'aviso') and cmd <> 'SELECT'
+          and tablename in ('reserva', 'reserva_lugar', 'permiso', 'pago', 'aviso', 'lugar') and cmd <> 'SELECT'
 
     -- Cuentas
     union all select 'Cuenta sin perfil', u.email, 'está en auth.users y no en usuario' from auth.users u
@@ -165,12 +165,21 @@ hallazgos(tipo, objeto, detalle) as (
         from public.reserva r join public.pago pg on pg.id_reserva = r.id where pg.monto <> r.monto_total
     union all select 'Reserva sin pago', r.numero, '' from public.reserva r
         where not exists (select 1 from public.pago pg where pg.id_reserva = r.id)
-    union all select 'Catamarán con lugares distintos de su capacidad', c.nombre, c.capacidad || ' de capacidad, ' || count(l.id) || ' lugares'
-        from public.catamaran c left join public.lugar l on l.id_catamaran = c.id
+    union all select 'Catamarán con lugares distintos de su capacidad', c.nombre, c.capacidad || ' de capacidad, ' || count(l.id) || ' lugares habilitados'
+        from public.catamaran c left join public.lugar l on l.id_catamaran = c.id and l.activo
         group by c.id, c.nombre, c.capacidad having count(l.id) <> c.capacidad
+    union all select 'Lugar habilitado fuera de la capacidad', c.nombre || ' · lugar ' || l.numero, c.capacidad || ' de capacidad'
+        from public.lugar l join public.catamaran c on c.id = l.id_catamaran
+        where l.activo and l.numero > c.capacidad
     union all select 'Ubicación de lugar distinta del plano', c.nombre || ' · lugar ' || l.numero, coalesce(l.ubicacion, '(vacía)')
         from public.lugar l join public.catamaran c on c.id = l.id_catamaran
-        where l.ubicacion is distinct from public.ubicacion_lugar(l.numero, (select count(*)::int from public.lugar x where x.id_catamaran = l.id_catamaran))
+        where l.activo and l.ubicacion is distinct from public.ubicacion_lugar(l.numero, c.capacidad)
+    union all select 'Reserva futura en un lugar fuera de servicio', c.nombre || ' · lugar ' || l.numero, to_char(rl.fecha, 'DD/MM/YYYY')
+        from public.reserva_lugar rl join public.lugar l on l.id = rl.id_lugar join public.catamaran c on c.id = l.id_catamaran
+        where not l.activo and rl.estado = 'confirmada' and rl.fecha >= (select d from hoy)
+    union all select 'Gasto en un catamarán ajeno', g.fecha::text || ' · ' || g.categoria, c.nombre
+        from public.gasto g join public.catamaran c on c.id = g.id_catamaran
+        where c.id_propietario is distinct from g.id_propietario
     union all select 'Alerta de fauna sin respaldo', e.nombre || ' · ' || a.periodo, a.permisos_emitidos || ' registrados'
         from public.alerta_fauna a join public.especie e on e.id = a.id_especie
         where a.permisos_emitidos > (select count(*) from public.permiso p

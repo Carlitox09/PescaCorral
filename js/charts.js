@@ -56,14 +56,48 @@ export function barChart(data = [], opts = {}) {
   </svg>`;
 }
 
+/* --------------------- Barras de a pares (dos series) --------------------- */
+/**
+ * Dos series por período, una al lado de la otra (por ejemplo, ingresos y
+ * gastos de cada mes), con su leyenda. Los importes van en el título de cada
+ * barra y en la descripción del gráfico; conviene acompañarlo con una tabla.
+ * @param {{label:string,a:number,b:number}[]} data
+ * @param {{height?:number, nombreA?:string, nombreB?:string, colorA?:string, colorB?:string, fmt?:(v:number)=>string}} opts
+ */
+export function barChartPar(data = [], opts = {}) {
+  const { height = 220, nombreA = "A", nombreB = "B", colorA = "#2E7D4F", colorB = "#8E1F2F", fmt = String } = opts;
+  if (!data.length) return emptyChart(height);
+  const W = Math.max(data.length * 56, 280);
+  const padX = 10, padTop = 12, padBottom = 30;
+  const innerH = height - padTop - padBottom;
+  const max = Math.max(...data.flatMap((d) => [d.a, d.b]), 1);
+  const bw = (W - padX * 2) / data.length;
+  const barW = Math.min(bw * 0.36, 30);
+  const barra = (v, x, color, nombre, label) => {
+    const h = (v / max) * innerH, y = padTop + innerH - h;
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(h, 1).toFixed(1)}" rx="5" fill="${color}" opacity="${v ? 1 : 0.25}">
+        <title>${esc(label)} · ${esc(nombre)}: ${esc(fmt(v))}</title></rect>`;
+  };
+  const grupos = data.map((d, i) => {
+    const cx = padX + bw * i + bw / 2;
+    return `<g>${barra(d.a, cx - barW - 2, colorA, nombreA, d.label)}${barra(d.b, cx + 2, colorB, nombreB, d.label)}
+      <text class="bar-label" x="${cx.toFixed(1)}" y="${(height - 12).toFixed(1)}" text-anchor="middle">${esc(d.label)}</text></g>`;
+  }).join("");
+  const resumen = data.map((d) => `${d.label}: ${nombreA} ${fmt(d.a)}, ${nombreB} ${fmt(d.b)}`).join("; ");
+  return `<svg class="chart" viewBox="0 0 ${W} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(resumen)}">
+    <line x1="${padX}" y1="${padTop + innerH}" x2="${W - padX}" y2="${padTop + innerH}" stroke="#F1E9E0" stroke-width="1"/>${grupos}
+  </svg>
+  <div class="legend legend--fila"><div><i style="background:${colorA}"></i><span>${esc(nombreA)}</span></div><div><i style="background:${colorB}"></i><span>${esc(nombreB)}</span></div></div>`;
+}
+
 /* ----------------------------- Dona / torta ------------------------------ */
 /**
  * Gráfico de dona con leyenda lateral.
  * @param {{label:string,value:number,color?:string}[]} data
- * @param {{size?:number, thickness?:number, centerLabel?:string}} opts
+ * @param {{size?:number, thickness?:number, centerTop?:string, centerSub?:string, fmt?:(v:number)=>string}} opts
  */
 export function donutChart(data = [], opts = {}) {
-  const { size = 180, thickness = 30, centerTop = "", centerSub = "" } = opts;
+  const { size = 180, thickness = 30, centerTop = "", centerSub = "", fmt = String } = opts;
   const items = data.filter((d) => d.value > 0);
   const total = items.reduce((s, d) => s + d.value, 0);
 
@@ -84,7 +118,7 @@ export function donutChart(data = [], opts = {}) {
     const seg = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}"
         stroke-width="${thickness}" stroke-dasharray="${len.toFixed(2)} ${(circ - len).toFixed(2)}"
         stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"
-        stroke-linecap="butt"><title>${esc(d.label)}: ${d.value} (${Math.round(frac * 100)}%)</title></circle>`;
+        stroke-linecap="butt"><title>${esc(d.label)}: ${esc(fmt(d.value))} (${Math.round(frac * 100)}%)</title></circle>`;
     offset += len;
     return seg;
   }).join("");
@@ -98,11 +132,11 @@ export function donutChart(data = [], opts = {}) {
     const color = d.color || CHART_COLORS[i % CHART_COLORS.length];
     const pct = Math.round((d.value / total) * 100);
     return `<div><i style="background:${color}"></i><span>${esc(d.label)}</span>
-      <b style="margin-left:auto;color:var(--text)">${d.value} · ${pct}%</b></div>`;
+      <b style="margin-left:auto;color:var(--text)">${esc(fmt(d.value))} · ${pct}%</b></div>`;
   }).join("");
 
   return `<div class="flex gap-12 items-center" style="flex-wrap:wrap;justify-content:center">
-    <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="${esc(data.map((d) => `${d.label}: ${d.value}`).join("; "))}">
+    <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="${esc(data.map((d) => `${d.label}: ${fmt(d.value)}`).join("; "))}">
       <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#F1E9E0" stroke-width="${thickness}"/>
       ${arcs}${center}
     </svg>

@@ -6,7 +6,7 @@
  * ========================================================================== */
 import * as D from "./data.js";
 import * as U from "./ui.js";
-import { barChart, donutChart, progressBar, CHART_COLORS } from "./charts.js";
+import { barChart, barChartPar, donutChart, progressBar, CHART_COLORS } from "./charts.js";
 
 const CFG = window.PESCACORRAL_CONFIG || {};
 const isAdmin = (rol) => rol === "admin_municipal" || rol === "admin_sistema";
@@ -41,23 +41,14 @@ function topbar({ title, back = false, bell = true, plain = false, unread = 0 })
 }
 
 function bottomNav(active, rol) {
-  let items;
-  if (rol === "dueno") {
-    items = [
-      ["home", "Inicio", "home", "#/home"],
-      ["catamaranes", "Catamaranes", "boat", "#/catamaranes"],
-      ["historial", "Reservas", "calendar", "#/historial"],
-      ["gestion", "Gestión", "grid", "#/gestion"],
-      ["perfil", "Perfil", "user", "#/perfil"],
-    ];
-  } else {
-    items = [
-      ["home", "Inicio", "home", "#/home"],
-      ["catamaranes", "Reservar", "boat", "#/catamaranes"],
-      ["historial", "Historial", "calendar", "#/historial"],
-      ["perfil", "Perfil", "user", "#/perfil"],
-    ];
-  }
+  // El dueño tiene todo lo del pescador (también sale a pescar) y su flota.
+  const items = [
+    ["home", "Inicio", "home", "#/home"],
+    ["catamaranes", "Reservar", "boat", "#/catamaranes"],
+    ["historial", "Historial", "calendar", "#/historial"],
+    ...(rol === "dueno" ? [["gestion", "Mi flota", "steering", "#/gestion"]] : []),
+    ["perfil", "Perfil", "user", "#/perfil"],
+  ];
   return `<nav class="bottomnav">${items.map(([key, label, ic, href]) =>
     `<a href="${href}" class="${active === key ? "active" : ""}">${U.icon(ic, { size: 22 })}<span>${label}</span></a>`
   ).join("")}</nav>`;
@@ -410,8 +401,10 @@ export async function viewHome(ctx) {
   const p = ctx.session.profile;
   const hoy = U.todayISO();
   try { await D.generarRecordatorios(); } catch (e) { console.warn(e); }
-  const [reservas, permisos, notifs, cats] = await Promise.all([
+  const dueno = p.rol === "dueno";
+  const [reservas, permisos, notifs, cats, gastos] = await Promise.all([
     D.listReservas(), D.listPermisos(), D.listNotificaciones(), D.disponibilidad(hoy, "manana"),
+    dueno ? D.listGastos().catch(() => []) : [],
   ]);
   const unread = notifs.filter((n) => !n.leida).length;
   // Sólo las salidas propias (el dueño también recibe las de sus pasajeros).
@@ -424,6 +417,10 @@ export async function viewHome(ctx) {
     ["Mis permisos", "Permisos digitales con QR", "ticket", "t2", "#/historial?tab=permisos"],
     ["Historial", "Tus reservas anteriores", "calendar", "t3", "#/historial"],
     ["Mi perfil", "Datos y configuración", "user", "t4", "#/perfil"],
+    ...(dueno ? [
+      ["Mi flota", "Catamaranes y lugares", "steering", "t3", "#/gestion"],
+      ["Finanzas", "Ganancias y pérdidas", "bar-chart", "t4", "#/gestion?tab=finanzas"],
+    ] : []),
   ];
 
   U.mount(appShell({
@@ -453,6 +450,8 @@ export async function viewHome(ctx) {
         </div>
         ${proxima.permiso_id ? `<a class="btn btn--outline btn--block mt-12" href="#/permiso/${proxima.permiso_id}">${U.icon("qr", { size: 18 })} Ver permiso digital</a>` : ""}
       </div>` : ""}
+
+      ${dueno ? panelFlota(p, cats, reservas, gastos, hoy) : ""}
 
       <h2 class="section-title mt-16">Accesos rápidos</h2>
       <div class="quickgrid">
@@ -866,8 +865,9 @@ function pagoModal({ metodo, monto, lugares, catamaran, permiso = null, montoPer
 /* Plano del catamarán visto desde arriba: proa arriba, popa abajo, estribor a
  * la derecha y babor a la izquierda. Los asientos siguen el sentido horario
  * desde la proa (ver D.posicionLugar): con 20 lugares, el 6 queda en el centro
- * del lado derecho. */
-function planoCatamaran(lugares, ocupados, seleccion, propios = new Set()) {
+ * del lado derecho. Con `lectura` (salidas del dueño) los lugares no se eligen:
+ * los ocupados se muestran como vendidos. */
+function planoCatamaran(lugares, ocupados, seleccion, propios = new Set(), { lectura = false } = {}) {
   const total = lugares.length;
   const filas = Math.ceil(total / 2);
   const zonas = { proa: [], centro: [], popa: [] };
@@ -877,10 +877,13 @@ function planoCatamaran(lugares, ocupados, seleccion, propios = new Set()) {
     const occ = ocupados.has(l.id);
     const mio = propios.has(l.id);
     const sel = seleccion.has(l.id);
-    const estado = mio ? "tu lugar" : occ ? "ocupado" : "libre";
+    const estado = mio ? "tu lugar" : occ ? (lectura ? "vendido" : "ocupado") : "libre";
+    const celda = `grid-row:${pos.fila + 1};grid-column:${pos.lado === "estribor" ? 3 : 1}`;
+    if (lectura) return `<span class="seat${occ ? " seat--vendido" : ""}" style="${celda}" role="img"
+      aria-label="Lugar ${l.numero}, ${pos.lado}, ${pos.zona}, ${estado}" title="Lugar ${l.numero} · ${estado}">${l.numero}</span>`;
     const cls = mio ? "seat seat--mio" : occ ? "seat seat--occupied" : sel ? "seat seat--selected" : "seat";
     return `<button type="button" class="${cls}" data-lugar="${l.id}" ${occ || mio ? "disabled" : `aria-pressed="${sel}"`}
-      style="grid-row:${pos.fila + 1};grid-column:${pos.lado === "estribor" ? 3 : 1}"
+      style="${celda}"
       title="Lugar ${l.numero} · ${pos.lado}, ${pos.zona}" aria-label="Lugar ${l.numero}, ${pos.lado}, ${pos.zona}, ${estado}">${mio ? U.icon("check", { size: 16, stroke: 3 }) : ""}${l.numero}</button>`;
   }).join("");
   const centro = Object.entries(zonas).filter(([, fs]) => fs.length).map(([zona, fs]) => `
@@ -1132,17 +1135,15 @@ function permitRow(label, value) {
 export async function viewHistorial(ctx) {
   const p = ctx.session.profile;
   const tab = ctx.params.tab === "permisos" ? "permisos" : "reservas";
-  const [reservas, permisos, notifs] = await Promise.all([D.listReservas(), D.listPermisos(), D.listNotificaciones()]);
+  const [todas, permisos, notifs] = await Promise.all([D.listReservas(), D.listPermisos(), D.listNotificaciones()]);
   const unread = notifs.filter((n) => !n.leida).length;
   const hoy = U.todayISO();
-  const dueno = p.rol === "dueno";
+  // Sólo las reservas propias: las de los pasajeros del dueño están en Mi flota › Salidas.
+  const reservas = todas.filter((r) => r.id_usuario === p.id);
 
   const reservasHtml = reservas.length ? reservas.map((r) => {
     const b = U.estadoReservaBadge(r.estado);
-    // El dueño también ve las reservas de pasajeros en sus catamaranes: sólo la
-    // salida y los lugares (sus datos, pago y permiso no están a su alcance).
-    const pasajero = r.id_usuario !== p.id;
-    const cancelable = !pasajero && r.estado === "confirmada" && r.fecha >= hoy;
+    const cancelable = r.estado === "confirmada" && r.fecha >= hoy;
     const lugares = r.lugares?.length
       ? `Lugar${r.lugares.length > 1 ? "es" : ""} ${r.lugares.join(", ")}`
       : `${r.cantidad_lugares} lugar${r.cantidad_lugares > 1 ? "es" : ""}`;
@@ -1150,17 +1151,17 @@ export async function viewHistorial(ctx) {
       <div class="row-item__ic">${U.icon("boat", { size: 20 })}</div>
       <div class="row-item__main">
         <h2>${U.esc(r.catamaran_nombre)}</h2>
-        ${r.numero ? `<small>${U.esc(r.numero)}${pasajero ? " · Pasajero" : ""}</small>` : ""}
+        ${r.numero ? `<small>${U.esc(r.numero)}</small>` : ""}
         <small>${U.fmtDate(r.fecha)} · ${U.turnoLabel(r.turno)} · ${lugares} · ${U.fmtMoney(r.monto_total)}</small>
       </div>
       <span class="badge ${b.cls}">${b.label}</span>
       <div class="row-item__actions">
-          <a class="btn btn--soft btn--sm" href="#/comprobante/${r.id}">${pasajero ? "Detalle" : "Comprobante"}</a>
-          ${r.permiso_id && !pasajero ? `<a class="btn btn--soft btn--sm" href="#/permiso/${r.permiso_id}">Permiso</a>` : ""}
+          <a class="btn btn--soft btn--sm" href="#/comprobante/${r.id}">Comprobante</a>
+          ${r.permiso_id ? `<a class="btn btn--soft btn--sm" href="#/permiso/${r.permiso_id}">Permiso</a>` : ""}
           ${cancelable ? `<button class="btn btn--danger btn--sm" data-anular="${r.id}">Anular</button>` : ""}
         </div>
     </div>`;
-  }).join("") : emptyState("Sin reservas todavía", dueno ? "Las reservas de tus catamaranes y las tuyas aparecerán acá." : "Cuando reserves una salida, aparecerá acá.", "calendar");
+  }).join("") : emptyState("Sin reservas todavía", p.rol === "dueno" ? "Cuando reserves una salida como pasajero, aparecerá acá. Las reservas de tus catamaranes están en Mi flota." : "Cuando reserves una salida, aparecerá acá.", "calendar");
 
   const permisosHtml = permisos.length ? permisos.map((per) => {
     const cls = per.estado === "vencido" ? "is-vencido" : per.estado === "anulado" ? "is-anulado" : "";
@@ -1174,7 +1175,7 @@ export async function viewHistorial(ctx) {
 
   U.mount(appShell({
     active: "historial", rol: p.rol,
-    topbarHtml: topbar({ title: dueno ? "Reservas" : "Historial", bell: true, unread }),
+    topbarHtml: topbar({ title: "Historial", bell: true, unread }),
     bodyHtml: `
       <div class="tabs">
         <button class="${tab === "reservas" ? "active" : ""}" data-tab="reservas">Reservas</button>
@@ -1231,7 +1232,7 @@ export async function viewPerfil(ctx) {
         </form>
       </div>
 
-      ${(p.rol === "dueno") ? `<a class="btn btn--outline btn--block mt-12" href="#/gestion">${U.icon("boat", { size: 18 })} Gestionar mis catamaranes</a>` : ""}
+      ${(p.rol === "dueno") ? `<a class="btn btn--outline btn--block mt-12" href="#/gestion">${U.icon("steering", { size: 18 })} Ir a Mi flota</a>` : ""}
       ${isAdmin(p.rol) ? `<a class="btn btn--outline btn--block mt-12" href="#/admin">${U.icon("grid", { size: 18 })} Ir al panel municipal</a>` : ""}
 
       <h2 class="section-title mt-24">Notificaciones</h2>
@@ -1774,37 +1775,15 @@ function claveModal(ctx, userId, usuario) {
  * ========================================================================== */
 export async function viewGestion(ctx) {
   const p = ctx.session.profile;
-  const admin = isAdmin(p.rol);
+  if (!isAdmin(p.rol)) return viewFlota(ctx);
   const cats = await D.listCatamaranes();
-  const propios = admin ? cats : cats.filter((c) => c.id_propietario === p.id);
-
-  const list = propios.length ? propios.map((c) => `
-    <div class="boat" style="margin-bottom:12px">
-      <div class="boat__img">${U.icon("boat", { size: 46, stroke: 1.6 })}</div>
-      <div class="boat__main">
-        <h2>${U.esc(c.nombre)}</h2>
-        <div class="boat__meta">${U.icon("users", { size: 13 })} ${c.capacidad} lugares · ${U.fmtMoney(c.precio)}/lugar</div>
-        <span class="badge ${c.estado === "activa" ? "badge--ok" : c.estado === "mantenimiento" ? "badge--warn" : "badge--muted"}" style="margin-top:6px">${estadoCatLabel(c.estado)}</span>
-      </div>
-      <button class="btn btn--soft btn--sm" data-edit="${c.id}">${U.icon("edit", { size: 16 })} Editar</button>
-    </div>`).join("") : emptyState("Sin catamaranes", "Agregá tu primer catamarán para empezar a recibir reservas.", "boat");
-
-  const headerActions = `<button class="btn btn--cta btn--sm" data-nuevo>${U.icon("plus", { size: 16 })} Nuevo</button>`;
-
-  if (admin) {
-    U.mount(adminLayout({ active: "gestion", title: "Catamaranes", subtitle: `${propios.length} embarcaciones`, actions: headerActions, body: `<div class="panel">${list}</div>` }, ctx));
-    wireAdmin(ctx);
-  } else {
-    const notifs = await D.listNotificaciones();
-    const unread = notifs.filter((n) => !n.leida).length;
-    U.mount(appShell({
-      active: "gestion", rol: p.rol,
-      topbarHtml: topbar({ title: "Mis catamaranes", bell: true, unread }),
-      bodyHtml: `<div class="section-title">Embarcaciones ${headerActions}</div>${list}`,
-    }));
-    wireChrome(ctx);
-  }
-
+  const list = cats.length ? cats.map((c) => tarjetaCatamaran(c)).join("") : emptyState("Sin catamaranes", "Agregá el primer catamarán.", "boat");
+  U.mount(adminLayout({
+    active: "gestion", title: "Catamaranes", subtitle: `${cats.length} embarcaciones`,
+    actions: `<button class="btn btn--cta btn--sm" data-nuevo>${U.icon("plus", { size: 16 })} Nuevo</button>`,
+    body: `<div class="panel">${list}</div>`,
+  }, ctx));
+  wireAdmin(ctx);
   const cb = byIdMap(cats);
   U.$("[data-nuevo]")?.addEventListener("click", () => catamaranModal(ctx, null));
   U.$$("[data-edit]").forEach((b) => b.addEventListener("click", () => catamaranModal(ctx, cb[b.dataset.edit])));
@@ -1813,24 +1792,353 @@ export async function viewGestion(ctx) {
 function estadoCatLabel(e) { return ({ activa: "Activa", inactiva: "Inactiva", mantenimiento: "Mantenimiento" }[e] || e); }
 function byIdMap(arr) { const m = {}; arr.forEach((x) => (m[x.id] = x)); return m; }
 
-function catamaranModal(ctx, cat) {
+function tarjetaCatamaran(c, futuras = null) {
+  return `<div class="boat boat--gestion" style="margin-bottom:12px">
+    <div class="boat__img">${U.icon("boat", { size: 46, stroke: 1.6 })}</div>
+    <div class="boat__main">
+      <h2>${U.esc(c.nombre)}</h2>
+      <div class="boat__meta">${U.icon("users", { size: 13 })} ${c.capacidad} lugares · ${U.fmtMoney(c.precio)}/lugar${c.habilitacion ? " · Hab. " + U.esc(c.habilitacion) : ""}</div>
+      ${c.descripcion ? `<p class="boat__desc">${U.esc(c.descripcion)}</p>` : ""}
+      <div class="flex gap-8 items-center" style="flex-wrap:wrap;margin-top:6px">
+        <span class="badge ${c.estado === "activa" ? "badge--ok" : c.estado === "mantenimiento" ? "badge--warn" : "badge--muted"}">${estadoCatLabel(c.estado)}</span>
+        ${futuras !== null ? `<small class="muted" style="font-weight:600">${futuras ? `${futuras} reserva${futuras > 1 ? "s" : ""} desde hoy` : "Sin reservas próximas"}</small>` : ""}
+      </div>
+    </div>
+    <button class="btn btn--soft btn--sm" data-edit="${c.id}">${U.icon("edit", { size: 16 })} Editar</button>
+  </div>`;
+}
+
+/* ============================================================================
+ *  MI FLOTA (dueño de catamarán, HU-003): catamaranes, salidas y finanzas
+ * ========================================================================== */
+const TABS_FLOTA = [["catamaranes", "Catamaranes"], ["salidas", "Salidas"], ["finanzas", "Finanzas"]];
+
+/* Inicio del dueño: resumen de su flota. */
+function panelFlota(p, cats, reservas, gastos, hoy) {
+  const propios = cats.filter((c) => c.id_propietario === p.id);
+  if (!propios.length) return `
+    <h2 class="section-title">Mi flota</h2>
+    <div class="card card--flat flota-vacia">
+      <span class="flota-vacia__ic">${U.icon("steering", { size: 26 })}</span>
+      <div><b>Cargá tu catamarán</b><p class="muted">Registralo con su descripción, la cantidad de lugares y el precio por lugar para empezar a recibir reservas.</p></div>
+      <a class="btn btn--cta btn--block" href="#/gestion?nuevo=1">${U.icon("plus", { size: 18 })} Cargar mi catamarán</a>
+    </div>`;
+  const periodo = hoy.slice(0, 7);
+  const f = D.finanzasDueno({ reservas, gastos, catamaranes: propios, periodo });
+  const salidas = D.salidasDeFlota(reservas, propios).filter((s) => s.fecha >= hoy);
+  const vendidosHoy = salidas.filter((s) => s.fecha === hoy).reduce((n, s) => n + s.lugares, 0);
+  const plazasHoy = propios.filter((c) => c.estado === "activa").reduce((n, c) => n + Number(c.capacidad) * 2, 0);
+  return `
+    <h2 class="section-title">Mi flota <a class="muted-link" href="#/gestion">Ver todo</a></h2>
+    <div class="stats">
+      ${stat("Lugares vendidos hoy", `${vendidosHoy}/${plazasHoy}`, "Mañana y tarde")}
+      ${stat(`Ingresos de ${U.fmtMes(periodo).split(" ")[0]}`, U.fmtMoney(f.ingresos), `${f.lugares} lugar${f.lugares === 1 ? "" : "es"}`)}
+      ${stat("Resultado del mes", U.fmtMoney(f.resultado), f.resultado >= 0 ? "Ganancia" : "Pérdida", f.resultado >= 0 ? "pos" : "neg")}
+    </div>
+    ${salidas.length ? `<div class="card card--flat mt-12">
+      <h3 class="card__titulo">Próximas salidas</h3>
+      ${salidas.slice(0, 3).map(salidaFila).join("")}
+      ${salidas.length > 3 ? `<a class="muted-link mt-8" style="display:inline-block" href="#/gestion?tab=salidas">Ver las ${salidas.length} salidas</a>` : ""}
+    </div>` : `<p class="muted mt-8" style="font-size:.86rem">Todavía no hay reservas próximas en tus catamaranes.</p>`}`;
+}
+
+function stat(label, valor, sub = "", tono = "") {
+  return `<div class="stat${tono ? " stat--" + tono : ""}"><small>${U.esc(label)}</small><b>${valor}</b>${sub ? `<span>${U.esc(sub)}</span>` : ""}</div>`;
+}
+
+const salidaFila = (s) => `<a class="salida-fila" href="#/gestion?tab=salidas">
+  <span class="salida-fila__fecha">${U.esc(U.fmtDateShort(s.fecha))}</span>
+  <span class="grow"><b>${U.esc(s.catamaran.nombre)}</b><small>Turno ${U.turnoLabel(s.turno).toLowerCase()} · ${s.reservas.length} reserva${s.reservas.length > 1 ? "s" : ""}</small></span>
+  <span class="badge ${badgeOcupacion(s)}">${s.lugares}/${s.capacidad}</span></a>`;
+
+const badgeOcupacion = (s) => (s.lugares >= s.capacidad ? "badge--danger" : s.lugares / s.capacidad >= 0.7 ? "badge--warn" : "badge--ok");
+
+async function viewFlota(ctx) {
+  const p = ctx.session.profile;
+  const tab = TABS_FLOTA.some(([k]) => k === ctx.params.tab) ? ctx.params.tab : "catamaranes";
+  const [cats, reservas, gastos, notifs] = await Promise.all([
+    D.listCatamaranes(), D.listReservas(), D.listGastos().catch((e) => { console.warn(e); return null; }), D.listNotificaciones(),
+  ]);
+  const unread = notifs.filter((n) => !n.leida).length;
+  const propios = cats.filter((c) => c.id_propietario === p.id);
+  const vista = tab === "salidas" ? flotaSalidas(ctx, propios, reservas)
+    : tab === "finanzas" ? flotaFinanzas(ctx, propios, reservas, gastos)
+    : flotaCatamaranes(ctx, propios, reservas);
+
+  U.mount(appShell({
+    active: "gestion", rol: p.rol,
+    topbarHtml: topbar({ title: "Mi flota", bell: true, unread }),
+    bodyHtml: `
+      <div class="tabs" role="tablist" aria-label="Mi flota">
+        ${TABS_FLOTA.map(([k, label]) => `<button role="tab" aria-selected="${k === tab}" class="${k === tab ? "active" : ""}" data-tab="${k}">${label}</button>`).join("")}
+      </div>
+      ${vista.html}`,
+  }));
+  wireChrome(ctx);
+  U.$$("[data-tab]").forEach((b) => b.addEventListener("click", () => ctx.go(b.dataset.tab === "catamaranes" ? "/gestion" : `/gestion?tab=${b.dataset.tab}`)));
+  vista.wire();
+}
+
+/* ---- Catamaranes: alta y edición ---- */
+function flotaCatamaranes(ctx, propios, reservas) {
+  const hoy = U.todayISO();
+  const futuras = (id) => reservas.filter((r) => r.id_catamaran === id && r.estado === "confirmada" && r.fecha >= hoy).length;
+  const html = propios.length ? `
+    <div class="section-title">Tus catamaranes <button class="btn btn--cta btn--sm" data-nuevo>${U.icon("plus", { size: 16 })} Nuevo</button></div>
+    ${propios.map((c) => tarjetaCatamaran(c, futuras(c.id))).join("")}
+    <p class="muted center mt-12" style="font-size:.8rem">${U.icon("info", { size: 14 })} Los pescadores ven tus catamaranes activos al reservar, con su descripción, sus lugares y su precio.</p>`
+    : `${emptyState("Todavía no cargaste tu catamarán", "Registralo con su descripción, la cantidad de lugares y el precio por lugar para empezar a recibir reservas.", "boat")}
+       <button class="btn btn--cta btn--block" data-nuevo>${U.icon("plus", { size: 18 })} Cargar mi catamarán</button>`;
+  return {
+    html,
+    wire: () => {
+      const cb = byIdMap(propios);
+      U.$$("[data-nuevo]").forEach((b) => b.addEventListener("click", () => catamaranModal(ctx, null)));
+      U.$$("[data-edit]").forEach((b) => b.addEventListener("click", () => catamaranModal(ctx, cb[b.dataset.edit], futuras(b.dataset.edit))));
+      // Desde el inicio ("Cargar mi catamarán") se abre el alta directamente.
+      if (ctx.params.nuevo === "1") { history.replaceState(null, "", "#/gestion"); catamaranModal(ctx, null); }
+    },
+  };
+}
+
+/* ---- Salidas: ocupación de cada fecha y turno ---- */
+function flotaSalidas(ctx, propios, reservas) {
+  const hoy = U.todayISO();
+  const anteriores = ctx.params.ver === "anteriores";
+  const catSel = propios.some((c) => c.id === ctx.params.cat) ? ctx.params.cat : "";
+  const flota = catSel ? propios.filter((c) => c.id === catSel) : propios;
+  let salidas = D.salidasDeFlota(reservas, flota).filter((s) => (anteriores ? s.fecha < hoy : s.fecha >= hoy));
+  if (anteriores) salidas = salidas.reverse().slice(0, 30);
+  const filtroUrl = (ver, cat) => `/gestion?tab=salidas${ver ? "&ver=anteriores" : ""}${cat ? "&cat=" + cat : ""}`;
+
+  const lista = salidas.map((s) => `
+    <details class="salida card card--flat" data-salida="${U.esc(s.clave)}">
+      <summary>
+        <span class="grow">
+          <b>${U.esc(U.fmtDateLong(s.fecha))}</b>
+          <small>Turno ${U.turnoLabel(s.turno).toLowerCase()} · ${U.esc(s.catamaran.nombre)}</small>
+        </span>
+        <span class="badge ${badgeOcupacion(s)}">${s.lugares}/${s.capacidad}</span>
+      </summary>
+      ${progressBar(s.lugares, s.capacidad)}
+      <div class="flex between mt-8 salida__datos"><span>${s.reservas.length} reserva${s.reservas.length > 1 ? "s" : ""} · ${s.lugares} lugar${s.lugares > 1 ? "es" : ""} vendido${s.lugares > 1 ? "s" : ""}</span><b>${U.fmtMoney(s.ingresos)}</b></div>
+      <div class="salida__detalle"></div>
+    </details>`).join("");
+
+  const html = `
+    <div class="segmented" role="radiogroup" aria-label="Salidas">
+      <button type="button" role="radio" aria-checked="${!anteriores}" class="${anteriores ? "" : "is-on"}" data-ver="">Próximas</button>
+      <button type="button" role="radio" aria-checked="${anteriores}" class="${anteriores ? "is-on" : ""}" data-ver="anteriores">Anteriores</button>
+    </div>
+    ${propios.length > 1 ? `<select class="select mt-12" id="sa-cat" aria-label="Catamarán">
+      <option value="">Todos tus catamaranes</option>
+      ${propios.map((c) => `<option value="${c.id}"${c.id === catSel ? " selected" : ""}>${U.esc(c.nombre)}</option>`).join("")}
+    </select>` : ""}
+    <div class="mt-12">${lista || emptyState(anteriores ? "Sin salidas anteriores" : "Sin reservas próximas", propios.length ? "Las salidas aparecen acá cuando los pescadores reservan lugares en tus catamaranes." : "Primero cargá tu catamarán en la pestaña Catamaranes.", "calendar")}</div>
+    ${salidas.length ? `<p class="muted center mt-12" style="font-size:.8rem">${U.icon("shield", { size: 14 })} Los datos personales, el pago y el permiso de cada pasajero sólo los ven el pasajero y el Municipio. Al embarcar, pedile su permiso digital.</p>` : ""}`;
+
+  return {
+    html,
+    wire: () => {
+      U.$$("[data-ver]").forEach((b) => b.addEventListener("click", () => ctx.go(filtroUrl(b.dataset.ver, catSel))));
+      U.$("#sa-cat")?.addEventListener("change", (e) => ctx.go(filtroUrl(anteriores, e.target.value)));
+      // Al abrir una salida: plano con los lugares vendidos y sus reservas. Los
+      // lugares habilitados van del 1 a la capacidad (cambiar_capacidad), así que
+      // el plano se arma sin consultar la base y se ve también sin conexión.
+      const porClave = new Map(salidas.map((s) => [s.clave, s]));
+      U.$$("details.salida").forEach((det) => det.addEventListener("toggle", () => {
+        const box = U.$(".salida__detalle", det);
+        if (!det.open || box.dataset.listo) return;
+        box.dataset.listo = "1";
+        const s = porClave.get(det.dataset.salida);
+        const lugares = Array.from({ length: s.capacidad }, (_, i) => ({ id: String(i + 1), numero: i + 1 }));
+        const vendidos = new Set(s.reservas.flatMap((r) => r.lugares || []).map(String));
+        box.innerHTML = `${planoCatamaran(lugares, vendidos, new Set(), new Set(), { lectura: true })}
+          <div class="seat-legend"><span><i class="lg-free"></i>Libre</span><span><i class="lg-vendido"></i>Vendido</span></div>
+          <div class="mt-12">${s.reservas.map((r) => `<div class="row-item">
+            <div class="row-item__ic">${U.icon("ticket", { size: 18 })}</div>
+            <div class="row-item__main"><h2>${U.esc(r.numero || "Reserva")}${r.id_usuario === ctx.session.profile.id ? " · Tuya" : ""}</h2>
+              <small>Lugar${(r.lugares || []).length > 1 ? "es" : ""} ${U.esc((r.lugares || []).join(", ") || String(r.cantidad_lugares))} · ${U.fmtMoney(D.ingresoReserva(r))}</small></div>
+            <a class="btn btn--soft btn--sm" href="#/comprobante/${r.id}">Detalle</a>
+          </div>`).join("")}</div>`;
+      }));
+    },
+  };
+}
+
+/* ---- Finanzas: ganancias y pérdidas del mes ---- */
+const ICONO_GASTO = { combustible: "wallet", mantenimiento: "settings", personal: "users", seguro: "shield", amarre: "map-pin", impuestos: "file-text", otros: "receipt" };
+
+function flotaFinanzas(ctx, propios, reservas, gastosLeidos) {
+  const gastos = gastosLeidos || [];   // null: no se pudieron leer (se avisa)
+  const mesActual = U.todayISO().slice(0, 7);
+  const periodo = /^\d{4}-\d{2}$/.test(ctx.params.mes || "") && ctx.params.mes <= mesActual ? ctx.params.mes : mesActual;
+  const catSel = propios.some((c) => c.id === ctx.params.cat) ? ctx.params.cat : "";
+  const f = D.finanzasDueno({ reservas, gastos, catamaranes: propios, periodo, catId: catSel });
+  const gan = f.resultado >= 0;
+  const margen = f.ingresos ? Math.round((f.resultado / f.ingresos) * 100) : null;
+  const nombreCat = (id) => propios.find((c) => c.id === id)?.nombre || "General de la flota";
+  const categorias = Object.entries(f.porCategoria).sort((a, b) => b[1] - a[1])
+    .map(([k, v], i) => ({ label: D.CATEGORIAS_GASTO[k] || k, value: v, color: CHART_COLORS[i % CHART_COLORS.length] }));
+  const filtroUrl = (mes, cat) => `/gestion?tab=finanzas&mes=${mes}${cat ? "&cat=" + cat : ""}`;
+  const fila = (nombre, ing, gas) => `<div class="fin-fila"><span>${U.esc(nombre)}</span><span>${U.fmtMoney(ing)}</span><span>${U.fmtMoney(gas)}</span><b class="${ing - gas >= 0 ? "pos" : "neg"}">${U.fmtMoney(ing - gas)}</b></div>`;
+
+  if (!propios.length) return {
+    html: `${emptyState("Sin catamaranes", "Cargá tu catamarán para llevar sus ingresos y gastos.", "bar-chart")}
+      <a class="btn btn--cta btn--block" href="#/gestion?nuevo=1">${U.icon("plus", { size: 18 })} Cargar mi catamarán</a>`,
+    wire: () => {},
+  };
+
+  const html = `
+    <div class="filters">
+      <input class="input" type="month" id="fi-mes" value="${periodo}" max="${mesActual}" aria-label="Mes"/>
+      ${propios.length > 1 ? `<select class="select" id="fi-cat" aria-label="Catamarán">
+        <option value="">Toda la flota</option>
+        ${propios.map((c) => `<option value="${c.id}"${c.id === catSel ? " selected" : ""}>${U.esc(c.nombre)}</option>`).join("")}
+      </select>` : ""}
+    </div>
+
+    ${gastosLeidos ? "" : `<div class="nota nota--error" style="margin-bottom:12px">${U.icon("alert-triangle", { size: 18 })}<span>No se pudieron cargar tus gastos: el resultado muestra sólo los ingresos. Volvé a intentar con conexión.</span></div>`}
+    <section class="resultado resultado--${gan ? "pos" : "neg"}" aria-live="polite">
+      <small>Resultado de ${U.esc(U.fmtMes(periodo))}${catSel ? " · " + U.esc(nombreCat(catSel)) : ""}</small>
+      <b>${U.fmtMoney(f.resultado)}</b>
+      <span>${gan ? "Ganancia" : "Pérdida"}${margen !== null ? ` · margen ${margen} %` : ""}</span>
+    </section>
+    <div class="stats mt-12">
+      ${stat("Ingresos", U.fmtMoney(f.ingresos), `${f.lugares} lugar${f.lugares === 1 ? "" : "es"} en ${f.salidas} salida${f.salidas === 1 ? "" : "s"}`, "pos")}
+      ${stat("Gastos", U.fmtMoney(f.gastos), `${f.gastosDelMes.length} registrado${f.gastosDelMes.length === 1 ? "" : "s"}`, "neg")}
+      ${stat("Ocupación", `${f.ocupacion} %`, "Promedio por salida")}
+    </div>
+
+    <div class="card card--flat mt-16">
+      <h2 class="card__titulo">Ingresos y gastos · últimos 6 meses</h2>
+      ${barChartPar(f.serie.map((m) => ({ label: U.fmtMes(m.periodo, true), a: m.ingresos, b: m.gastos })), { nombreA: "Ingresos", nombreB: "Gastos", fmt: U.fmtMoney, height: 170 })}
+      <div class="fin-tabla mt-12">
+        <div class="fin-fila fin-fila--head"><span>Mes</span><span>Ingresos</span><span>Gastos</span><span>Resultado</span></div>
+        ${f.serie.slice().reverse().map((m) => fila(U.fmtMes(m.periodo).replace(" de ", " "), m.ingresos, m.gastos)).join("")}
+      </div>
+    </div>
+
+    <div class="card card--flat mt-12">
+      <h2 class="card__titulo">Gastos por categoría</h2>
+      <div class="dona-apilada">${donutChart(categorias, { size: 150, thickness: 26, fmt: U.fmtMoney })}</div>
+    </div>
+
+    ${!catSel && propios.length ? `<div class="card card--flat mt-12">
+      <h2 class="card__titulo">Por catamarán</h2>
+      <div class="fin-tabla">
+        <div class="fin-fila fin-fila--head"><span>Catamarán</span><span>Ingresos</span><span>Gastos</span><span>Resultado</span></div>
+        ${f.porCatamaran.map((c) => fila(c.nombre, c.ingresos, c.gastos)).join("")}
+        ${f.generales ? fila("Gastos generales", 0, f.generales) : ""}
+      </div>
+    </div>` : ""}
+
+    <h2 class="section-title mt-24">Gastos de ${U.esc(U.fmtMes(periodo).split(" ")[0])} <button class="btn btn--cta btn--sm" data-gasto-nuevo>${U.icon("plus", { size: 16 })} Registrar</button></h2>
+    ${f.gastosDelMes.length ? f.gastosDelMes.map((g) => `<div class="row-item row-item--wrap">
+      <div class="row-item__ic">${U.icon(ICONO_GASTO[g.categoria] || "receipt", { size: 18 })}</div>
+      <div class="row-item__main">
+        <h3>${U.esc(D.CATEGORIAS_GASTO[g.categoria] || g.categoria)}</h3>
+        <small>${g.descripcion ? U.esc(g.descripcion) + " · " : ""}${U.esc(nombreCat(g.id_catamaran))} · ${U.fmtDate(g.fecha)}</small>
+      </div>
+      <b class="neg">${U.fmtMoney(g.monto)}</b>
+      <div class="row-item__actions">
+        <button class="btn btn--soft btn--sm" data-gasto-editar="${g.id}">${U.icon("edit", { size: 15 })} Editar</button>
+        <button class="btn btn--danger btn--sm" data-gasto-borrar="${g.id}">Eliminar</button>
+      </div>
+    </div>`).join("") : `<p class="muted" style="font-size:.88rem">No registraste gastos en este mes. Cargá el combustible, el mantenimiento, los sueldos y los demás gastos para conocer tu resultado real.</p>`}
+
+    <button class="btn btn--soft btn--block mt-16" data-csv>${U.icon("download", { size: 18 })} Descargar el mes en CSV (Excel)</button>
+    <p class="muted center mt-12" style="font-size:.78rem">Ingresos: lugares vendidos en reservas confirmadas o realizadas, según la fecha de la salida. El permiso de pesca se cobra para el Municipio y no se suma. El pago es simulado en este prototipo.</p>`;
+
+  return {
+    html,
+    wire: () => {
+      const ir = () => ctx.go(filtroUrl(U.$("#fi-mes").value || periodo, U.$("#fi-cat")?.value || ""));
+      U.$("#fi-mes").addEventListener("change", ir);
+      U.$("#fi-cat")?.addEventListener("change", ir);
+      const porId = byIdMap(f.gastosDelMes);
+      U.$("[data-gasto-nuevo]").addEventListener("click", () => gastoModal(ctx, propios, null, catSel));
+      U.$$("[data-gasto-editar]").forEach((b) => b.addEventListener("click", () => gastoModal(ctx, propios, porId[b.dataset.gastoEditar])));
+      U.$$("[data-gasto-borrar]").forEach((b) => b.addEventListener("click", async () => {
+        const g = porId[b.dataset.gastoBorrar];
+        const ok = await U.confirmDialog({ title: "Eliminar gasto", message: `Se elimina el gasto de ${D.CATEGORIAS_GASTO[g.categoria] || g.categoria} por ${U.fmtMoney(g.monto)} del ${U.fmtDate(g.fecha)}. ¿Confirmás?`, okLabel: "Eliminar" });
+        if (!ok) return;
+        try { await D.eliminarGasto(g.id); U.toast("Gasto eliminado", "ok"); ctx.rerender(); }
+        catch (err) { U.toast(err.message, "err"); }
+      }));
+      U.$("[data-csv]").addEventListener("click", () => {
+        const filas = [
+          ...f.reservas.map((r) => ({ fecha: U.fmtDate(r.fecha), tipo: "Ingreso", concepto: `Reserva ${r.numero || ""} · ${r.cantidad_lugares} lugar(es) · turno ${U.turnoLabel(r.turno).toLowerCase()}`, catamaran: nombreCat(r.id_catamaran), monto: D.ingresoReserva(r) })),
+          ...f.gastosDelMes.map((g) => ({ fecha: U.fmtDate(g.fecha), tipo: "Gasto", concepto: `${D.CATEGORIAS_GASTO[g.categoria] || g.categoria}${g.descripcion ? " · " + g.descripcion : ""}`, catamaran: nombreCat(g.id_catamaran), monto: -Number(g.monto) })),
+        ];
+        filas.push({ fecha: "", tipo: "Resultado", concepto: gan ? "Ganancia" : "Pérdida", catamaran: catSel ? nombreCat(catSel) : "Toda la flota", monto: f.resultado });
+        U.downloadText(`finanzas-${periodo}.csv`, U.toCSV(filas, [
+          { key: "fecha", label: "Fecha" }, { key: "tipo", label: "Tipo" }, { key: "concepto", label: "Concepto" },
+          { key: "catamaran", label: "Catamarán" }, { key: "monto", label: "Monto" },
+        ]));
+        U.toast("CSV descargado", "ok");
+      });
+    },
+  };
+}
+
+function gastoModal(ctx, propios, gasto, catInicial = "") {
+  const edit = Boolean(gasto);
+  const catActual = edit ? gasto.id_catamaran || "" : catInicial;
+  U.modal({
+    title: edit ? "Editar gasto" : "Registrar gasto",
+    body: `
+      <div class="flex gap-12">
+        <div class="field grow"><label for="g-fecha">Fecha</label><input class="input" type="date" id="g-fecha" value="${U.esc(gasto?.fecha || U.todayISO())}"/></div>
+        <div class="field grow"><label for="g-monto">Monto</label><input class="input" type="number" id="g-monto" min="1" step="1" inputmode="numeric" value="${gasto ? Number(gasto.monto) : ""}" placeholder="45000"/></div>
+      </div>
+      <div class="field"><label for="g-cat">Categoría</label>
+        <select class="select" id="g-cat">${Object.entries(D.CATEGORIAS_GASTO).map(([k, v]) => `<option value="${k}"${gasto?.categoria === k ? " selected" : ""}>${U.esc(v)}</option>`).join("")}</select></div>
+      <div class="field"><label for="g-barco">Catamarán</label>
+        <select class="select" id="g-barco">
+          <option value="">General de la flota</option>
+          ${propios.map((c) => `<option value="${c.id}"${c.id === catActual ? " selected" : ""}>${U.esc(c.nombre)}</option>`).join("")}
+        </select></div>
+      <div class="field"><label for="g-desc">Descripción (opcional)</label><input class="input" id="g-desc" maxlength="120" value="${U.esc(gasto?.descripcion || "")}" placeholder="Nafta para la semana"/></div>`,
+    actions: [
+      { label: "Cancelar", variant: "btn--soft" },
+      {
+        label: edit ? "Guardar" : "Registrar", variant: "btn--primary", close: false,
+        onClick: async () => {
+          try {
+            await D.guardarGasto({
+              id: gasto?.id || null, idCatamaran: U.$("#g-barco").value || null, fecha: U.$("#g-fecha").value,
+              categoria: U.$("#g-cat").value, descripcion: U.$("#g-desc").value, monto: U.$("#g-monto").value,
+            });
+            U.closeModal(); U.toast(edit ? "Gasto actualizado" : "Gasto registrado", "ok"); ctx.rerender();
+          } catch (err) { U.toast(err.message, "err"); }
+          return false;
+        },
+      },
+    ],
+  });
+}
+
+function catamaranModal(ctx, cat, futuras = 0) {
   const edit = Boolean(cat);
   U.modal({
     title: edit ? "Editar catamarán" : "Nuevo catamarán",
     body: `
-      <div class="field"><label for="c-nombre">Nombre</label><input class="input" id="c-nombre" value="${U.esc(cat?.nombre || "")}" placeholder="Don Juan II"/></div>
-      <div class="field"><label for="c-desc">Descripción</label><input class="input" id="c-desc" value="${U.esc(cat?.descripcion || "")}" placeholder="Catamarán techado…"/></div>
+      <div class="field"><label for="c-nombre">Nombre</label><input class="input" id="c-nombre" maxlength="60" value="${U.esc(cat?.nombre || "")}" placeholder="Don Juan II"/></div>
+      <div class="field"><label for="c-desc">Descripción</label><textarea class="input" id="c-desc" maxlength="300" rows="3" placeholder="Catamarán techado, con baño y sombra. Equipo de pesca incluido.">${U.esc(cat?.descripcion || "")}</textarea>
+        <div class="field__hint">La ven los pescadores al elegir dónde reservar.</div></div>
       <div class="flex gap-12">
-        <div class="field grow"><label for="c-cap">Capacidad</label><input class="input" id="c-cap" type="number" min="1" value="${cat?.capacidad || 12}" ${edit ? "disabled" : ""}/></div>
-        <div class="field grow"><label for="c-precio">Precio / lugar</label><input class="input" id="c-precio" type="number" min="0" value="${cat?.precio || 8000}"/></div>
+        <div class="field grow"><label for="c-cap">Cantidad de lugares</label><input class="input" id="c-cap" type="number" min="1" max="60" inputmode="numeric" value="${cat?.capacidad || 12}"/></div>
+        <div class="field grow"><label for="c-precio">Precio por lugar</label><input class="input" id="c-precio" type="number" min="0" inputmode="numeric" value="${cat?.precio ?? 8000}"/></div>
       </div>
-      <div class="field"><label for="c-hab">N° de habilitación</label><input class="input" id="c-hab" value="${U.esc(cat?.habilitacion || "")}" placeholder="HAB-2024-000"/></div>
+      ${edit ? `<p class="field__hint" style="margin:-6px 0 14px">Si cambiás la cantidad de lugares se rehace el plano. No se pueden quitar lugares que tengan reservas desde hoy.</p>` : ""}
+      <div class="field"><label for="c-hab">N° de habilitación municipal</label><input class="input" id="c-hab" value="${U.esc(cat?.habilitacion || "")}" placeholder="HAB-2024-000"/></div>
       <div class="field"><label for="c-estado">Estado</label>
         <select class="select" id="c-estado">
           ${["activa", "mantenimiento", "inactiva"].map((e) => `<option value="${e}"${cat?.estado === e ? " selected" : ""}>${estadoCatLabel(e)}</option>`).join("")}
         </select>
+        <div class="field__hint">${futuras ? `Tiene ${futuras} reserva${futuras > 1 ? "s" : ""} desde hoy: si lo pasás a mantenimiento o inactivo, esas reservas se mantienen y no se reciben nuevas.` : "En mantenimiento o inactivo no recibe reservas."}</div>
       </div>
-      ${edit ? `<p class="field__hint">La capacidad no se puede cambiar porque define los asientos ya creados.</p>` : ""}
     `,
     actions: [
       { label: "Cancelar", variant: "btn--soft" },
@@ -1847,14 +2155,20 @@ function catamaranModal(ctx, cat) {
           // HU-003 · criterio 1: formulario incompleto o con datos inválidos.
           const capacidad = Number(U.$("#c-cap").value);
           if (!data.nombre) { U.toast("Ingresá el nombre del catamarán.", "err"); return false; }
-          if (!edit && !(Number.isInteger(capacidad) && capacidad >= 1 && capacidad <= 60)) { U.toast("La capacidad debe ser un número entero entre 1 y 60.", "err"); return false; }
+          if (!(Number.isInteger(capacidad) && capacidad >= 1 && capacidad <= 60)) { U.toast("La cantidad de lugares debe ser un número entero entre 1 y 60.", "err"); return false; }
           if (!(data.precio >= 0) || U.$("#c-precio").value === "") { U.toast("Ingresá un precio por lugar válido.", "err"); return false; }
           if (!data.habilitacion) { U.toast("Ingresá el número de habilitación municipal.", "err"); return false; }
           try {
-            if (edit) await D.updateCatamaran(cat.id, data);
-            else await D.crearCatamaran({ ...data, capacidad });
+            if (edit) {
+              // Primero la cantidad de lugares: si no se puede, no se guarda nada.
+              if (capacidad !== Number(cat.capacidad)) await D.cambiarCapacidad(cat.id, capacidad);
+              await D.updateCatamaran(cat.id, data);
+            } else {
+              await D.crearCatamaran({ ...data, capacidad });
+            }
             U.closeModal(); U.toast(edit ? "Catamarán actualizado" : "Catamarán creado", "ok"); ctx.rerender();
-          } catch (err) { U.toast(err.message, "err"); return false; }
+          } catch (err) { U.toast(err.message, "err"); }
+          return false;
         },
       },
     ],

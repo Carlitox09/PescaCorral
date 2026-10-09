@@ -222,6 +222,18 @@ export function fmtDateLong(d) {
   const x = toDate(d);
   return `${DIAS[x.getDay()]} ${x.getDate()} de ${MESES_LARGO[x.getMonth()]} de ${x.getFullYear()}`;
 }
+/** Mes de un período AAAA-MM: "octubre de 2026" (corto: "oct"). */
+export function fmtMes(periodo, corto = false) {
+  const [y, m] = String(periodo).split("-").map(Number);
+  return corto ? MESES[m - 1] : `${MESES_LARGO[m - 1]} de ${y}`;
+}
+/** Importe abreviado para gráficos: $ 245 mil, $ 1,2 M. */
+export function fmtMoneyCorto(n) {
+  const v = Math.abs(Number(n || 0)), s = n < 0 ? "-" : "";
+  if (v >= 1e6) return `${s}$ ${(v / 1e6).toLocaleString("es-AR", { maximumFractionDigits: 1 })} M`;
+  if (v >= 1e3) return `${s}$ ${Math.round(v / 1e3)} mil`;
+  return `${s}$ ${Math.round(v)}`;
+}
 export function fmtDateTime(d) {
   const x = toDate(d);
   return `${fmtDate(x)} · ${String(x.getHours()).padStart(2, "0")}:${String(x.getMinutes()).padStart(2, "0")}`;

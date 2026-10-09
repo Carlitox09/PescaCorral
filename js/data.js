@@ -245,7 +245,7 @@ const todayISO = () => dateISO(new Date());
 
 function seedDemo() {
   DB = loadDB();
-  if (DB && DB.__v === 5) return;
+  if (DB && DB.__v === 6) return;
 
   const rnd = mulberry32(20260628);
   const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
@@ -346,6 +346,26 @@ function seedDemo() {
   // La reserva más reciente del pescador queda destacada con su permiso "estrella".
   permisos.slice(-1).forEach((p) => { /* asegura vigente para la demo */ if (p.estado === "vencido") p.estado = "vigente"; });
 
+  // El dueño también sale a pescar como pasajero en otras embarcaciones.
+  const laVictoria = catamaranes.find((c) => c.nombre === "La Victoria");
+  const donPescador = catamaranes.find((c) => c.nombre === "Don Pescador");
+  crearReservaDemo({ cat: donPescador, fecha: dateISO(isoFromOffset(-12)), turno: "manana", nLugares: 1, especie: pejerrey, estadoReserva: "completada", tipo: "diario", titular: uDueno });
+  crearReservaDemo({ cat: laVictoria, fecha: dateISO(isoFromOffset(5)), turno: "tarde", nLugares: 2, especie: pejerrey, estadoReserva: "confirmada", tipo: "semanal", titular: uDueno });
+
+  /* --- Gastos del dueño (finanzas): combustible, mantenimiento, personal… --- */
+  const gastos = [
+    [-2, donJuan, "combustible", "Nafta para la semana", 68000], [-4, elPato, "combustible", "Nafta", 41000],
+    [-6, null, "personal", "Sueldo del marinero (quincena)", 150000], [-9, donJuan, "mantenimiento", "Cambio de aceite y filtros", 54000],
+    [-15, null, "amarre", "Amarre en el muelle", 35000], [-20, elPato, "mantenimiento", "Reparación de la bomba de achique", 47000],
+    [-36, donJuan, "combustible", "Nafta", 72000], [-38, null, "personal", "Sueldo del marinero", 300000],
+    [-41, null, "seguro", "Seguro de responsabilidad civil", 95000], [-45, elPato, "combustible", "Nafta", 38000],
+    [-52, null, "impuestos", "Renovación de la habilitación", 60000], [-66, donJuan, "mantenimiento", "Pintura del casco", 180000],
+    [-70, null, "personal", "Sueldo del marinero", 300000], [-75, elPato, "combustible", "Nafta", 36000],
+  ].map(([off, cat, categoria, descripcion, monto]) => ({
+    id: uid(), id_propietario: uDueno.id, id_catamaran: cat?.id || null, fecha: dateISO(isoFromOffset(off)),
+    categoria, descripcion, monto, created_at: isoFromOffset(off).toISOString(),
+  }));
+
   /* --- Notificaciones del pescador --- */
   const ultReservas = reservas.filter((r) => r.id_usuario === uPescador.id && r.estado !== "cancelada").slice(-3).reverse();
   ultReservas.forEach((r, i) => {
@@ -361,7 +381,7 @@ function seedDemo() {
     { id: uid(), id_especie: especies[2].id, periodo, permisos_emitidos: 210, umbral: 300, estado: "activa", created_at: isoFromOffset(-5).toISOString() },
   ];
 
-  DB = { __v: 5, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, reportes: [], tarifas: { ...TARIFAS_DEMO }, seq, seqReserva, session: null };
+  DB = { __v: 6, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, gastos, reportes: [], tarifas: { ...TARIFAS_DEMO }, seq, seqReserva, session: null };
   saveDB(DB);
 }
 
@@ -692,13 +712,14 @@ export async function getCatamaran(id) {
   return byId(DB.catamaranes, id) || null;
 }
 
+/* Lugares habilitados de un catamarán (los quitados quedan fuera de servicio). */
 export async function getLugares(catId) {
   await ready();
   if (MODE === "supabase") {
-    const { data, error } = await sb.from("lugar").select("*").eq("id_catamaran", catId).order("numero");
+    const { data, error } = await sb.from("lugar").select("*").eq("id_catamaran", catId).eq("activo", true).order("numero");
     if (error) throw error; return data;
   }
-  return DB.lugares.filter((l) => l.id_catamaran === catId).sort((a, b) => a.numero - b.numero);
+  return DB.lugares.filter((l) => l.id_catamaran === catId && l.activo !== false).sort((a, b) => a.numero - b.numero);
 }
 
 /* Lugares ocupados (confirmados) en una fecha y, si se indica, en un turno,
@@ -860,6 +881,7 @@ export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo 
   if (!["tarjeta", "transferencia", "mercadopago", "efectivo"].includes(metodo)) throw new Error("Medio de pago inválido.");
   for (const lid of lugares) {
     if ((byId(DB.lugares, lid) || {}).id_catamaran !== cat.id) throw new Error("Los lugares elegidos no pertenecen a ese catamarán.");
+    if (byId(DB.lugares, lid).activo === false) throw new Error("Uno de los lugares ya no está disponible en ese catamarán. Actualizá el plano.");
     const ocupado = DB.reserva_lugar.some((rl) => rl.id_lugar === lid && rl.fecha === fecha && (rl.turno || "manana") === turno && rl.estado === "confirmada");
     if (ocupado) throw new Error("Uno de los lugares ya fue reservado. Actualizá la grilla.");
   }
@@ -939,13 +961,12 @@ export async function anularReserva(reservaId) {
 /* ============================================================================
  *  RESERVAS Y PERMISOS DEL USUARIO
  * ========================================================================== */
+/* Igual que la política reserva_select: las propias y, para el dueño, también
+ * las de sus catamaranes. */
 function scopeReservasDemo(u) {
   if (u.rol === "admin_municipal" || u.rol === "admin_sistema") return DB.reservas;
-  if (u.rol === "dueno") {
-    const mis = new Set(DB.catamaranes.filter((c) => c.id_propietario === u.id).map((c) => c.id));
-    return DB.reservas.filter((r) => mis.has(r.id_catamaran));
-  }
-  return DB.reservas.filter((r) => r.id_usuario === u.id);
+  const mis = new Set(u.rol === "dueno" ? DB.catamaranes.filter((c) => c.id_propietario === u.id).map((c) => c.id) : []);
+  return DB.reservas.filter((r) => r.id_usuario === u.id || mis.has(r.id_catamaran));
 }
 
 /* Pescadores y dueños abren cada reserva y cada permiso a partir de la lista
@@ -1554,37 +1575,213 @@ export async function listAvisos(limit = 30) {
   }));
 }
 
-export async function crearCatamaran({ nombre, descripcion, capacidad, precio, habilitacion, estado = "activa" }) {
+/* ============================================================================
+ *  DUEÑO DE CATAMARÁN (HU-003): catamaranes, lugares, salidas y finanzas
+ *  El alta crea el catamarán con todos sus lugares (crear_catamaran) y la
+ *  cantidad de lugares se cambia con cambiar_capacidad, que no deja quitar
+ *  lugares con reservas desde hoy. Los gastos son privados de cada dueño.
+ * ========================================================================== */
+const ESTADOS_CATAMARAN = ["activa", "inactiva", "mantenimiento"];
+
+export async function crearCatamaran({ nombre, descripcion = "", capacidad, precio, habilitacion, estado = "activa" }) {
   await ready();
   if (MODE === "supabase") {
-    const { data: s } = await sb.auth.getSession();
-    const { data, error } = await sb.from("catamaran")
-      .insert({ nombre, descripcion, capacidad, precio, habilitacion, estado, id_propietario: s.session?.user?.id })
-      .select().single();
+    const { data, error } = await sb.rpc("crear_catamaran", {
+      p_nombre: nombre, p_descripcion: descripcion, p_capacidad: capacidad, p_precio: precio,
+      p_habilitacion: habilitacion, p_estado: estado,
+    });
     if (error) throw new Error(error.message);
-    // genera asientos
-    const filas = Array.from({ length: capacidad }, (_, i) => ({ id_catamaran: data.id, numero: i + 1, ubicacion: ubicacionLugar(i + 1, capacidad) }));
-    await sb.from("lugar").insert(filas);
     return data;
   }
+  // Demo: las mismas reglas que public.crear_catamaran.
   const u = demoSessionUser();
+  if (!u || !(u.rol === "dueno" || esRolPersonal(u.rol))) throw new Error("Solo un dueño de catamarán o la administración pueden dar de alta catamaranes.");
+  nombre = String(nombre || "").trim();
+  if (!nombre || nombre.length > 60) throw new Error("Ingresá el nombre del catamarán (hasta 60 caracteres).");
+  if (String(descripcion || "").length > 300) throw new Error("La descripción puede tener hasta 300 caracteres.");
+  if (!(Number.isInteger(+capacidad) && +capacidad >= 1 && +capacidad <= 60)) throw new Error("La cantidad de lugares debe ser un número entero entre 1 y 60.");
+  if (!(+precio >= 0)) throw new Error("Ingresá un precio por lugar válido.");
+  if (!String(habilitacion || "").trim()) throw new Error("Ingresá el número de habilitación municipal.");
+  if (!ESTADOS_CATAMARAN.includes(estado)) throw new Error("Estado inválido.");
   const id = uid();
-  const cat = { id, id_propietario: u.id, nombre, descripcion: descripcion || "", capacidad: +capacidad, precio: +precio, habilitacion: habilitacion || "", estado, created_at: new Date().toISOString() };
-  DB.catamaranes.push(cat);
+  DB.catamaranes.push({
+    id, id_propietario: u.rol === "dueno" ? u.id : null, nombre, descripcion: String(descripcion || "").trim(),
+    capacidad: +capacidad, precio: +precio, habilitacion: String(habilitacion).trim(), estado, created_at: new Date().toISOString(),
+  });
   for (let n = 1; n <= capacidad; n++)
     DB.lugares.push({ id: uid(), id_catamaran: id, numero: n, ubicacion: ubicacionLugar(n, +capacidad), activo: true });
   persist();
-  return cat;
+  return id;
 }
 
+/* Demo: el dueño modifica sólo sus catamaranes; la administración, todos. */
+function catamaranEditableDemo(id) {
+  const u = demoSessionUser();
+  const c = byId(DB.catamaranes, id);
+  if (!c) throw new Error("El catamarán no existe.");
+  if (!esRolPersonal(u?.rol) && !(u?.rol === "dueno" && c.id_propietario === u.id)) throw new Error("No autorizado para modificar este catamarán.");
+  return c;
+}
+
+/** Nombre, descripción, precio, habilitación y estado. La capacidad, con cambiarCapacidad. */
 export async function updateCatamaran(id, patch) {
   await ready();
+  const { nombre, descripcion, precio, habilitacion, estado } = patch;
+  const datos = { nombre, descripcion, precio, habilitacion, estado };
   if (MODE === "supabase") {
-    const { error } = await sb.from("catamaran").update(patch).eq("id", id);
-    if (error) throw new Error(error.message); return true;
+    const { error } = await sb.from("catamaran").update(datos).eq("id", id);
+    if (error) throw new Error(traducirDB(error.message)); return true;
   }
-  const c = byId(DB.catamaranes, id); if (c) Object.assign(c, patch); persist();
+  Object.assign(catamaranEditableDemo(id), datos); persist();
   return true;
+}
+
+/** Cambia la cantidad de lugares (igual que public.cambiar_capacidad). */
+export async function cambiarCapacidad(id, capacidad) {
+  await ready();
+  if (MODE === "supabase") {
+    const { error } = await sb.rpc("cambiar_capacidad", { p_id_catamaran: id, p_capacidad: capacidad });
+    if (error) throw new Error(error.message);
+    return true;
+  }
+  const c = catamaranEditableDemo(id);
+  if (!(Number.isInteger(+capacidad) && +capacidad >= 1 && +capacidad <= 60)) throw new Error("La cantidad de lugares debe ser un número entero entre 1 y 60.");
+  capacidad = +capacidad;
+  if (capacidad === c.capacidad) return true;
+  const hoy = todayISO();
+  const delCat = DB.lugares.filter((l) => l.id_catamaran === id);
+  const conReservas = delCat.filter((l) => l.numero > capacidad
+    && DB.reserva_lugar.some((rl) => rl.id_lugar === l.id && rl.estado === "confirmada" && rl.fecha >= hoy)).map((l) => l.numero).sort((a, b) => a - b);
+  if (conReservas.length) throw new Error(`Hay reservas desde hoy en lugares que se quitarían (${conReservas.join(", ")}). Elegí una cantidad mayor o esperá a que pasen esas salidas.`);
+  const usados = new Set(DB.reserva_lugar.map((rl) => rl.id_lugar));
+  DB.lugares = DB.lugares.filter((l) => !(l.id_catamaran === id && l.numero > capacidad && !usados.has(l.id)));
+  DB.lugares.filter((l) => l.id_catamaran === id).forEach((l) => (l.activo = l.numero <= capacidad));
+  for (let n = 1; n <= capacidad; n++)
+    if (!DB.lugares.some((l) => l.id_catamaran === id && l.numero === n)) DB.lugares.push({ id: uid(), id_catamaran: id, numero: n, activo: true });
+  DB.lugares.filter((l) => l.id_catamaran === id && l.activo).forEach((l) => (l.ubicacion = ubicacionLugar(l.numero, capacidad)));
+  c.capacidad = capacidad;
+  persist();
+  return true;
+}
+
+/* ---- Gastos (privados de cada dueño) ---- */
+export const CATEGORIAS_GASTO = {
+  combustible: "Combustible", mantenimiento: "Mantenimiento y reparaciones", personal: "Sueldos del personal",
+  seguro: "Seguros", amarre: "Amarre y muelle", impuestos: "Impuestos y habilitaciones", otros: "Otros",
+};
+
+export async function listGastos() {
+  await ready();
+  if (MODE === "supabase") {
+    const { data, error } = await sb.from("gasto").select("*").order("fecha", { ascending: false });
+    if (error) throw error;
+    return data.map((g) => ({ ...g, monto: Number(g.monto) }));
+  }
+  const u = demoSessionUser();
+  if (u?.rol !== "dueno") return [];
+  return (DB.gastos || []).filter((g) => g.id_propietario === u.id).slice().sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
+}
+
+/** Registra (sin id) o corrige (con id) un gasto. idCatamaran nulo: gasto general de la flota. */
+export async function guardarGasto({ id = null, idCatamaran = null, fecha, categoria, descripcion = "", monto }) {
+  await ready();
+  descripcion = String(descripcion || "").trim();
+  monto = Number(monto);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha || "")) throw new Error("Ingresá la fecha del gasto.");
+  if (!CATEGORIAS_GASTO[categoria]) throw new Error("Elegí la categoría del gasto.");
+  if (descripcion.length > 120) throw new Error("La descripción puede tener hasta 120 caracteres.");
+  if (!(monto > 0) || monto > 9999999999) throw new Error("Ingresá un monto mayor a cero.");
+  const datos = { id_catamaran: idCatamaran || null, fecha, categoria, descripcion: descripcion || null, monto };
+  if (MODE === "supabase") {
+    const { error } = id ? await sb.from("gasto").update(datos).eq("id", id) : await sb.from("gasto").insert(datos);
+    if (error) throw new Error(traducirDB(error.message));
+    return true;
+  }
+  // Demo: las mismas reglas que la política gasto_dueno.
+  const u = demoSessionUser();
+  if (u?.rol !== "dueno") throw new Error("No tenés permisos para realizar esa operación.");
+  if (datos.id_catamaran && byId(DB.catamaranes, datos.id_catamaran)?.id_propietario !== u.id) throw new Error("No tenés permisos para realizar esa operación.");
+  DB.gastos = DB.gastos || [];
+  if (id) {
+    const g = DB.gastos.find((x) => x.id === id && x.id_propietario === u.id);
+    if (!g) throw new Error("El gasto no existe.");
+    Object.assign(g, datos);
+  } else {
+    DB.gastos.push({ id: uid(), id_propietario: u.id, ...datos, created_at: new Date().toISOString() });
+  }
+  persist();
+  return true;
+}
+
+export async function eliminarGasto(id) {
+  await ready();
+  if (MODE === "supabase") {
+    const { error } = await sb.from("gasto").delete().eq("id", id);
+    if (error) throw new Error(traducirDB(error.message));
+    return true;
+  }
+  const u = demoSessionUser();
+  DB.gastos = (DB.gastos || []).filter((g) => !(g.id === id && g.id_propietario === u?.id));
+  persist();
+  return true;
+}
+
+/* ---- Salidas y finanzas de la flota (cálculo sobre las reservas y los gastos) ---- */
+const reservaVendida = (r) => r.estado === "confirmada" || r.estado === "completada";
+/** Lo que cobra el dueño por una reserva: los lugares (el permiso es del Municipio). */
+export const ingresoReserva = (r) => Number(r.monto_total || 0) - Number(r.monto_permiso || 0);
+
+/** Salidas de la flota: reservas vendidas agrupadas por catamarán, fecha y turno. */
+export function salidasDeFlota(reservas, catamaranes) {
+  const cats = new Map(catamaranes.map((c) => [c.id, c]));
+  const grupos = new Map();
+  reservas.filter((r) => cats.has(r.id_catamaran) && reservaVendida(r)).forEach((r) => {
+    const k = `${r.fecha}|${r.turno}|${r.id_catamaran}`;
+    const cat = cats.get(r.id_catamaran);
+    const g = grupos.get(k) || { clave: k, fecha: r.fecha, turno: r.turno, catamaran: cat, capacidad: Number(cat.capacidad), lugares: 0, ingresos: 0, reservas: [] };
+    g.lugares += Number(r.cantidad_lugares || 0);
+    g.ingresos += ingresoReserva(r);
+    g.reservas.push(r);
+    grupos.set(k, g);
+  });
+  return [...grupos.values()].sort((a, b) => (a.fecha + a.turno < b.fecha + b.turno ? -1 : 1));
+}
+
+const mesAnterior = (periodo, n) => { const [y, m] = periodo.split("-").map(Number); const d = new Date(y, m - 1 - n, 1); return dateISO(d).slice(0, 7); };
+
+/** Ganancias y pérdidas de un mes (periodo AAAA-MM), de toda la flota o de un catamarán. */
+export function finanzasDueno({ reservas, gastos, catamaranes, periodo, catId = "" }) {
+  const flota = catId ? catamaranes.filter((c) => c.id === catId) : catamaranes;
+  const ids = new Set(flota.map((c) => c.id));
+  const delMes = (f) => String(f || "").slice(0, 7) === periodo;
+  const vendidas = reservas.filter((r) => ids.has(r.id_catamaran) && reservaVendida(r));
+  const gastosFlota = gastos.filter((g) => (catId ? g.id_catamaran === catId : true));
+  const resMes = vendidas.filter((r) => delMes(r.fecha));
+  const gasMes = gastosFlota.filter((g) => delMes(g.fecha));
+  const ingresos = resMes.reduce((s, r) => s + ingresoReserva(r), 0);
+  const totalGastos = gasMes.reduce((s, g) => s + Number(g.monto), 0);
+  const salidas = salidasDeFlota(resMes, flota);
+  const lugares = salidas.reduce((s, x) => s + x.lugares, 0);
+  const plazas = salidas.reduce((s, x) => s + x.capacidad, 0);
+  const porCategoria = {};
+  gasMes.forEach((g) => (porCategoria[g.categoria] = (porCategoria[g.categoria] || 0) + Number(g.monto)));
+  const porCatamaran = flota.map((c) => {
+    const ing = resMes.filter((r) => r.id_catamaran === c.id).reduce((s, r) => s + ingresoReserva(r), 0);
+    const gas = gasMes.filter((g) => g.id_catamaran === c.id).reduce((s, g) => s + Number(g.monto), 0);
+    return { id: c.id, nombre: c.nombre, ingresos: ing, gastos: gas, resultado: ing - gas };
+  });
+  const generales = catId ? 0 : gasMes.filter((g) => !g.id_catamaran).reduce((s, g) => s + Number(g.monto), 0);
+  const serie = Array.from({ length: 6 }, (_, i) => mesAnterior(periodo, 5 - i)).map((m) => ({
+    periodo: m,
+    ingresos: vendidas.filter((r) => String(r.fecha).slice(0, 7) === m).reduce((s, r) => s + ingresoReserva(r), 0),
+    gastos: gastosFlota.filter((g) => String(g.fecha).slice(0, 7) === m).reduce((s, g) => s + Number(g.monto), 0),
+  }));
+  return {
+    periodo, ingresos, gastos: totalGastos, resultado: ingresos - totalGastos,
+    reservas: resMes, gastosDelMes: gasMes, salidas: salidas.length, lugares,
+    ocupacion: plazas ? Math.round((lugares / plazas) * 100) : 0,
+    porCategoria, porCatamaran, generales, serie,
+  };
 }
 
 /* Reinicia los datos demo (botón en Perfil). */
