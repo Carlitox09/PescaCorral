@@ -9,7 +9,7 @@
  *   - Recursos externos (fotos de perfil de Google): stale-while-revalidate.
  *   - Llamadas a Supabase (/auth, /rest, /realtime): siempre a la red (no se cachean).
  * ========================================================================== */
-const VERSION = "pescacorral-v1.13.1";
+const VERSION = "pescacorral-v1.14.0";
 const APP_SHELL = [
   "./",
   "./index.html",

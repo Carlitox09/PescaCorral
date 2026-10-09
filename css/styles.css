@@ -658,6 +658,37 @@ details.salida[open] summary::after { content: "Ocultar"; }
 .fin-fila b { font-weight: 800; }
 .legend--fila { flex-direction: row; justify-content: center; gap: 18px; margin-top: 6px; }
 
+/* Fotos de los catamaranes */
+.boat__img img { width: 100%; height: 100%; object-fit: cover; opacity: 1; }
+.foto-respaldo { display: grid; place-items: center; width: 100%; height: 100%; }
+.galeria { display: flex; gap: 8px; overflow-x: auto; scroll-snap-type: x mandatory; margin: 12px -4px 0; padding: 0 4px 4px; }
+.galeria img, .galeria .foto-respaldo { flex: 0 0 82%; max-width: 320px; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 12px; scroll-snap-align: start; background: var(--grad-lago); color: var(--agua-700); }
+.galeria img:only-child { flex-basis: 100%; max-width: none; }
+.fotos-editor { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.field label.btn { display: inline-flex; margin: 8px 0 0; color: var(--text); font-size: .85rem; }
+.foto-mini { position: relative; aspect-ratio: 4 / 3; border-radius: 10px; overflow: hidden; background: var(--surface-2); }
+.foto-mini img { width: 100%; height: 100%; object-fit: cover; }
+.foto-mini__portada { position: absolute; left: 4px; bottom: 4px; padding: 1px 7px; border-radius: 999px; background: var(--granate-700); color: #fff; font-size: .66rem; font-weight: 800; }
+.foto-mini__btn { position: absolute; top: 4px; right: 4px; width: 28px; height: 28px; border-radius: 50%; background: #1D1517CC; color: #fff; display: grid; place-items: center; }
+.foto-mini__btn--portada { right: auto; left: 4px; background: #2E7D4FE0; }
+
+/* Salidas: acciones y lista de embarque */
+.salida__acciones { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.salida__acciones .btn { flex: 1 1 140px; }
+.embarque__tabla { font-size: .88rem; }
+.embarque__tabla th, .embarque__tabla td { padding: 9px 12px; }
+.embarque__tabla td:first-child { font-weight: 800; white-space: nowrap; }
+.embarque__firma { padding: 26px 18px 18px; color: var(--muted); font-size: .85rem; }
+.chip.is-on { background: var(--granate-600); border-color: var(--granate-700); color: #fff; }
+.d-block { display: block; }
+.select--sm { padding: 8px 10px; font-size: .85rem; }
+.td-valor { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+
+/* Panel de la administración: filtros */
+.filters--admin { flex-wrap: wrap; }
+.filters--admin > .input { flex: 2 1 220px; }
+.filters--admin > .select { flex: 1 1 180px; }
+
 /* Perfil */
 .profile-hero { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 8px 0 18px; }
 .avatar { width: 84px; height: 84px; border-radius: 50%; background: var(--grad-brand); color: #fff;
@@ -805,6 +836,23 @@ details.salida[open] summary::after { content: "Ocultar"; }
   .grid-2 { grid-template-columns: 1fr; }
   .admin__topbar h1 { font-size: 1.35rem; }
   .scrim { position: fixed; inset: 0; background: #22080D66; z-index: 60; }
+  /* El menú cerrado no se ve ni recibe el foco */
+  .sidebar { box-shadow: none; visibility: hidden; transition: transform .25s ease, visibility 0s .25s; }
+  .admin.drawer-open .sidebar { visibility: visible; transition: transform .25s ease; }
+}
+
+@media (max-width: 700px) {
+  .table--tarjetas thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .table--tarjetas, .table--tarjetas tbody, .table--tarjetas tr, .table--tarjetas td { display: block; width: 100%; }
+  .table--tarjetas tr { padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .table--tarjetas tr:last-child { border-bottom: none; }
+  .table--tarjetas tr.hide { display: none; }
+  .table--tarjetas td { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 2px; border: none; text-align: right; }
+  .table--tarjetas td::before { content: attr(data-label); color: var(--muted); font-size: .76rem; font-weight: 700; text-align: left; flex: none; }
+  .table--tarjetas td > .select { width: auto; max-width: 62%; }
+  .table--tarjetas .td-valor { align-items: flex-end; }
+  .table--tarjetas td:first-child { font-size: 1rem; }
+  .table--tarjetas tbody tr:hover { background: none; }
 }
 
 @media (min-width: 561px) {
@@ -821,7 +869,8 @@ details.salida[open] summary::after { content: "Ocultar"; }
 @media print {
   body { background: #fff; }
   .topbar, .bottomnav, .sidebar, .admin__mobilebar, .toast-root, .paybar,
-  .btn, .filters, .tabs, .hero__actions, .scrim, .share-grid { display: none !important; }
+  .btn, .filters, .tabs, .hero__actions, .scrim, .share-grid, .offline-bar { display: none !important; }
+  .embarque { border: none; }
   .doc, .exito { break-inside: avoid; }
   .shell, .admin__main { box-shadow: none; max-width: 100%; padding: 0; }
   .permit, .panel, .card { box-shadow: none; border: 1px solid #D6C5B4; }

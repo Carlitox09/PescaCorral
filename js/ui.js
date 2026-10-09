@@ -15,7 +15,40 @@ export function mount(html) {
   const app = APP();
   app.innerHTML = html;
   app.scrollTop = 0;
+  respaldoFotos(app);
   return app;
+}
+
+/* Fotos de catamaranes (img[data-foto]): si no cargan (por ejemplo, sin
+ * conexión), se muestra el ícono del barco en su lugar. */
+export function respaldoFotos(root = document) {
+  $$("img[data-foto]", root).forEach((img) => img.addEventListener("error", () => {
+    const span = document.createElement("span");
+    span.className = "foto-respaldo";
+    span.innerHTML = icon("boat", { size: 40, stroke: 1.6 });
+    img.replaceWith(span);
+  }, { once: true }));
+}
+
+/** Reduce una foto elegida por el usuario a JPEG de hasta `max` píxeles de lado. */
+export async function reducirFoto(file, max = 1280, calidad = 0.82) {
+  if (!/^image\//.test(file?.type || "")) throw new Error("Elegí una imagen (JPG, PNG o WebP).");
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, mal) => {
+      const i = new Image();
+      i.onload = () => ok(i);
+      i.onerror = () => mal(new Error("No se pudo leer la imagen."));
+      i.src = url;
+    });
+    const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement("canvas");
+    c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    return await new Promise((ok, mal) => c.toBlob((b) => (b ? ok(b) : mal(new Error("No se pudo procesar la imagen."))), "image/jpeg", calidad));
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 /** Escapa texto para insertarlo de forma segura en HTML. */

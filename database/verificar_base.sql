@@ -22,7 +22,8 @@ esperado_vista(n) as (values
     ('v_permisos_por_especie'), ('v_reservas_por_dia')),
 esperado_funcion(n, args) as (values
     ('actualizar_alerta_fauna', 0), ('actualizar_estados', 0), ('anular_reserva', 1),
-    ('cambiar_capacidad', 2), ('cambiar_clave_personal', 2), ('cerrar_sesiones_desactivada', 0),
+    ('asignar_propietario', 2), ('avisar_pasajeros', 5), ('es_foto_propia', 1), ('lista_embarque', 3),
+    ('validar_fotos_catamaran', 0), ('cambiar_capacidad', 2), ('cambiar_clave_personal', 2), ('cerrar_sesiones_desactivada', 0),
     ('clave_segura', 1), ('crear_catamaran', 6), ('crear_cuenta_personal', 5),
     ('crear_reserva_completa', 9), ('es_admin', 0),
     ('exigir_cuenta_activa', 0), ('generar_numero_permiso', 0), ('publicar_aviso', 4),
@@ -31,13 +32,14 @@ esperado_funcion(n, args) as (values
     ('ubicacion_lugar', 2), ('validar_permiso', 2)),
 -- Funciones que pueden ejecutar los usuarios con sesión (las demás son internas).
 esperado_funcion_api(n) as (values
-    ('anular_reserva'), ('cambiar_capacidad'), ('cambiar_clave_personal'), ('crear_catamaran'),
+    ('anular_reserva'), ('asignar_propietario'), ('avisar_pasajeros'), ('es_foto_propia'), ('lista_embarque'),
+    ('cambiar_capacidad'), ('cambiar_clave_personal'), ('crear_catamaran'),
     ('crear_cuenta_personal'), ('crear_reserva_completa'), ('es_admin'), ('generar_recordatorios'),
     ('generar_reporte_municipal'), ('publicar_aviso'), ('rol_actual'), ('validar_permiso')),
 esperado_disparador(t, n) as (values
     ('usuario', 'trg_usuario_updated'), ('usuario', 'trg_usuario_proteger'),
     ('usuario', 'trg_usuario_cerrar_sesiones'),
-    ('catamaran', 'trg_catamaran_updated'), ('reserva', 'trg_reserva_updated'),
+    ('catamaran', 'trg_catamaran_updated'), ('catamaran', 'trg_catamaran_fotos'), ('reserva', 'trg_reserva_updated'),
     ('permiso', 'trg_permiso_alerta_fauna'), ('auth.users', 'on_auth_user_created')),
 esperado_indice(n) as (values
     ('idx_reserva_usuario'), ('idx_reserva_catamaran'), ('idx_reserva_fecha'),
@@ -57,6 +59,9 @@ esperado_politica(t, n) as (values
     ('tarifa_permiso', 'tarifa_permiso_admin'), ('alerta_fauna', 'alerta_fauna_admin'),
     ('aviso', 'aviso_select')),
 esperado_cron(n) as (values ('pescacorral-reporte-mensual'), ('pescacorral-recordatorios')),
+-- Fotos de los catamaranes (Supabase Storage): políticas del depósito "catamaranes".
+esperado_politica_fotos(n) as (values
+    ('foto_catamaran_select'), ('foto_catamaran_insert'), ('foto_catamaran_update'), ('foto_catamaran_delete')),
 
 -- Objetos reales del esquema public (sin los que pertenecen a extensiones).
 real_rel as (
@@ -115,6 +120,10 @@ hallazgos(tipo, objeto, detalle) as (
         where k = 'r' and n in (select n from esperado_tabla)
           and not (select relrowsecurity from pg_class where oid = r.oid)
     union all select 'Tarea pg_cron sobrante', n, '' from real_cron where n not in (select n from esperado_cron)
+    union all select 'Falta el depósito de fotos', 'catamaranes', 'público, hasta 2 MB, imágenes' where not exists (
+        select 1 from storage.buckets where id = 'catamaranes' and public and file_size_limit <= 2097152)
+    union all select 'Falta política de fotos', n, 'storage.objects' from esperado_politica_fotos
+        where n not in (select policyname from pg_policies where schemaname = 'storage' and tablename = 'objects')
 
     -- Privilegios de los roles de la API
     union all select 'Función ejecutable sin sesión', n, 'revocar a anon y public' from real_funcion where anon
@@ -177,6 +186,8 @@ hallazgos(tipo, objeto, detalle) as (
     union all select 'Reserva futura en un lugar fuera de servicio', c.nombre || ' · lugar ' || l.numero, to_char(rl.fecha, 'DD/MM/YYYY')
         from public.reserva_lugar rl join public.lugar l on l.id = rl.id_lugar join public.catamaran c on c.id = l.id_catamaran
         where not l.activo and rl.estado = 'confirmada' and rl.fecha >= (select d from hoy)
+    union all select 'Foto de otro catamarán', c.nombre, f
+        from public.catamaran c cross join unnest(c.fotos) f where f not like c.id::text || '/%'
     union all select 'Gasto en un catamarán ajeno', g.fecha::text || ' · ' || g.categoria, c.nombre
         from public.gasto g join public.catamaran c on c.id = g.id_catamaran
         where c.id_propietario is distinct from g.id_propietario

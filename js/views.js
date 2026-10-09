@@ -515,10 +515,11 @@ function boatCard(c, fecha, turno) {
                : `<span class="badge ${c.libres <= 3 ? "badge--warn" : "badge--ok"}" style="margin-top:4px">${c.libres} libres de ${c.capacidad}</span>`)
     : "";
   return `<div class="boat" style="margin-bottom:12px">
-    <div class="boat__img">${U.icon("boat", { size: 46, stroke: 1.6 })}</div>
+    <div class="boat__img">${portada(c)}</div>
     <div class="boat__main">
       <h2>${U.esc(c.nombre)}</h2>
       <div class="boat__meta">${U.icon("users", { size: 13 })} ${c.capacidad} lugares ${c.habilitacion ? "· Hab. " + U.esc(c.habilitacion) : ""}</div>
+      ${c.descripcion ? `<p class="boat__desc">${U.esc(c.descripcion)}</p>` : ""}
       <div class="boat__price">${U.fmtMoney(c.precio)} <small>/ lugar</small></div>
       ${mantenimiento ? "" : dispo}
     </div>
@@ -574,8 +575,11 @@ export async function viewReserva(ctx) {
             <h2>${U.esc(cat.nombre)}</h2>
             <div class="muted" style="font-weight:600;margin-top:2px">${U.fmtMoney(cat.precio)} / lugar · ${cat.capacidad} lugares</div>
           </div>
-          <div class="boat__img" style="width:54px;height:54px">${U.icon("boat", { size: 30, stroke: 1.6 })}</div>
+          <div class="boat__img" style="width:54px;height:54px">${portada(cat, 30)}</div>
         </div>
+        ${cat.descripcion ? `<p class="boat__desc" style="-webkit-line-clamp:4">${U.esc(cat.descripcion)}</p>` : ""}
+        ${(cat.fotos || []).length ? `<div class="galeria" role="group" aria-label="Fotos de ${U.esc(cat.nombre)}">${cat.fotos.map((f, i) =>
+          `<img src="${U.esc(D.urlFoto(f))}" alt="Foto ${i + 1} de ${U.esc(cat.nombre)}" loading="lazy" data-foto>`).join("")}</div>` : ""}
         <div class="field mt-12" style="margin-bottom:10px"><label for="r-fecha">Fecha de la salida</label>
           <input class="input" type="date" id="r-fecha" value="${fecha}" min="${U.todayISO()}"/></div>
         <label class="field-label">Turno</label>
@@ -978,7 +982,7 @@ export async function viewComprobante(ctx) {
             <div class="permit__row doc__total"><span>Total de la reserva</span><b>${U.fmtMoney(c.monto_total)}</b></div>
           </div>
         </section>
-        <p class="muted center mt-12" style="font-size:.8rem">${U.icon("shield", { size: 14 })} Los datos personales, el pago y el permiso sólo los ven el pasajero y el Municipio. Al embarcar, pedile su permiso digital.</p>
+        <p class="muted center mt-12" style="font-size:.8rem">${U.icon("shield", { size: 14 })} El nombre y el DNI del titular están en la lista de embarque de la salida. El correo, el teléfono, el pago y el permiso sólo los ven el pasajero y el Municipio. Al embarcar, pedile su permiso digital.</p>
       `,
     }));
     wireChrome(ctx);
@@ -1299,6 +1303,7 @@ async function openNotificaciones(ctx) {
   const body = notifs.length ? `<div class="notif-list">${notifs.map((n) => `
     <div class="notif ${n.leida ? "" : "unread"}">
       ${n.tipo === "aviso" ? `<span class="notif__tag">${U.icon("megaphone", { size: 14 })} Aviso del ${U.esc(CFG.MUNICIPIO || "municipio")}</span>` : ""}
+      ${n.tipo === "salida" ? `<span class="notif__tag">${U.icon("boat", { size: 14 })} ${U.esc(n.reserva?.catamaran?.nombre || "Tu catamarán")}${n.reserva ? ` · salida del ${U.fmtDate(n.reserva.fecha)}, turno ${U.turnoLabel(n.reserva.turno).toLowerCase()}` : ""}</span>` : ""}
       <h3>${U.esc(n.titulo)}</h3>
       <p>${U.esc(n.mensaje)}</p>
       <small>${U.fmtRelative(n.created_at)}</small>
@@ -1478,13 +1483,13 @@ export async function viewReportes(ctx) {
       </div>
       <div class="panel">
         <h2>${U.icon("mail", { size: 18 })} Reportes enviados al municipio</h2>
-        <table class="table">
+        <table class="table table--tarjetas">
           <thead><tr><th>Fecha</th><th>Reporte</th><th>Destinatario</th><th>Origen</th></tr></thead>
           <tbody>${enviados.map((r) => `<tr>
-            <td style="white-space:nowrap">${U.fmtDateTime(r.created_at || r.fecha)}</td>
-            <td><b>${U.esc(r.titulo)}</b><br><small class="muted">Permisos: ${r.datos?.resumen?.permisos_total ?? "—"} · Reservas: ${r.datos?.resumen?.reservas_total ?? "—"}</small></td>
-            <td>${U.esc(r.destinatario)}</td>
-            <td><span class="badge ${r.origen === "automatico" ? "badge--info" : "badge--ok"}">${r.origen === "automatico" ? "Automático" : "Manual"}</span></td>
+            <td data-label="Fecha" style="white-space:nowrap">${U.fmtDateTime(r.created_at || r.fecha)}</td>
+            <td data-label="Reporte"><b>${U.esc(r.titulo)}</b><br><small class="muted">Permisos: ${r.datos?.resumen?.permisos_total ?? "—"} · Reservas: ${r.datos?.resumen?.reservas_total ?? "—"}</small></td>
+            <td data-label="Destinatario">${U.esc(r.destinatario)}</td>
+            <td data-label="Origen"><span class="badge ${r.origen === "automatico" ? "badge--info" : "badge--ok"}">${r.origen === "automatico" ? "Automático" : "Manual"}</span></td>
           </tr>`).join("") || `<tr><td colspan="4" class="muted">Todavía no se enviaron reportes.</td></tr>`}</tbody>
         </table>
         <p class="panel__foot">Cada envío queda registrado con fecha, destinatario y una instantánea de los indicadores. El cierre mensual se genera automáticamente.</p>
@@ -1513,54 +1518,99 @@ export async function viewReportes(ctx) {
  *  USUARIOS (admin)
  * ========================================================================== */
 export async function viewUsuarios(ctx) {
-  const usuarios = await D.listUsuarios();
+  const [usuarios, cats] = await Promise.all([D.listUsuarios(), D.listCatamaranes()]);
+  const barcos = (id) => cats.filter((c) => c.id_propietario === id).length;
+  const cantBarcos = (n) => `${n} ${n === 1 ? "catamarán" : "catamaranes"}`;
   // Desde la aplicación sólo se gestionan las cuentas del público (tipo de
-  // cuenta y estado); las del personal, desde la base de datos.
+  // cuenta y estado); las del personal, en Personal.
   const roles = ["pescador", "dueno"];
+  const fila = (u) => {
+    const personal = D.esRolPersonal(u.rol);
+    const n = u.rol === "dueno" ? barcos(u.id) : 0;
+    const buscar = [u.nombre, u.apellido, u.email, u.dni, u.telefono].filter(Boolean).join(" ").toLowerCase();
+    return `<tr data-buscar="${U.esc(buscar)}" data-tipo="${personal ? "personal" : U.esc(u.rol)}" data-activa="${u.activo !== false}">
+      <td data-label="Usuario"><b>${U.esc(u.nombre)} ${U.esc(u.apellido || "")}</b>${u.perfil_completo === false ? `<br><small class="muted">Alta sin completar</small>` : ""}</td>
+      <td data-label="Contacto"><small class="muted">${U.esc(u.email)}<br>${U.esc(u.telefono || "—")}</small></td>
+      <td data-label="DNI">${U.esc(u.dni || "—")}</td>
+      <td data-label="Tipo de cuenta"><span class="td-valor">${personal
+        ? `<b>${U.esc(U.rolLabel(u.rol))}</b><small class="muted">Personal</small>`
+        : `<select class="select select--sm" data-rol="${u.id}" data-nombre="${U.esc(u.nombre)}" data-actual="${U.esc(u.rol)}" aria-label="Tipo de cuenta de ${U.esc(u.nombre)}">
+            ${roles.map((r) => `<option value="${r}"${u.rol === r ? " selected" : ""}>${U.rolLabel(r)}</option>`).join("")}
+          </select><small class="muted${u.rol === "dueno" ? "" : " hide"}" data-barcos>${cantBarcos(n)}</small>`}</span></td>
+      <td data-label="Estado">${personal
+        ? (u.activo !== false ? "Activa" : "Desactivada")
+        : `<select class="select select--sm" data-activo="${u.id}" aria-label="Estado de la cuenta de ${U.esc(u.nombre)}">
+            <option value="1"${u.activo !== false ? " selected" : ""}>Activa</option>
+            <option value="0"${u.activo === false ? " selected" : ""}>Desactivada</option>
+          </select>`}</td>
+    </tr>`;
+  };
 
   U.mount(adminLayout({
     active: "usuarios",
     title: "Usuarios",
     subtitle: `${usuarios.length} cuentas registradas`,
-    body: `<div class="panel">
-      <table class="table">
-        <thead><tr><th>Usuario</th><th>Contacto</th><th>DNI</th><th>Rol</th><th>Cuenta</th></tr></thead>
-        <tbody>${usuarios.map((u) => D.esRolPersonal(u.rol) ? `<tr>
-          <td><b>${U.esc(u.nombre)} ${U.esc(u.apellido || "")}</b></td>
-          <td><small class="muted">${U.esc(u.email)}<br>${U.esc(u.telefono || "—")}</small></td>
-          <td>${U.esc(u.dni || "—")}</td>
-          <td><b>${U.esc(U.rolLabel(u.rol))}</b><br><small class="muted">Personal</small></td>
-          <td>${u.activo !== false ? "Activa" : "Desactivada"}</td>
-        </tr>` : `<tr>
-          <td><b>${U.esc(u.nombre)} ${U.esc(u.apellido || "")}</b></td>
-          <td><small class="muted">${U.esc(u.email)}<br>${U.esc(u.telefono || "—")}</small></td>
-          <td>${U.esc(u.dni || "—")}</td>
-          <td>
-            <select class="select" data-rol="${u.id}" aria-label="Tipo de cuenta de ${U.esc(u.nombre)}" style="padding:8px 10px;font-size:.85rem">
-              ${roles.map((r) => `<option value="${r}"${u.rol === r ? " selected" : ""}>${U.rolLabel(r)}</option>`).join("")}
-            </select>
-          </td>
-          <td>
-            <select class="select" data-activo="${u.id}" aria-label="Estado de la cuenta de ${U.esc(u.nombre)}" style="padding:8px 10px;font-size:.85rem">
-              <option value="1"${u.activo !== false ? " selected" : ""}>Activa</option>
-              <option value="0"${u.activo === false ? " selected" : ""}>Desactivada</option>
-            </select>
-          </td>
-        </tr>`).join("")}</tbody>
+    body: `<div class="filters filters--admin">
+        <input class="input" type="search" id="us-buscar" placeholder="Buscar por nombre, correo o DNI" aria-label="Buscar usuarios" autocomplete="off"/>
+        <select class="select" id="us-ver" aria-label="Mostrar">
+          <option value="">Todas las cuentas</option>
+          <option value="pescador">Pescadores y turistas</option>
+          <option value="dueno">Dueños de catamarán</option>
+          <option value="personal">Personal</option>
+          <option value="inactivas">Desactivadas</option>
+        </select>
+      </div>
+      <div class="panel">
+      <table class="table table--tarjetas">
+        <thead><tr><th>Usuario</th><th>Contacto</th><th>DNI</th><th>Tipo de cuenta</th><th>Estado</th></tr></thead>
+        <tbody>${usuarios.map(fila).join("")}</tbody>
       </table>
+      <p class="muted center hide" id="us-vacio">No hay cuentas que coincidan con la búsqueda.</p>
       <p class="panel__foot">Desde acá se cambia el tipo de cuenta (pescador o dueño) y el estado de las cuentas del público. Una cuenta desactivada no puede ingresar y sus sesiones se cierran. Las cuentas del personal las da de alta y las gestiona el administrador del sistema, en Personal. Los cambios se aplican al instante.</p>
     </div>`,
   }, ctx));
   wireAdmin(ctx);
 
+  const filtrar = () => {
+    const q = U.$("#us-buscar").value.trim().toLowerCase();
+    const ver = U.$("#us-ver").value;
+    let visibles = 0;
+    U.$$("tbody tr[data-buscar]").forEach((tr) => {
+      const ok = (!q || tr.dataset.buscar.includes(q))
+        && (!ver || (ver === "inactivas" ? tr.dataset.activa === "false" : tr.dataset.tipo === ver));
+      tr.classList.toggle("hide", !ok);
+      visibles += ok;
+    });
+    U.$("#us-vacio").classList.toggle("hide", visibles > 0);
+  };
+  U.$("#us-buscar").addEventListener("input", filtrar);
+  U.$("#us-ver").addEventListener("change", filtrar);
+
   U.$$("[data-rol]").forEach((sel) => sel.addEventListener("change", async () => {
-    try { await D.setRol(sel.dataset.rol, sel.value); U.toast("Rol actualizado", "ok"); }
-    catch (err) { U.toast(err.message, "err"); }
+    const anterior = sel.dataset.actual, n = barcos(sel.dataset.rol);
+    if (anterior === "dueno" && sel.value === "pescador" && n > 0) {
+      const ok = await U.confirmDialog({
+        title: "Pasar a pescador",
+        message: `${sel.dataset.nombre} tiene ${cantBarcos(n)} a su nombre. Como pescador no podrá administrarlos ni ver sus finanzas, y siguen publicados. Para traspasarlos, asignalos a otro dueño en Catamaranes. ¿Cambiar el tipo de cuenta?`,
+        okLabel: "Cambiar",
+      });
+      if (!ok) { sel.value = anterior; return; }
+    }
+    try {
+      await D.setRol(sel.dataset.rol, sel.value);
+      sel.dataset.actual = sel.value;
+      sel.closest("tr").dataset.tipo = sel.value;
+      sel.parentElement.querySelector("[data-barcos]")?.classList.toggle("hide", sel.value !== "dueno");
+      U.toast(`Tipo de cuenta: ${U.rolLabel(sel.value)}`, "ok");
+    } catch (err) { sel.value = anterior; U.toast(err.message, "err"); }
   }));
   U.$$("[data-activo]").forEach((sel) => sel.addEventListener("change", async () => {
     const activo = sel.value === "1";
-    try { await D.setActivo(sel.dataset.activo, activo); U.toast(activo ? "Cuenta activada" : "Cuenta desactivada", "ok"); }
-    catch (err) { U.toast(err.message, "err"); }
+    try {
+      await D.setActivo(sel.dataset.activo, activo);
+      sel.closest("tr").dataset.activa = String(activo);
+      U.toast(activo ? "Cuenta activada" : "Cuenta desactivada", "ok");
+    } catch (err) { sel.value = activo ? "0" : "1"; U.toast(err.message, "err"); }
   }));
 }
 
@@ -1655,19 +1705,19 @@ export async function viewPersonal(ctx) {
     subtitle: "Cuentas del municipio y de la administración",
     actions: `<button class="btn btn--cta btn--sm" data-nueva>${U.icon("plus", { size: 16 })} Nueva cuenta</button>`,
     body: `<div class="panel">
-      <table class="table">
+      <table class="table table--tarjetas">
         <thead><tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Ingresa por</th><th>Cuenta</th><th><span class="sr-only">Acciones</span></th></tr></thead>
         <tbody>${personal.map((u) => `<tr>
-          <td><b>${U.esc(D.usuarioPersonal(u.email))}</b></td>
-          <td>${U.esc(`${u.nombre} ${u.apellido || ""}`.trim())}</td>
-          <td>${U.esc(U.rolLabel(u.rol))}</td>
-          <td><small class="muted">${u.rol === "admin_sistema" ? "/Admin" : "/Municipio"}</small></td>
-          <td>${u.id === yo ? "Activa (tu cuenta)" : `
-            <select class="select" data-activo="${u.id}" aria-label="Estado de la cuenta de ${U.esc(u.nombre)}" style="padding:8px 10px;font-size:.85rem">
+          <td data-label="Usuario"><b>${U.esc(D.usuarioPersonal(u.email))}</b></td>
+          <td data-label="Nombre">${U.esc(`${u.nombre} ${u.apellido || ""}`.trim())}</td>
+          <td data-label="Rol">${U.esc(U.rolLabel(u.rol))}</td>
+          <td data-label="Ingresa por"><small class="muted">${u.rol === "admin_sistema" ? "/Admin" : "/Municipio"}</small></td>
+          <td data-label="Cuenta">${u.id === yo ? "Activa (tu cuenta)" : `
+            <select class="select select--sm" data-activo="${u.id}" aria-label="Estado de la cuenta de ${U.esc(u.nombre)}">
               <option value="1"${u.activo !== false ? " selected" : ""}>Activa</option>
               <option value="0"${u.activo === false ? " selected" : ""}>Desactivada</option>
             </select>`}</td>
-          <td><button class="btn btn--soft btn--sm" data-clave="${u.id}" data-usuario="${U.esc(D.usuarioPersonal(u.email))}">${U.icon("key", { size: 16 })} Contraseña</button></td>
+          <td data-label=""><button class="btn btn--soft btn--sm" data-clave="${u.id}" data-usuario="${U.esc(D.usuarioPersonal(u.email))}">${U.icon("key", { size: 16 })} Contraseña</button></td>
         </tr>`).join("")}</tbody>
       </table>
       <p class="panel__foot">El personal municipal ingresa por /Municipio y el administrador del sistema por /Admin, con el usuario y la contraseña que se definen acá. El rol de una cuenta se fija al crearla. Una cuenta desactivada no puede ingresar y sus sesiones se cierran.</p>
@@ -1776,31 +1826,42 @@ function claveModal(ctx, userId, usuario) {
 export async function viewGestion(ctx) {
   const p = ctx.session.profile;
   if (!isAdmin(p.rol)) return viewFlota(ctx);
-  const cats = await D.listCatamaranes();
-  const list = cats.length ? cats.map((c) => tarjetaCatamaran(c)).join("") : emptyState("Sin catamaranes", "Agregá el primer catamarán.", "boat");
+  // Administración: todos los catamaranes, con su dueño; un dueño puede tener varios.
+  const [cats, usuarios] = await Promise.all([D.listCatamaranes(), D.listUsuarios()]);
+  const duenos = usuarios.filter((u) => u.rol === "dueno" && u.activo !== false && u.perfil_completo !== false);
+  const nombreDe = (id) => { const u = usuarios.find((x) => x.id === id); return u ? `${u.nombre} ${u.apellido || ""}`.trim() : "Sin dueño asignado"; };
+  const list = cats.length ? cats.map((c) => tarjetaCatamaran(c, null, nombreDe(c.id_propietario))).join("") : emptyState("Sin catamaranes", "Agregá el primer catamarán.", "boat");
   U.mount(adminLayout({
     active: "gestion", title: "Catamaranes", subtitle: `${cats.length} embarcaciones`,
     actions: `<button class="btn btn--cta btn--sm" data-nuevo>${U.icon("plus", { size: 16 })} Nuevo</button>`,
-    body: `<div class="panel">${list}</div>`,
+    body: `<div class="panel">${list}<p class="panel__foot">Cada catamarán puede asignarse a un dueño, y un dueño puede tener varios. Al asignarlo, el dueño lo administra desde Mi flota.</p></div>`,
   }, ctx));
   wireAdmin(ctx);
   const cb = byIdMap(cats);
-  U.$("[data-nuevo]")?.addEventListener("click", () => catamaranModal(ctx, null));
-  U.$$("[data-edit]").forEach((b) => b.addEventListener("click", () => catamaranModal(ctx, cb[b.dataset.edit])));
+  U.$("[data-nuevo]")?.addEventListener("click", () => catamaranModal(ctx, null, 0, duenos));
+  U.$$("[data-edit]").forEach((b) => b.addEventListener("click", () => catamaranModal(ctx, cb[b.dataset.edit], 0, duenos)));
 }
 
 function estadoCatLabel(e) { return ({ activa: "Activa", inactiva: "Inactiva", mantenimiento: "Mantenimiento" }[e] || e); }
 function byIdMap(arr) { const m = {}; arr.forEach((x) => (m[x.id] = x)); return m; }
 
-function tarjetaCatamaran(c, futuras = null) {
+/* Foto de portada del catamarán (o el ícono, si no tiene fotos). */
+function portada(c, size = 46) {
+  const f = (c.fotos || [])[0];
+  return f ? `<img src="${U.esc(D.urlFoto(f))}" alt="Foto de ${U.esc(c.nombre)}" loading="lazy" data-foto>` : U.icon("boat", { size, stroke: 1.6 });
+}
+
+function tarjetaCatamaran(c, futuras = null, dueno = null) {
   return `<div class="boat boat--gestion" style="margin-bottom:12px">
-    <div class="boat__img">${U.icon("boat", { size: 46, stroke: 1.6 })}</div>
+    <div class="boat__img">${portada(c)}</div>
     <div class="boat__main">
       <h2>${U.esc(c.nombre)}</h2>
       <div class="boat__meta">${U.icon("users", { size: 13 })} ${c.capacidad} lugares · ${U.fmtMoney(c.precio)}/lugar${c.habilitacion ? " · Hab. " + U.esc(c.habilitacion) : ""}</div>
+      ${dueno !== null ? `<div class="boat__meta">${U.icon("user", { size: 13 })} ${U.esc(dueno)}</div>` : ""}
       ${c.descripcion ? `<p class="boat__desc">${U.esc(c.descripcion)}</p>` : ""}
       <div class="flex gap-8 items-center" style="flex-wrap:wrap;margin-top:6px">
         <span class="badge ${c.estado === "activa" ? "badge--ok" : c.estado === "mantenimiento" ? "badge--warn" : "badge--muted"}">${estadoCatLabel(c.estado)}</span>
+        ${(c.fotos || []).length ? `<small class="muted" style="font-weight:600">${c.fotos.length} foto${c.fotos.length > 1 ? "s" : ""}</small>` : ""}
         ${futuras !== null ? `<small class="muted" style="font-weight:600">${futuras ? `${futuras} reserva${futuras > 1 ? "s" : ""} desde hoy` : "Sin reservas próximas"}</small>` : ""}
       </div>
     </div>
@@ -1935,7 +1996,7 @@ function flotaSalidas(ctx, propios, reservas) {
       ${propios.map((c) => `<option value="${c.id}"${c.id === catSel ? " selected" : ""}>${U.esc(c.nombre)}</option>`).join("")}
     </select>` : ""}
     <div class="mt-12">${lista || emptyState(anteriores ? "Sin salidas anteriores" : "Sin reservas próximas", propios.length ? "Las salidas aparecen acá cuando los pescadores reservan lugares en tus catamaranes." : "Primero cargá tu catamarán en la pestaña Catamaranes.", "calendar")}</div>
-    ${salidas.length ? `<p class="muted center mt-12" style="font-size:.8rem">${U.icon("shield", { size: 14 })} Los datos personales, el pago y el permiso de cada pasajero sólo los ven el pasajero y el Municipio. Al embarcar, pedile su permiso digital.</p>` : ""}`;
+    ${salidas.length ? `<p class="muted center mt-12" style="font-size:.8rem">${U.icon("shield", { size: 14 })} En la lista de embarque ves el nombre y el DNI de cada titular. El correo, el teléfono, el pago y el permiso sólo los ven el pasajero y el Municipio. Al embarcar, pedile su permiso digital.</p>` : ""}`;
 
   return {
     html,
@@ -1953,7 +2014,12 @@ function flotaSalidas(ctx, propios, reservas) {
         const s = porClave.get(det.dataset.salida);
         const lugares = Array.from({ length: s.capacidad }, (_, i) => ({ id: String(i + 1), numero: i + 1 }));
         const vendidos = new Set(s.reservas.flatMap((r) => r.lugares || []).map(String));
-        box.innerHTML = `${planoCatamaran(lugares, vendidos, new Set(), new Set(), { lectura: true })}
+        const embarque = `#/embarque?cat=${s.catamaran.id}&fecha=${s.fecha}&turno=${s.turno}`;
+        box.innerHTML = `<div class="salida__acciones">
+            <a class="btn btn--outline btn--sm" href="${embarque}">${U.icon("users", { size: 16 })} Lista de embarque</a>
+            ${s.fecha >= hoy ? `<button type="button" class="btn btn--primary btn--sm" data-avisar>${U.icon("megaphone", { size: 16 })} Avisar a los pasajeros</button>` : ""}
+          </div>
+          ${planoCatamaran(lugares, vendidos, new Set(), new Set(), { lectura: true })}
           <div class="seat-legend"><span><i class="lg-free"></i>Libre</span><span><i class="lg-vendido"></i>Vendido</span></div>
           <div class="mt-12">${s.reservas.map((r) => `<div class="row-item">
             <div class="row-item__ic">${U.icon("ticket", { size: 18 })}</div>
@@ -1961,9 +2027,113 @@ function flotaSalidas(ctx, propios, reservas) {
               <small>Lugar${(r.lugares || []).length > 1 ? "es" : ""} ${U.esc((r.lugares || []).join(", ") || String(r.cantidad_lugares))} · ${U.fmtMoney(D.ingresoReserva(r))}</small></div>
             <a class="btn btn--soft btn--sm" href="#/comprobante/${r.id}">Detalle</a>
           </div>`).join("")}</div>`;
+        U.$("[data-avisar]", box)?.addEventListener("click", () => avisoSalidaModal(ctx, s));
       }));
     },
   };
+}
+
+/* Aviso del dueño a todos los que reservaron una salida (llega a su campanita). */
+const PLANTILLAS_AVISO = [
+  ["zarpe", "Estamos por zarpar", (s, f, t) => `${s.catamaran.nombre} está por salir del muelle (salida del ${f}, turno ${t}). Acercate con tu permiso digital.`],
+  ["suspendida", "Salida suspendida", (s, f, t) => `La salida del ${f}, turno ${t}, en ${s.catamaran.nombre} se suspende por mal tiempo. Nos vamos a comunicar para reprogramarla.`],
+  ["demora", "Salida demorada", (s, f, t) => `La salida del ${f}, turno ${t}, se demora. Te avisamos cuando estemos por zarpar.`],
+  ["otro", "", () => ""],
+];
+
+function avisoSalidaModal(ctx, s) {
+  const fecha = U.fmtDate(s.fecha), turno = U.turnoLabel(s.turno).toLowerCase();
+  const personas = new Set(s.reservas.filter((r) => r.estado === "confirmada").map((r) => r.id_usuario)).size;
+  U.modal({
+    title: "Avisar a los pasajeros",
+    body: `
+      <p class="muted" style="margin-bottom:12px">${U.esc(s.catamaran.nombre)} · ${U.esc(U.fmtDateLong(s.fecha))} · turno ${U.esc(turno)}</p>
+      <div class="chips" role="radiogroup" aria-label="Tipo de aviso" style="margin:0 0 12px">
+        ${PLANTILLAS_AVISO.map(([k, titulo], i) => `<button type="button" class="chip${i === 0 ? " is-on" : ""}" role="radio" aria-checked="${i === 0}" data-plantilla="${k}">${k === "otro" ? "Otro" : U.esc(titulo)}</button>`).join("")}
+      </div>
+      <div class="field"><label for="av-titulo">Título</label><input class="input" id="av-titulo" maxlength="80"/></div>
+      <div class="field"><label for="av-mensaje">Mensaje</label><textarea class="input" id="av-mensaje" maxlength="500" rows="4"></textarea></div>
+      <p class="field__hint">${U.icon("shield", { size: 13 })} Le llega a ${personas} persona${personas === 1 ? "" : "s"} con reserva confirmada en esta salida, en la campanita de la aplicación. No ves sus datos.</p>`,
+    actions: [
+      { label: "Cancelar", variant: "btn--soft" },
+      {
+        label: "Enviar aviso", variant: "btn--primary", close: false,
+        onClick: async () => {
+          const btn = U.$("#app-modal [data-act='1']"); btn.disabled = true;
+          try {
+            const n = await D.avisarPasajeros({ catamaranId: s.catamaran.id, fecha: s.fecha, turno: s.turno, titulo: U.$("#av-titulo").value, mensaje: U.$("#av-mensaje").value });
+            U.closeModal(); U.toast(`Aviso enviado a ${n} pasajero${n === 1 ? "" : "s"}`, "ok");
+          } catch (err) { U.toast(err.message, "err"); btn.disabled = false; }
+          return false;
+        },
+      },
+    ],
+  });
+  const usar = (k) => {
+    const [, titulo, texto] = PLANTILLAS_AVISO.find((x) => x[0] === k);
+    U.$$("[data-plantilla]").forEach((b) => { const on = b.dataset.plantilla === k; b.classList.toggle("is-on", on); b.setAttribute("aria-checked", String(on)); });
+    U.$("#av-titulo").value = titulo; U.$("#av-mensaje").value = texto(s, fecha, turno);
+    if (k === "otro") U.$("#av-titulo").focus();
+  };
+  U.$$("[data-plantilla]").forEach((b) => b.addEventListener("click", () => usar(b.dataset.plantilla)));
+  usar("zarpe");
+}
+
+/* ============================================================================
+ *  LISTA DE EMBARQUE (dueño): titulares de las reservas de una salida, con su
+ *  nombre y DNI, para imprimir o descargar (por ejemplo, para Prefectura).
+ * ========================================================================== */
+export async function viewEmbarque(ctx) {
+  const p = ctx.session.profile;
+  const catId = ctx.params.cat || "", fecha = /^\d{4}-\d{2}-\d{2}$/.test(ctx.params.fecha || "") ? ctx.params.fecha : U.todayISO();
+  const turno = ctx.params.turno === "tarde" ? "tarde" : "manana";
+  const cat = (await D.listCatamaranes()).find((c) => c.id === catId);
+  let filas = [], error = "";
+  try { filas = cat ? await D.listaEmbarque(catId, fecha, turno) : []; } catch (e) { error = e.message; }
+  const lugares = filas.reduce((n, f) => n + Number(f.cantidad_lugares || 0), 0);
+  const acompanantes = lugares - filas.length;
+  const fila = (k, v) => `<div class="permit__row"><span>${U.esc(k)}</span><b>${v}</b></div>`;
+
+  U.mount(appShell({
+    active: null, rol: p.rol,
+    topbarHtml: topbar({ title: "Lista de embarque", back: true, bell: false }),
+    bodyHtml: !cat ? emptyState("Salida no encontrada", "Volvé a Mi flota y abrí la salida.", "calendar") : `
+      <section class="doc embarque">
+        <div class="doc__head">${U.icon("users", { size: 18 })}<span>Lista de embarque</span></div>
+        <div class="permit__body">
+          ${fila("Catamarán", U.esc(cat.nombre))}
+          ${cat.habilitacion ? fila("Habilitación", U.esc(cat.habilitacion)) : ""}
+          ${fila("Salida", `${U.esc(U.fmtDateLong(fecha))} · turno ${U.esc(U.turnoLabel(turno).toLowerCase())}`)}
+          ${fila("Responsable", U.esc(`${p.nombre} ${p.apellido || ""}`.trim()))}
+          ${fila("Pasajeros", `${lugares} lugar${lugares === 1 ? "" : "es"} · ${filas.length} reserva${filas.length === 1 ? "" : "s"}`)}
+        </div>
+        ${error ? `<div class="nota nota--error" style="margin:0 18px 16px">${U.icon("alert-triangle", { size: 18 })}<span>${U.esc(error)}</span></div>` : filas.length ? `
+        <table class="table embarque__tabla">
+          <thead><tr><th>Lugar</th><th>Titular</th><th>DNI</th></tr></thead>
+          <tbody>${filas.map((f) => `<tr>
+            <td>${U.esc((f.lugares || []).join(", "))}</td>
+            <td><b>${U.esc(`${f.apellido || ""}, ${f.nombre || ""}`.replace(/^, /, ""))}</b>
+              <small class="muted d-block">${U.esc(f.numero)}${f.cantidad_lugares > 1 ? ` · y ${f.cantidad_lugares - 1} acompañante${f.cantidad_lugares > 2 ? "s" : ""}` : ""}</small></td>
+            <td>${U.esc(f.dni || "—")}</td>
+          </tr>`).join("")}</tbody>
+        </table>
+        <p class="embarque__firma">Firma del responsable: ______________________________</p>` : `<p class="muted center" style="padding:0 18px 18px">No hay reservas para esta salida.</p>`}
+      </section>
+      ${acompanantes > 0 ? `<p class="muted center mt-12" style="font-size:.8rem">${U.icon("info", { size: 14 })} Figura el titular de cada reserva. Los ${acompanantes} acompañante${acompanantes === 1 ? "" : "s"} de las reservas con más de un lugar no están registrados en la aplicación: anotalos al embarcar.</p>` : ""}
+      ${filas.length ? `<div class="stack mt-16">
+        <button class="btn btn--primary btn--block" data-print>${U.icon("download", { size: 18 })} Imprimir o guardar en PDF</button>
+        <button class="btn btn--soft btn--block" data-csv>${U.icon("file-text", { size: 18 })} Descargar CSV (Excel)</button>
+      </div>` : ""}
+      <p class="muted center mt-12" style="font-size:.8rem">${U.icon("shield", { size: 14 })} Sólo ves el nombre y el DNI de los titulares de tus salidas. El correo, el teléfono, el pago y el permiso sólo los ven el pasajero y el Municipio.</p>`,
+  }));
+  wireChrome(ctx);
+  U.$("[data-print]")?.addEventListener("click", () => window.print());
+  U.$("[data-csv]")?.addEventListener("click", () => {
+    U.downloadText(`embarque-${(cat.nombre || "salida").replace(/\s+/g, "-").toLowerCase()}-${fecha}-${turno}.csv`, U.toCSV(
+      filas.map((f) => ({ lugares: (f.lugares || []).join(" "), apellido: f.apellido, nombre: f.nombre, dni: f.dni, reserva: f.numero, cantidad: f.cantidad_lugares })),
+      [{ key: "lugares", label: "Lugares" }, { key: "apellido", label: "Apellido" }, { key: "nombre", label: "Nombre" }, { key: "dni", label: "DNI" }, { key: "reserva", label: "Reserva" }, { key: "cantidad", label: "Cantidad de lugares" }]));
+    U.toast("CSV descargado", "ok");
+  });
 }
 
 /* ---- Finanzas: ganancias y pérdidas del mes ---- */
@@ -2119,20 +2289,43 @@ function gastoModal(ctx, propios, gasto, catInicial = "") {
   });
 }
 
-function catamaranModal(ctx, cat, futuras = 0) {
+/* Alta y edición de un catamarán. `duenos` (sólo la administración): cuentas a
+ * las que se puede asignar; un dueño puede tener varios catamaranes. */
+function catamaranModal(ctx, cat, futuras = 0, duenos = null) {
   const edit = Boolean(cat);
+  // Fotos: las ya guardadas ({ ruta }) y las nuevas, reducidas y por subir ({ blob, vista }).
+  const fotos = (cat?.fotos || []).map((ruta) => ({ ruta }));
+  const pintarFotos = () => {
+    U.$("#c-fotos").innerHTML = fotos.map((f, i) => `<div class="foto-mini">
+        <img src="${U.esc(f.vista || D.urlFoto(f.ruta))}" alt="Foto ${i + 1} de ${fotos.length}"/>
+        ${i === 0 ? `<span class="foto-mini__portada">Portada</span>` : `<button type="button" class="foto-mini__btn foto-mini__btn--portada" data-portada="${i}" aria-label="Usar la foto ${i + 1} como portada">${U.icon("check", { size: 14, stroke: 3 })}</button>`}
+        <button type="button" class="foto-mini__btn" data-quitar="${i}" aria-label="Quitar la foto ${i + 1}">${U.icon("x", { size: 14, stroke: 3 })}</button>
+      </div>`).join("") || `<p class="muted" style="font-size:.84rem;margin:0">Sin fotos todavía.</p>`;
+    U.$("#c-fotos-agregar").classList.toggle("hide", fotos.length >= D.MAX_FOTOS);
+  };
   U.modal({
     title: edit ? "Editar catamarán" : "Nuevo catamarán",
     body: `
       <div class="field"><label for="c-nombre">Nombre</label><input class="input" id="c-nombre" maxlength="60" value="${U.esc(cat?.nombre || "")}" placeholder="Don Juan II"/></div>
       <div class="field"><label for="c-desc">Descripción</label><textarea class="input" id="c-desc" maxlength="300" rows="3" placeholder="Catamarán techado, con baño y sombra. Equipo de pesca incluido.">${U.esc(cat?.descripcion || "")}</textarea>
         <div class="field__hint">La ven los pescadores al elegir dónde reservar.</div></div>
+      <div class="field"><span class="field-label" id="c-fotos-titulo">Fotos (hasta ${D.MAX_FOTOS})</span>
+        <div class="fotos-editor" id="c-fotos" role="group" aria-labelledby="c-fotos-titulo"></div>
+        <label class="btn btn--soft btn--sm mt-8" id="c-fotos-agregar" for="c-fotos-input">${U.icon("plus", { size: 16 })} Agregar fotos</label>
+        <input type="file" id="c-fotos-input" accept="image/jpeg,image/png,image/webp" multiple class="sr-only"/>
+        <div class="field__hint">La primera es la portada. Se ven en la lista de catamaranes y al reservar.</div></div>
       <div class="flex gap-12">
         <div class="field grow"><label for="c-cap">Cantidad de lugares</label><input class="input" id="c-cap" type="number" min="1" max="60" inputmode="numeric" value="${cat?.capacidad || 12}"/></div>
         <div class="field grow"><label for="c-precio">Precio por lugar</label><input class="input" id="c-precio" type="number" min="0" inputmode="numeric" value="${cat?.precio ?? 8000}"/></div>
       </div>
       ${edit ? `<p class="field__hint" style="margin:-6px 0 14px">Si cambiás la cantidad de lugares se rehace el plano. No se pueden quitar lugares que tengan reservas desde hoy.</p>` : ""}
       <div class="field"><label for="c-hab">N° de habilitación municipal</label><input class="input" id="c-hab" value="${U.esc(cat?.habilitacion || "")}" placeholder="HAB-2024-000"/></div>
+      ${duenos ? `<div class="field"><label for="c-dueno">Dueño</label>
+        <select class="select" id="c-dueno">
+          <option value="">Sin dueño asignado</option>
+          ${duenos.map((u) => `<option value="${u.id}"${cat?.id_propietario === u.id ? " selected" : ""}>${U.esc(`${u.nombre} ${u.apellido || ""}`.trim())} · ${U.esc(u.email)}</option>`).join("")}
+        </select>
+        <div class="field__hint">El dueño lo administra desde Mi flota. Un dueño puede tener varios catamaranes.</div></div>` : ""}
       <div class="field"><label for="c-estado">Estado</label>
         <select class="select" id="c-estado">
           ${["activa", "mantenimiento", "inactiva"].map((e) => `<option value="${e}"${cat?.estado === e ? " selected" : ""}>${estadoCatLabel(e)}</option>`).join("")}
@@ -2158,20 +2351,56 @@ function catamaranModal(ctx, cat, futuras = 0) {
           if (!(Number.isInteger(capacidad) && capacidad >= 1 && capacidad <= 60)) { U.toast("La cantidad de lugares debe ser un número entero entre 1 y 60.", "err"); return false; }
           if (!(data.precio >= 0) || U.$("#c-precio").value === "") { U.toast("Ingresá un precio por lugar válido.", "err"); return false; }
           if (!data.habilitacion) { U.toast("Ingresá el número de habilitación municipal.", "err"); return false; }
+          const btn = U.$("#app-modal [data-act='1']"); btn.disabled = true; btn.textContent = "Guardando…";
+          let id = cat?.id;
           try {
             if (edit) {
               // Primero la cantidad de lugares: si no se puede, no se guarda nada.
               if (capacidad !== Number(cat.capacidad)) await D.cambiarCapacidad(cat.id, capacidad);
               await D.updateCatamaran(cat.id, data);
             } else {
-              await D.crearCatamaran({ ...data, capacidad });
+              id = await D.crearCatamaran({ ...data, capacidad });
             }
+            const dueno = U.$("#c-dueno");
+            if (dueno && dueno.value !== (cat?.id_propietario || "")) await D.asignarPropietario(id, dueno.value || null);
+            // Fotos: se suben las nuevas, se guarda el orden y se borran las quitadas.
+            const antes = cat?.fotos || [];
+            const rutas = [];
+            for (const f of fotos) rutas.push(f.ruta || await D.subirFotoCatamaran(id, f.blob));
+            if (JSON.stringify(rutas) !== JSON.stringify(antes)) await D.setFotosCatamaran(id, rutas);
+            await D.borrarFotosCatamaran(antes.filter((r) => !rutas.includes(r)));
             U.closeModal(); U.toast(edit ? "Catamarán actualizado" : "Catamarán creado", "ok"); ctx.rerender();
-          } catch (err) { U.toast(err.message, "err"); }
+          } catch (err) {
+            if (!edit && id) {   // se creó, pero falló el dueño o alguna foto: se sigue desde Editar
+              U.closeModal(); U.toast(`El catamarán se creó, pero ${err.message.charAt(0).toLowerCase()}${err.message.slice(1)}`, "err"); ctx.rerender();
+              return false;
+            }
+            U.toast(err.message, "err"); btn.disabled = false; btn.textContent = edit ? "Guardar" : "Crear";
+          }
           return false;
         },
       },
     ],
+  });
+  pintarFotos();
+  U.$("#c-fotos").addEventListener("click", (e) => {
+    const q = e.target.closest("[data-quitar]"), pt = e.target.closest("[data-portada]");
+    if (q) { const [f] = fotos.splice(Number(q.dataset.quitar), 1); if (f.vista) URL.revokeObjectURL(f.vista); }
+    else if (pt) { const [f] = fotos.splice(Number(pt.dataset.portada), 1); fotos.unshift(f); }
+    else return;
+    pintarFotos();
+  });
+  U.$("#c-fotos-input").addEventListener("change", async (e) => {
+    const archivos = [...e.target.files].slice(0, D.MAX_FOTOS - fotos.length);
+    e.target.value = "";
+    for (const archivo of archivos) {
+      try {
+        // En la demostración se guardan en el dispositivo: más chicas.
+        const blob = D.MODE === "demo" ? await U.reducirFoto(archivo, 640, 0.7) : await U.reducirFoto(archivo);
+        fotos.push({ blob, vista: URL.createObjectURL(blob) });
+      } catch (err) { U.toast(err.message, "err"); }
+    }
+    pintarFotos();
   });
 }
 

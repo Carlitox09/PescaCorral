@@ -245,7 +245,7 @@ const todayISO = () => dateISO(new Date());
 
 function seedDemo() {
   DB = loadDB();
-  if (DB && DB.__v === 6) return;
+  if (DB && DB.__v === 7) return;
 
   const rnd = mulberry32(20260628);
   const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
@@ -369,7 +369,9 @@ function seedDemo() {
   /* --- Notificaciones del pescador --- */
   const ultReservas = reservas.filter((r) => r.id_usuario === uPescador.id && r.estado !== "cancelada").slice(-3).reverse();
   ultReservas.forEach((r, i) => {
-    notificaciones.push({ id: uid(), id_usuario: uPescador.id, tipo: "reserva", titulo: "Reserva confirmada", mensaje: `Tu reserva del ${r.fecha.split("-").reverse().join("/")} fue confirmada.`, leida: i > 0, created_at: new Date(r.fecha + "T10:06:00").toISOString() });
+    // La confirmación llega al reservar (nunca en el futuro).
+    const enviada = new Date(Math.min(Date.now() - (i + 1) * 3600000, new Date(r.fecha + "T10:06:00").getTime()));
+    notificaciones.push({ id: uid(), id_usuario: uPescador.id, tipo: "reserva", titulo: "Reserva confirmada", mensaje: `Tu reserva del ${r.fecha.split("-").reverse().join("/")} fue confirmada.`, leida: i > 0, created_at: enviada.toISOString() });
   });
   notificaciones.push({ id: uid(), id_usuario: uPescador.id, tipo: "recordatorio", titulo: "Recordatorio de salida", mensaje: "Recordá presentar tu permiso digital al embarcar.", leida: false, created_at: isoFromOffset(-1, 9).toISOString() });
 
@@ -381,7 +383,7 @@ function seedDemo() {
     { id: uid(), id_especie: especies[2].id, periodo, permisos_emitidos: 210, umbral: 300, estado: "activa", created_at: isoFromOffset(-5).toISOString() },
   ];
 
-  DB = { __v: 6, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, gastos, reportes: [], tarifas: { ...TARIFAS_DEMO }, seq, seqReserva, session: null };
+  DB = { __v: 7, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, gastos, reportes: [], tarifas: { ...TARIFAS_DEMO }, seq, seqReserva, session: null };
   saveDB(DB);
 }
 
@@ -1168,11 +1170,15 @@ export async function getComprobante(reservaId) {
 export async function listNotificaciones() {
   await ready();
   if (MODE === "supabase") {
-    const { data, error } = await sb.from("notificacion").select("*").order("created_at", { ascending: false }).limit(30);
+    const { data, error } = await sb.from("notificacion").select("*, reserva(fecha, turno, catamaran(nombre))").order("created_at", { ascending: false }).limit(30);
     if (error) throw error; return data;
   }
   const u = demoSessionUser();
-  return DB.notificaciones.filter((n) => n.id_usuario === u.id).slice().sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  return DB.notificaciones.filter((n) => n.id_usuario === u.id).slice().sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+    .map((n) => {
+      const r = n.id_reserva && byId(DB.reservas, n.id_reserva);
+      return r ? { ...n, reserva: { fecha: r.fecha, turno: r.turno, catamaran: { nombre: byId(DB.catamaranes, r.id_catamaran)?.nombre || "" } } } : n;
+    });
 }
 
 export async function marcarLeidas() {
@@ -1447,8 +1453,10 @@ export const esRolPersonal = (rol) => rol === "admin_municipal" || rol === "admi
 export async function setRol(userId, rol) {
   await ready();
   if (MODE === "supabase") {
-    const { error } = await sb.from("usuario").update({ rol }).eq("id", userId);
-    if (error) throw new Error(error.message); return true;
+    const { data, error } = await sb.from("usuario").update({ rol }).eq("id", userId).select("id");
+    if (error) throw new Error(error.message);
+    if (!data?.length) throw new Error("No se pudo cambiar el tipo de cuenta. Volvé a ingresar e intentá de nuevo.");
+    return true;
   }
   const u = byId(DB.usuarios, userId);
   if (u && esRolPersonal(u.rol)) throw new Error("El rol de una cuenta del personal no se modifica.");
@@ -1463,8 +1471,10 @@ export async function setRol(userId, rol) {
 export async function setActivo(userId, activo) {
   await ready();
   if (MODE === "supabase") {
-    const { error } = await sb.from("usuario").update({ activo: Boolean(activo) }).eq("id", userId);
-    if (error) throw new Error(error.message); return true;
+    const { data, error } = await sb.from("usuario").update({ activo: Boolean(activo) }).eq("id", userId).select("id");
+    if (error) throw new Error(error.message);
+    if (!data?.length) throw new Error("No se pudo cambiar el estado de la cuenta. Volvé a ingresar e intentá de nuevo.");
+    return true;
   }
   const u = byId(DB.usuarios, userId);
   if (u && esRolPersonal(u.rol) && demoSessionUser()?.rol !== "admin_sistema")
@@ -1606,7 +1616,7 @@ export async function crearCatamaran({ nombre, descripcion = "", capacidad, prec
   const id = uid();
   DB.catamaranes.push({
     id, id_propietario: u.rol === "dueno" ? u.id : null, nombre, descripcion: String(descripcion || "").trim(),
-    capacidad: +capacidad, precio: +precio, habilitacion: String(habilitacion).trim(), estado, created_at: new Date().toISOString(),
+    capacidad: +capacidad, precio: +precio, habilitacion: String(habilitacion).trim(), estado, fotos: [], created_at: new Date().toISOString(),
   });
   for (let n = 1; n <= capacidad; n++)
     DB.lugares.push({ id: uid(), id_catamaran: id, numero: n, ubicacion: ubicacionLugar(n, +capacidad), activo: true });
@@ -1661,6 +1671,140 @@ export async function cambiarCapacidad(id, capacidad) {
   DB.lugares.filter((l) => l.id_catamaran === id && l.activo).forEach((l) => (l.ubicacion = ubicacionLugar(l.numero, capacidad)));
   c.capacidad = capacidad;
   persist();
+  return true;
+}
+
+/** La administración asigna (o quita, con null) el dueño de un catamarán; un dueño puede tener varios. */
+export async function asignarPropietario(catamaranId, usuarioId) {
+  await ready();
+  if (MODE === "supabase") {
+    const { error } = await sb.rpc("asignar_propietario", { p_id_catamaran: catamaranId, p_id_propietario: usuarioId || null });
+    if (error) throw new Error(error.message);
+    return true;
+  }
+  // Demo: las mismas reglas que public.asignar_propietario.
+  if (!esRolPersonal(demoSessionUser()?.rol)) throw new Error("Solo la administración asigna el dueño de un catamarán.");
+  const c = byId(DB.catamaranes, catamaranId);
+  if (!c) throw new Error("El catamarán no existe.");
+  const nuevo = usuarioId ? byId(DB.usuarios, usuarioId) : null;
+  if (usuarioId && !(nuevo && nuevo.rol === "dueno" && nuevo.activo !== false)) throw new Error("Elegí una cuenta activa de dueño de catamarán.");
+  if ((c.id_propietario || null) === (usuarioId || null)) return true;
+  (DB.gastos || []).filter((g) => g.id_catamaran === c.id && g.id_propietario !== usuarioId).forEach((g) => (g.id_catamaran = null));
+  c.id_propietario = usuarioId || null;
+  persist();
+  return true;
+}
+
+/* ---- Avisos a los pasajeros de una salida y lista de embarque ---- */
+/* Demo: el dueño actúa sobre sus catamaranes; la administración, sobre todos. */
+function catamaranDeLaSesionDemo(catamaranId) {
+  const u = demoSessionUser();
+  const c = byId(DB.catamaranes, catamaranId);
+  if (!c) throw new Error("El catamarán no existe.");
+  return esRolPersonal(u?.rol) || (u?.rol === "dueno" && c.id_propietario === u.id) ? c : null;
+}
+
+/** Aviso a todos los que reservaron una salida (sin ver quiénes son). Devuelve la cantidad de destinatarios. */
+export async function avisarPasajeros({ catamaranId, fecha, turno, titulo, mensaje }) {
+  await ready();
+  titulo = String(titulo || "").trim(); mensaje = String(mensaje || "").trim();
+  if (titulo.length < 3 || titulo.length > 80) throw new Error("El título debe tener entre 3 y 80 caracteres.");
+  if (mensaje.length < 3 || mensaje.length > 500) throw new Error("El mensaje debe tener entre 3 y 500 caracteres.");
+  if (MODE === "supabase") {
+    const { data, error } = await sb.rpc("avisar_pasajeros", { p_id_catamaran: catamaranId, p_fecha: fecha, p_turno: turno, p_titulo: titulo, p_mensaje: mensaje });
+    if (error) throw new Error(error.message);
+    return Number(data) || 0;
+  }
+  // Demo: las mismas reglas que public.avisar_pasajeros.
+  if (!catamaranDeLaSesionDemo(catamaranId)) throw new Error("No autorizado para avisar a los pasajeros de este catamarán.");
+  if (!fecha || fecha < todayISO()) throw new Error("Solo se puede avisar sobre salidas de hoy en adelante.");
+  const deLaSalida = DB.reservas.filter((r) => r.id_catamaran === catamaranId && r.fecha === fecha && r.turno === turno);
+  const ids = new Set(deLaSalida.map((r) => r.id));
+  const previos = new Set(DB.notificaciones.filter((n) => n.tipo === "salida" && ids.has(n.id_reserva)).map((n) => n.created_at)).size;
+  if (previos >= 10) throw new Error("Ya se enviaron 10 avisos para esta salida.");
+  const ahora = new Date().toISOString();
+  const avisados = new Set();
+  deLaSalida.filter((r) => r.estado === "confirmada" && byId(DB.usuarios, r.id_usuario)?.activo !== false).forEach((r) => {
+    if (avisados.has(r.id_usuario)) return;
+    avisados.add(r.id_usuario);
+    DB.notificaciones.unshift({ id: uid(), id_usuario: r.id_usuario, id_reserva: r.id, tipo: "salida", titulo, mensaje, leida: false, created_at: ahora });
+  });
+  if (!avisados.size) throw new Error("No hay pasajeros con reserva confirmada en esa salida.");
+  persist();
+  return avisados.size;
+}
+
+/** Lista de embarque de una salida: [{ numero, lugares[], cantidad_lugares, nombre, apellido, dni }]. */
+export async function listaEmbarque(catamaranId, fecha, turno) {
+  await ready();
+  if (MODE === "supabase") {
+    // Por GET (función de sólo lectura): así queda guardada para consultarla sin conexión.
+    const { data, error } = await sb.rpc("lista_embarque", { p_id_catamaran: catamaranId, p_fecha: fecha, p_turno: turno }, { get: true });
+    if (error) throw new Error(error.message);
+    return data || [];
+  }
+  if (!catamaranDeLaSesionDemo(catamaranId)) throw new Error("No autorizado para ver la lista de embarque de este catamarán.");
+  return DB.reservas
+    .filter((r) => r.id_catamaran === catamaranId && r.fecha === fecha && r.turno === turno && (r.estado === "confirmada" || r.estado === "completada"))
+    .map((r) => {
+      const t = byId(DB.usuarios, r.id_usuario) || {};
+      const lugares = DB.reserva_lugar.filter((x) => x.id_reserva === r.id).map((x) => byId(DB.lugares, x.id_lugar)?.numero).filter(Boolean).sort((a, b) => a - b);
+      return { numero: r.numero, lugares, cantidad_lugares: r.cantidad_lugares, nombre: t.nombre || "", apellido: t.apellido || "", dni: t.dni || "" };
+    })
+    .sort((a, b) => (a.lugares[0] || 0) - (b.lugares[0] || 0));
+}
+
+/* ---- Fotos de los catamaranes (Supabase Storage, depósito "catamaranes") ---- */
+const DEPOSITO_FOTOS = "catamaranes";
+export const MAX_FOTOS = 6;
+/** Dirección pública de una foto (en demo, la foto misma como data: URL). */
+export function urlFoto(ruta) {
+  if (!ruta) return "";
+  if (MODE !== "supabase" || ruta.startsWith("data:")) return ruta;
+  return `${CFG.SUPABASE_URL}/storage/v1/object/public/${DEPOSITO_FOTOS}/${ruta.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+/** Sube una foto (ya reducida, JPEG) de un catamarán y devuelve su ruta. */
+export async function subirFotoCatamaran(catamaranId, blob) {
+  await ready();
+  if (MODE === "supabase") {
+    const ruta = `${catamaranId}/${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.jpg`;
+    const { error } = await sb.storage.from(DEPOSITO_FOTOS).upload(ruta, blob, { contentType: "image/jpeg", upsert: false });
+    if (error) throw new Error(/row-level security|unauthorized|403/i.test(error.message) ? "No tenés permisos para subir fotos de este catamarán." : error.message);
+    return ruta;
+  }
+  catamaranEditableDemo(catamaranId);
+  return await new Promise((ok, mal) => {
+    const fr = new FileReader();
+    fr.onload = () => ok(fr.result);
+    fr.onerror = () => mal(new Error("No se pudo leer la foto."));
+    fr.readAsDataURL(blob);
+  });
+}
+
+/** Borra del depósito las fotos que se quitaron del catamarán. */
+export async function borrarFotosCatamaran(rutas) {
+  await ready();
+  const borrar = (rutas || []).filter((r) => r && !r.startsWith("data:"));
+  if (MODE !== "supabase" || !borrar.length) return true;
+  const { error } = await sb.storage.from(DEPOSITO_FOTOS).remove(borrar);
+  if (error) console.warn("No se pudieron borrar fotos:", error.message);
+  return true;
+}
+
+/** Guarda las fotos del catamarán, en orden (la primera es la portada). */
+export async function setFotosCatamaran(catamaranId, rutas) {
+  await ready();
+  if ((rutas || []).length > MAX_FOTOS) throw new Error(`Un catamarán puede tener hasta ${MAX_FOTOS} fotos.`);
+  if (MODE === "supabase") {
+    const { error } = await sb.from("catamaran").update({ fotos: rutas }).eq("id", catamaranId);
+    if (error) throw new Error(traducirDB(error.message));
+    return true;
+  }
+  const c = catamaranEditableDemo(catamaranId);
+  const antes = c.fotos || [];
+  c.fotos = rutas.slice();
+  try { saveDB(DB); } catch { c.fotos = antes; throw new Error("No hay espacio para guardar más fotos en la demostración."); }
   return true;
 }
 

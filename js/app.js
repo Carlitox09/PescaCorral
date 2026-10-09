@@ -23,6 +23,7 @@ const ROUTES = {
   historial:   { view: V.viewHistorial,   auth: true },
   perfil:      { view: V.viewPerfil,      auth: true },
   gestion:     { view: V.viewGestion,     auth: true, roles: ["dueno", "admin_municipal", "admin_sistema"] },
+  embarque:    { view: V.viewEmbarque,    auth: true, roles: ["dueno"] },   // lista de embarque de una salida
   admin:       { view: V.viewAdmin,       auth: true, roles: ["admin_municipal", "admin_sistema"] },
   reportes:    { view: V.viewReportes,    auth: true, roles: ["admin_municipal", "admin_sistema"] },
   usuarios:    { view: V.viewUsuarios,    auth: true, roles: ["admin_municipal", "admin_sistema"] },

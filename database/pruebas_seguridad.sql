@@ -90,6 +90,10 @@ declare
     reservar text := 'select public.crear_reserva_completa(p_id_catamaran => %L, p_fecha => %L, '
                      'p_turno => %L, p_lugares => array[%L]::uuid[], p_metodo_pago => ''efectivo'', '
                      'p_tipo_permiso => ''diario'')';
+    avisar_s text := 'select public.avisar_pasajeros(%L, %L, %L, ''Salida suspendida'', ''Se suspende por viento.'')';
+    embarque text := 'select * from public.lista_embarque(%L, %L, %L)';
+    foto    text := 'select 1 where public.es_foto_propia(%L)';
+    asignar text := 'select public.asignar_propietario(%L, %L)';
     altacat text := 'select public.crear_catamaran(%L, ''Catamarán de prueba'', %s, 1000, ''HAB-PRUEBA'', ''activa'')';
     gastar  text := 'insert into public.gasto (%s fecha, categoria, monto) values (%s %L, ''combustible'', 15000)';
     con_sesion boolean := true;
@@ -176,6 +180,8 @@ begin
             ('Sin sesión', null, 'Cargar un catamarán', 'rechazo', 'insert into public.catamaran (nombre, capacidad, precio) values (''Intruso'', 1, 0)', 'cambio', null),
             ('Sin sesión', null, 'Dar de alta un catamarán', 'rechazo', format(altacat, 'Intruso', 2), 'cambio', null),
             ('Sin sesión', null, 'Leer los gastos de los dueños', 'rechazo', 'select * from public.gasto', 'lectura', null),
+            ('Sin sesión', null, 'Avisar a los pasajeros de una salida', 'rechazo', format(avisar_s, cat_d, hoy + 1, 'manana'), 'cambio', null),
+            ('Sin sesión', null, 'Ver una lista de embarque', 'rechazo', format(embarque, cat_d, hoy + 1, 'manana'), 'lectura', null),
 
             -- Pescador B sobre los datos del pescador A
             ('Pescador B', b, 'Leer la reserva de otro pescador', 'rechazo', format('select * from public.reserva where id = %L', ra1), 'lectura', null),
@@ -217,6 +223,10 @@ begin
             ('Pescador A', a, 'Modificar un catamarán', 'rechazo', format('update public.catamaran set precio = 1 where id = %L', cat_d), 'cambio', null),
             ('Pescador A', a, 'Dar de alta un catamarán', 'rechazo', format(altacat, 'Prueba A', 2), 'cambio', null),
             ('Pescador A', a, 'Registrar un gasto', 'rechazo', format(gastar, '', '', hoy), 'cambio', null),
+            ('Pescador A', a, 'Avisar a los pasajeros de un catamarán', 'rechazo', format(avisar_s, cat_d, hoy + 1, 'manana'), 'cambio', null),
+            ('Pescador A', a, 'Ver la lista de embarque de un catamarán', 'rechazo', format(embarque, cat_d, hoy + 1, 'manana'), 'lectura', null),
+            ('Pescador A', a, 'Subir una foto a un catamarán', 'rechazo', format(foto, cat_d || '/foto.jpg'), 'lectura', null),
+            ('Pescador A', a, 'Asignarse un catamarán', 'rechazo', format(asignar, cat_o, a), 'cambio', null),
             ('Pescador A', a, 'Publicar un aviso', 'rechazo', format(avisar, 'todos', null), 'cambio', null),
             ('Pescador A', a, 'Leer los avisos publicados', 'rechazo', 'select * from public.aviso', 'lectura', null),
             ('Pescador A', a, 'Crear un aviso directo en la tabla', 'rechazo', 'insert into public.aviso (titulo, mensaje, destino) values (''Falso'', ''Aviso falso'', ''todos'')', 'cambio', null),
@@ -237,6 +247,19 @@ begin
             ('Dueño', d, 'Quitar un lugar con reservas desde hoy', 'rechazo', format('select public.cambiar_capacidad(%L, 2)', cat_d), 'cambio', null),
             ('Dueño', d, 'Cambiar los lugares de un catamarán ajeno', 'rechazo', format('select public.cambiar_capacidad(%L, 5)', cat_o), 'cambio', null),
             ('Dueño', d, 'Ver sus gastos', 'permitido', 'select * from public.gasto', 'lectura', null),
+            ('Dueño', d, 'Tener más de un catamarán', 'permitido', format(altacat, 'Prueba D3', 2), 'cambio',
+                format('select count(*)::int from public.catamaran where id_propietario = %L', d)),
+            ('Dueño', d, 'Avisar a los pasajeros de su salida (sin ver quiénes son)', 'permitido', format(avisar_s, cat_d, hoy + 1, 'manana'), 'cambio',
+                format('select count(*)::int from public.notificacion where tipo = ''salida'' and id_usuario = %L and id_reserva = %L', a, ra1)),
+            ('Dueño', d, 'Avisar sobre una salida que ya pasó', 'rechazo', format(avisar_s, cat_d, hoy - 3, 'manana'), 'cambio', null),
+            ('Dueño', d, 'Avisar a los pasajeros de un catamarán ajeno', 'rechazo', format(avisar_s, cat_o, hoy + 1, 'manana'), 'cambio', null),
+            ('Dueño', d, 'Ver la lista de embarque de su salida (nombre y DNI)', 'permitido', format('select 1 from public.lista_embarque(%L, %L, ''manana'') where dni = ''90000001''', cat_d, hoy + 1), 'lectura', null),
+            ('Dueño', d, 'Ver la lista de embarque de un catamarán ajeno', 'rechazo', format(embarque, cat_o, hoy + 1, 'manana'), 'lectura', null),
+            ('Dueño', d, 'Subir una foto de su catamarán', 'permitido', format(foto, cat_d || '/foto.jpg'), 'lectura', null),
+            ('Dueño', d, 'Subir una foto a un catamarán ajeno', 'rechazo', format(foto, cat_o || '/foto.jpg'), 'lectura', null),
+            ('Dueño', d, 'Guardar las fotos de su catamarán', 'permitido', format('update public.catamaran set fotos = array[%L] where id = %L', cat_d || '/portada.jpg', cat_d), 'cambio', null),
+            ('Dueño', d, 'Poner en su catamarán una foto de otro', 'rechazo', format('update public.catamaran set fotos = array[%L] where id = %L', cat_o || '/portada.jpg', cat_d), 'cambio', null),
+            ('Dueño', d, 'Asignarse un catamarán ajeno', 'rechazo', format(asignar, cat_o, d), 'cambio', null),
             ('Dueño', d, 'Registrar un gasto de su catamarán', 'permitido', format(gastar, 'id_catamaran,', quote_literal(cat_d) || ',', hoy), 'cambio', null),
             ('Dueño', d, 'Registrar un gasto general de la flota', 'permitido', format(gastar, '', '', hoy), 'cambio', null),
             ('Dueño', d, 'Registrar un gasto en un catamarán ajeno', 'rechazo', format(gastar, 'id_catamaran,', quote_literal(cat_o) || ',', hoy), 'cambio', null),
@@ -262,6 +285,11 @@ begin
                 format('select count(*)::int from public.usuario u where u.id = %L and not u.activo and not exists (select 1 from auth.sessions x where x.user_id = u.id)', b)),
             ('Municipio', m, 'Leer autorizaciones del personal', 'rechazo', 'select * from public.personal_autorizado', 'lectura', null),
             ('Municipio', m, 'Leer los gastos de un dueño', 'rechazo', 'select * from public.gasto', 'lectura', null),
+            ('Municipio', m, 'Asignar un catamarán a un dueño', 'permitido', format(asignar, cat_o, d), 'cambio',
+                format('select count(*)::int from public.catamaran where id = %L and id_propietario = %L', cat_o, d)),
+            ('Municipio', m, 'Asignar un catamarán a un pescador', 'rechazo', format(asignar, cat_o, a), 'cambio', null),
+            ('Municipio', m, 'Pasar un dueño a pescador', 'permitido', format('update public.usuario set rol = ''pescador'' where id = %L', d), 'cambio', null),
+            ('Municipio', m, 'Ver la lista de embarque de una salida', 'permitido', format(embarque, cat_d, hoy + 1, 'manana'), 'lectura', null),
             ('Municipio', m, 'Dar de alta un catamarán sin dueño', 'permitido', format(altacat, 'Prueba M', 2), 'cambio',
                 'select count(*)::int from public.catamaran where nombre = ''Prueba M'' and id_propietario is null'),
             ('Municipio', m, 'Publicar un aviso para todos (llega solo a cuentas activas del público)', 'permitido', format(avisar, 'todos', null), 'cambio',
@@ -273,6 +301,9 @@ begin
 
             -- Administración del sistema
             ('Administrador', s, 'Dar un rol administrativo', 'rechazo', format('update public.usuario set rol = ''admin_municipal'' where id = %L', b), 'cambio', null),
+            ('Administrador', s, 'Pasar un pescador a dueño', 'permitido', format('update public.usuario set rol = ''dueno'' where id = %L', b), 'cambio', null),
+            ('Administrador', s, 'Pasar un dueño a pescador', 'permitido', format('update public.usuario set rol = ''pescador'' where id = %L', d), 'cambio', null),
+            ('Administrador', s, 'Asignar un catamarán a un dueño', 'permitido', format(asignar, cat_o, d), 'cambio', null),
             ('Administrador', s, 'Desactivar una cuenta del personal', 'permitido', format('update public.usuario set activo = false where id = %L', m), 'cambio', null),
             ('Administrador', s, 'Cambiar el rol de una cuenta del personal', 'rechazo', format('update public.usuario set rol = ''admin_sistema'' where id = %L', m), 'cambio', null),
             ('Administrador', s, 'Publicar un aviso para los dueños', 'permitido', format(avisar, 'dueno', null), 'cambio',
@@ -289,6 +320,7 @@ begin
             ('Pescador desactivado', x, 'Reservar', 'rechazo', format(reservar, cat_d, hoy + 1, 'tarde', l3), 'cambio', null),
             ('Municipio desactivado', mx, 'Ver los usuarios', 'rechazo', format('select * from public.usuario where id = %L', a), 'lectura', null),
             ('Municipio desactivado', mx, 'Enviar el reporte municipal', 'rechazo', 'select public.generar_reporte_municipal(''general'', ''manual'')', 'cambio', null),
+            ('Municipio desactivado', mx, 'Asignar un catamarán', 'rechazo', format(asignar, cat_o, d), 'cambio', null),
             ('Municipio desactivado', mx, 'Pasar un pescador a dueño', 'rechazo', format('update public.usuario set rol = ''dueno'' where id = %L', a), 'cambio', null),
 
             -- Servicio de ingreso: alta de una cuenta con contraseña

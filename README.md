@@ -33,7 +33,7 @@ No hay servidor propio ni proceso de compilación: el repositorio se sirve tal c
 | --- | --- | --- |
 | HU-001 | Registro en el primer ingreso con Google: se crea la cuenta con los datos de Google y se solicitan DNI, teléfono y tipo de cuenta | `#/registro` |
 | HU-002 | Inicio de sesión con Google para el público y con usuario y contraseña para el personal; mensaje de error si se cancela o las credenciales son incorrectas; redirección al ingreso sin sesión | `#/login`, `/Municipio`, `/Admin` |
-| HU-003 | **Mi flota** del dueño: alta y edición de catamaranes (descripción, cantidad de lugares, precio, habilitación y estado; no se pueden quitar lugares con reservas desde hoy), **salidas** con la ocupación de cada fecha y turno sobre el plano, y **finanzas**: ingresos por lugares vendidos, gastos por categoría y resultado del mes (ganancia o pérdida) por catamarán, con CSV | `#/gestion` |
+| HU-003 | **Mi flota** del dueño (puede tener varios catamaranes): alta y edición de catamaranes (descripción, **fotos**, cantidad de lugares, precio, habilitación y estado; no se pueden quitar lugares con reservas desde hoy), **salidas** con la ocupación de cada fecha y turno sobre el plano, **aviso a los pasajeros** de una salida y **lista de embarque** (nombre y DNI de los titulares), y **finanzas**: ingresos por lugares vendidos, gastos por categoría y resultado del mes (ganancia o pérdida) por catamarán, con CSV. La administración asigna el dueño de cada catamarán | `#/gestion`, `#/embarque` |
 | HU-004 | Disponibilidad por fecha y turno con **lugares libres por catamarán** (cada asiento se reserva por fecha y turno) | `#/catamaranes` |
 | HU-005 | Reserva sobre el **plano del catamarán** visto desde arriba (proa, popa, babor y estribor; numeración en sentido horario desde la proa); marca los lugares propios y avisa si ya hay una reserva en el otro turno; sin doble reserva (índice único por asiento, fecha y turno) | `#/reserva/:id` |
 | HU-006 | Permiso digital con QR, vencimiento y estado (vigente / vencido / anulado). En la reserva se elige **"Comprar permiso"** (diario, semanal o anual, con su tarifa) o **"Ya tengo permiso"** (se valida el número: mismo titular, no anulado y vigente para la fecha). Se comparte como imagen por WhatsApp u otras aplicaciones | `#/permiso/:id` |
@@ -41,8 +41,8 @@ No hay servidor propio ni proceso de compilación: el repositorio se sirve tal c
 | HU-008 | Reportes con gráficos, exportación CSV (Excel) y PDF | `#/reportes` |
 | HU-009 | **Envío de reportes al municipio** (manual y cierre mensual automático) con registro de fecha, destinatario y origen | `#/reportes` |
 | HU-010 | Historial de reservas y permisos, **consultables sin conexión** con su comprobante y su código QR; el dueño consulta las reservas de sus catamaranes en Mi flota › Salidas, también sin conexión | `#/historial` |
-| HU-011 | Centro de notificaciones y **recordatorios de salida** (día previo y día de la reserva), con preferencia del usuario | campana / `#/perfil` |
-| HU-012 | Gestión de roles y activación o desactivación de cuentas | `#/usuarios` |
+| HU-011 | Centro de notificaciones y **recordatorios de salida** (día previo y día de la reserva), con preferencia del usuario; avisos del municipio y avisos del dueño sobre una salida (suspensión, zarpe) | campana / `#/perfil` |
+| HU-012 | Gestión de roles y activación o desactivación de cuentas: el tipo de cuenta (pescador o dueño) lo cambian el municipio y la administración, también desde el teléfono, con búsqueda y filtros | `#/usuarios` |
 | HU-013 | Panel municipal con **filtros por rango de fechas y embarcación** y exportación PDF | `#/admin` |
 | HU-014 | Perfil de usuario | `#/perfil` |
 | HU-015 | Monitoreo de fauna: permisos por especie y **alertas automáticas** cuando los permisos del mes alcanzan el 80 % del umbral | `#/reportes` |
@@ -80,7 +80,7 @@ PescaCorral/
     ├── verificar_base.sql  # Chequeo de sólo lectura: compara la base con schema.sql y revisa los datos
     ├── pruebas_seguridad.sql     # Pruebas de acceso con cada perfil (no deja datos)
     └── migrations/
-        └── 011_dueno.sql   # Para una base existente: gastos del dueño, alta de catamaranes y cambio de lugares
+        └── 012_flota.sql   # Para una base existente: dueño de cada catamarán, avisos a pasajeros, lista de embarque y fotos
 ```
 
 ---
@@ -159,11 +159,16 @@ La sesión de Google queda abierta en el dispositivo hasta que se cierra. Si se 
 
 El dueño tiene todas las opciones del pescador (también reserva y saca su permiso para salir a pescar) y, además, **Mi flota** (`#/gestion`), con tres pestañas:
 
-* **Catamaranes**: alta con nombre, descripción, cantidad de lugares, precio por lugar, habilitación municipal y estado. La cantidad de lugares se puede cambiar después: al sumar se crean los lugares nuevos y al quitar no se permite sacar lugares con reservas desde hoy (los que tuvieron reservas quedan fuera de servicio y conservan el historial). El plano se recalcula. Lo hacen las funciones `crear_catamaran` y `cambiar_capacidad`.
-* **Salidas**: cada fecha y turno con reservas en sus catamaranes, con los lugares vendidos sobre el plano, la cantidad de reservas y el importe. Sin los datos personales, el pago ni el permiso de los pasajeros.
+* **Catamaranes**: puede tener varios. Alta con nombre, descripción, hasta 6 fotos (la primera es la portada; se reducen en el teléfono antes de subirse a Supabase Storage y los pescadores las ven en la lista y al reservar), cantidad de lugares, precio por lugar, habilitación municipal y estado. La cantidad de lugares se puede cambiar después: al sumar se crean los lugares nuevos y al quitar no se permite sacar lugares con reservas desde hoy (los que tuvieron reservas quedan fuera de servicio y conservan el historial). El plano se recalcula. Lo hacen las funciones `crear_catamaran` y `cambiar_capacidad`.
+* **Salidas**: cada fecha y turno con reservas en sus catamaranes, con los lugares vendidos sobre el plano, la cantidad de reservas y el importe. Desde cada salida:
+  * **Avisar a los pasajeros** (`avisar_pasajeros`): un aviso con plantillas ("Estamos por zarpar", "Salida suspendida", "Salida demorada" u otro) que llega a la campanita de todos los que reservaron, sin que el dueño vea quiénes son. Hasta 10 por salida, de hoy en adelante.
+  * **Lista de embarque** (`#/embarque`, `lista_embarque`): lugar, apellido y nombre, DNI y número de reserva de cada titular, para imprimir o guardar en PDF y descargar en CSV (por ejemplo, para Prefectura). Los acompañantes de una reserva con varios lugares no se registran: la lista los indica para anotarlos al embarcar.
+  * El correo, el teléfono, el pago y el permiso de los pasajeros no se le muestran.
 * **Finanzas**: resultado del mes (ganancia o pérdida), ingresos por lugares vendidos (el permiso de pesca es del Municipio y no se suma), gastos por categoría (combustible, mantenimiento, sueldos, seguros, amarre, impuestos y otros), comparación de los últimos 6 meses, detalle por catamarán y descarga en CSV. Los gastos se registran, corrigen y eliminan desde la misma pantalla y son privados de cada dueño (tabla `gasto`).
 
 La pantalla principal del dueño suma un resumen de su flota: lugares vendidos hoy, ingresos y resultado del mes y las próximas salidas.
+
+La administración (municipio y administrador del sistema) asigna el dueño de cada catamarán en **Catamaranes** (`asignar_propietario`): así los catamaranes cargados por el municipio pasan a su dueño, y un dueño puede tener varios. Al cambiar de dueño, los gastos del anterior en ese catamarán quedan como gastos generales suyos.
 
 ### Avisos a los usuarios
 
@@ -186,10 +191,12 @@ La administración (municipio y administrador del sistema) publica avisos en **A
 * **RLS**: cada perfil (pescador, dueño, administración municipal, administrador del sistema) solo puede leer y modificar los registros que le corresponden, aun consultando la API directamente.
 * **Escrituras sólo por funciones**: reservas, lugares, permisos y pagos se crean y anulan únicamente con `crear_reserva_completa` y `anular_reserva`, que validan fecha, catamarán, lugares libres, pago y permiso. Los catamaranes se dan de alta con `crear_catamaran` y su cantidad de lugares cambia sólo con `cambiar_capacidad`.
 * **Gastos privados**: cada dueño ve y modifica sólo sus gastos, y sólo de sus propios catamaranes; ni otros usuarios ni la administración los leen.
+* **Datos de los pasajeros**: el dueño sólo ve el nombre, el apellido y el DNI de los titulares de las reservas de sus salidas, en la lista de embarque; los avisos a los pasajeros se envían sin revelar quiénes son.
+* **Fotos**: el depósito `catamaranes` de Supabase Storage es público para mirar; subir, reemplazar y borrar fotos sólo puede el dueño de cada catamarán y la administración (`es_foto_propia`), hasta 2 MB por foto y sólo imágenes.
 * **Privilegios mínimos**: sin sesión no se accede a ninguna tabla, vista ni función; con sesión sólo se ejecutan las funciones que usa la aplicación.
-* **Frontend**: política de seguridad de contenido (CSP) que sólo admite código propio y conexiones a Supabase; el cliente de Supabase es una copia local con versión fija; todo dato se muestra escapado; los mensajes de error no se toman de la dirección.
+* **Frontend**: política de seguridad de contenido (CSP) que sólo admite código propio, conexiones a Supabase e imágenes propias, de Google (foto de la cuenta) y de Supabase Storage (fotos de los catamaranes); el cliente de Supabase es una copia local con versión fija; todo dato se muestra escapado; los mensajes de error no se toman de la dirección.
 * **Sesiones del personal**: se cierran solas después de 30 minutos sin actividad, para que no queden abiertas en una computadora compartida.
-* **Pruebas**: `database/pruebas_seguridad.sql` verifica estos controles con 106 casos.
+* **Pruebas**: `database/pruebas_seguridad.sql` verifica estos controles con 131 casos.
 
 ## Accesibilidad
 
@@ -241,8 +248,8 @@ El plan gratuito de Supabase pausa el proyecto después de siete días sin uso. 
 
 Definido en `database/schema.sql`:
 
-* **usuario** (extiende `auth.users`; rol, perfil completo, foto de Google), **especie**, **catamaran**, **lugar** (con su ubicación en el plano), **reserva** (número `RES-`, permiso que ampara la salida e importe del permiso), **reserva_lugar** (asiento por fecha y turno), **permiso**, **tarifa_permiso**, **pago** (con código de autorización), **reporte** (con destinatario, origen y estado de envío), **notificacion** (con `id_reserva` para recordatorios), **alerta_fauna**, **gasto** (gastos del dueño por catamarán o generales de la flota).
-* Funciones: `crear_reserva_completa` (valida catamarán, asientos, fecha, turno, medio de pago y permiso propio, y crea reserva + asientos + pago + permiso nuevo + notificación en una transacción), `validar_permiso`, `ubicacion_lugar`, `actualizar_estados` (marca permisos vencidos y salidas realizadas; la llama `generar_recordatorios` a diario), `anular_reserva` (no anula un permiso que ampara otra reserva activa), `crear_catamaran` (alta con todos sus lugares), `cambiar_capacidad` (suma o quita lugares sin afectar reservas desde hoy), `generar_reporte_municipal` (el automático resume el mes que cerró), `generar_recordatorios`, `handle_new_user` (alta del perfil con los datos de Google) y `proteger_perfil` (protección de rol, correo y estado).
+* **usuario** (extiende `auth.users`; rol, perfil completo, foto de Google), **especie**, **catamaran** (con sus fotos en Supabase Storage), **lugar** (con su ubicación en el plano), **reserva** (número `RES-`, permiso que ampara la salida e importe del permiso), **reserva_lugar** (asiento por fecha y turno), **permiso**, **tarifa_permiso**, **pago** (con código de autorización), **reporte** (con destinatario, origen y estado de envío), **notificacion** (con `id_reserva` para recordatorios), **alerta_fauna**, **gasto** (gastos del dueño por catamarán o generales de la flota).
+* Funciones: `crear_reserva_completa` (valida catamarán, asientos, fecha, turno, medio de pago y permiso propio, y crea reserva + asientos + pago + permiso nuevo + notificación en una transacción), `validar_permiso`, `ubicacion_lugar`, `actualizar_estados` (marca permisos vencidos y salidas realizadas; la llama `generar_recordatorios` a diario), `anular_reserva` (no anula un permiso que ampara otra reserva activa), `crear_catamaran` (alta con todos sus lugares), `cambiar_capacidad` (suma o quita lugares sin afectar reservas desde hoy), `asignar_propietario`, `avisar_pasajeros`, `lista_embarque`, `es_foto_propia` (fotos en Storage), `generar_reporte_municipal` (el automático resume el mes que cerró), `generar_recordatorios`, `handle_new_user` (alta del perfil con los datos de Google) y `proteger_perfil` (protección de rol, correo y estado).
 * Disparador `actualizar_alerta_fauna`: al emitirse un permiso, si los permisos del mes de la especie alcanzan el 80 % del umbral, registra la alerta y avisa a la administración municipal.
 * Vistas: `v_dashboard_resumen`, `v_reservas_por_dia`, `v_ocupacion_catamaran`, `v_permisos_por_especie`, `v_lugares_ocupados`.
 
@@ -256,7 +263,8 @@ Definido en `database/schema.sql`:
 * **Google muestra "Error 400: redirect_uri_mismatch"**: el URI de redireccionamiento del cliente de OAuth debe ser exactamente `https://<proyecto>.supabase.co/auth/v1/callback`.
 * **Después de elegir la cuenta vuelve a otra dirección**: agregar la dirección de la app en *Authentication → URL Configuration → Redirect URLs*.
 * **Solo pueden ingresar algunas cuentas**: la pantalla de consentimiento de Google sigue *En prueba*; publicarla.
-* **Mi flota dice "No se pudieron cargar tus gastos" o no deja dar de alta un catamarán**: falta aplicar `database/migrations/011_dueno.sql` en la base.
+* **No se pueden subir fotos, avisar a los pasajeros o ver la lista de embarque**: falta aplicar `database/migrations/012_flota.sql` en la base.
+* **Las fotos no se ven**: revisar que exista el depósito `catamaranes` (público) en *Storage* y que `index.html` admita imágenes de `https://*.supabase.co` en la política de seguridad de contenido.
 * **Una cuenta registrada como dueño ve sólo las opciones del pescador**: quedó guardada como *Pescador/Turista*; la administración la cambia a *Dueño de catamarán* en Usuarios.
 * **El proyecto de Supabase no responde**: en el plan gratuito se pausa tras siete días sin actividad (la tarea diaria lo evita); reactivarlo desde el panel y revisar en **Actions** que la tarea siga habilitada.
 
