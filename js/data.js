@@ -34,9 +34,6 @@ const FOTOS_DEMO = { donJuan: ["img/demo/catamaran-blanco.jpg", "img/demo/muelle
 export const CREDITO_FOTOS_DEMO = "Fotos de ejemplo: José Luis Fernández, Wikimedia Commons (CC BY 3.0)";
 export const esFotoDemo = (ruta) => String(ruta || "").startsWith("img/demo/");
 
-/* Tarifas de los permisos en modo demo (en Supabase, tabla tarifa_permiso). */
-const TARIFAS_DEMO = { diario: 5000, semanal: 15000, anual: 45000 };
-
 /* Ubicación de un asiento en el plano del catamarán, vista desde arriba con la
  * proa adelante (igual que public.ubicacion_lugar): numeración en sentido
  * horario desde la proa, primero por estribor (derecha) y luego por babor. */
@@ -251,17 +248,18 @@ const todayISO = () => dateISO(new Date());
 
 function seedDemo() {
   DB = loadDB();
-  if (DB && DB.__v === 8) return;
+  if (DB && DB.__v === 9) return;
 
   const rnd = mulberry32(20260628);
   const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
 
-  /* --- Especies (fauna) --- */
+  /* --- Especies (fauna) con el precio de cada una en el permiso --- */
   const especies = [
-    { id: uid(), nombre: "Pejerrey", nombre_cientifico: "Odontesthes bonariensis", umbral_permisos: 400, descripcion: "Especie emblemática del dique, principal objetivo de la pesca deportiva." },
-    { id: uid(), nombre: "Dorado", nombre_cientifico: "Salminus brasiliensis", umbral_permisos: 150, descripcion: "Pesca con devolución obligatoria en temporada de veda." },
-    { id: uid(), nombre: "Bagre", nombre_cientifico: "Rhamdia quelen", umbral_permisos: 300, descripcion: "Especie de fondo, abundante en zonas de menor corriente." },
-    { id: uid(), nombre: "Carpa", nombre_cientifico: "Cyprinus carpio", umbral_permisos: 500, descripcion: "Especie introducida, sin restricciones de captura." },
+    { id: uid(), nombre: "Pejerrey", nombre_cientifico: "Odontesthes bonariensis", precio_permiso: 2000, activa: true, umbral_permisos: 400, descripcion: "Especie emblemática del dique, principal objetivo de la pesca deportiva." },
+    { id: uid(), nombre: "Dorado", nombre_cientifico: "Salminus brasiliensis", precio_permiso: 2000, activa: true, umbral_permisos: 150, descripcion: "Pesca con devolución obligatoria en temporada de veda." },
+    { id: uid(), nombre: "Bagre", nombre_cientifico: "Rhamdia quelen", precio_permiso: 1500, activa: true, umbral_permisos: 300, descripcion: "Especie de fondo, abundante en zonas de menor corriente." },
+    { id: uid(), nombre: "Carpa", nombre_cientifico: "Cyprinus carpio", precio_permiso: 1000, activa: true, umbral_permisos: 500, descripcion: "Especie introducida, sin restricciones de captura." },
+    { id: uid(), nombre: "Dentudo", nombre_cientifico: "Oligosarcus jenynsii", precio_permiso: 1000, activa: true, umbral_permisos: 300, descripcion: "Especie de pesca deportiva frecuente en el embalse." },
   ];
   const pejerrey = especies[0];
 
@@ -296,7 +294,10 @@ function seedDemo() {
   const lugaresDe = (catId) => lugares.filter((l) => l.id_catamaran === catId);
   const ocupadoSet = new Set(); // `${lugarId}|${fecha}|${turno}`
 
-  function crearReservaDemo({ cat, fecha, turno, nLugares, especie, estadoReserva, tipo, titular }) {
+  // Acompañantes de ejemplo (lista de embarque): nombre, DNI y su permiso.
+  const NOMBRES = ["Lucía Fernández", "Martín Sosa", "Ana Quiroga", "Diego Ruiz", "Paula Cruz", "Jorge Leal", "Sofía Ibarra", "Raúl Vera"];
+  const dniAl = () => formatoDni(String(20000000 + Math.floor(rnd() * 25000000)));
+  function crearReservaDemo({ cat, fecha, turno, nLugares, especie, estadoReserva, titular }) {
     const libres = lugaresDe(cat.id).filter((l) => !ocupadoSet.has(`${l.id}|${fecha}|${turno}`));
     if (!libres.length) return;
     const elegidos = [];
@@ -304,41 +305,54 @@ function seedDemo() {
       const idx = Math.floor(rnd() * libres.length);
       elegidos.push(libres.splice(idx, 1)[0]);
     }
-    const monto = cat.precio * elegidos.length;
+    elegidos.sort((a, b) => a.numero - b.numero);
     const rId = uid();
-    const pId = uid();
-    reservas.push({ id: rId, numero: numeroReserva(seqReserva++), id_usuario: titular.id, id_catamaran: cat.id, fecha, turno, estado: estadoReserva, cantidad_lugares: elegidos.length, monto_total: monto, monto_permiso: 0, id_permiso: pId, created_at: new Date(fecha + "T10:00:00").toISOString() });
     const cancel = estadoReserva === "cancelada";
-    for (const l of elegidos) {
-      reserva_lugar.push({ id: uid(), id_reserva: rId, id_lugar: l.id, fecha, turno, estado: cancel ? "cancelada" : "confirmada" });
+    // Se reservó y se pagó antes de la salida (nunca en el futuro).
+    const emision = new Date(Math.min(new Date(fecha + "T10:05:00").getTime(), Date.now() - (1 + rnd() * 72) * 3600e3));
+    const vence = new Date(fecha + "T23:59:00");
+    let montoPermisos = 0;
+    elegidos.forEach((l, i) => {
+      const nombre = i ? NOMBRES[Math.floor(rnd() * NOMBRES.length)] : null;
+      const dni = i ? dniAl() : null;
+      // El titular compra el permiso; los acompañantes, casi siempre (algunos ya tienen el suyo).
+      const propio = i && rnd() < 0.3 ? "LIC-" + Math.floor(1000 + rnd() * 9000) : null;
+      let pId = null;
+      if (!propio) {
+        const esp = i === 0 ? [especie] : [especie, ...(rnd() < 0.35 ? [pick(especies.filter((e) => e !== especie))] : [])];
+        const monto = esp.reduce((t, e) => t + e.precio_permiso, 0);
+        const numero = "PCC-" + String(seq++).padStart(6, "0");
+        const dniTitular = i ? dni : formatoDni(titular.dni);
+        pId = uid();
+        montoPermisos += monto;
+        permisos.push({
+          id: pId, id_reserva: rId, id_usuario: titular.id,
+          titular_nombre: i ? nombre : `${titular.nombre} ${titular.apellido}`, titular_dni: dniTitular,
+          numero, codigo_qr: `${numero}|${soloDigitosDni(dniTitular)}|${fecha}`, monto,
+          especies: esp.map((e) => ({ id_especie: e.id, precio: e.precio_permiso })),
+          fecha_emision: emision.toISOString(), fecha_vencimiento: vence.toISOString(),
+          estado: cancel ? "anulado" : (vence.getTime() < Date.now() ? "vencido" : "vigente"),
+        });
+      }
+      reserva_lugar.push({ id: uid(), id_reserva: rId, id_lugar: l.id, fecha, turno, estado: cancel ? "cancelada" : "confirmada",
+        pasajero_nombre: nombre, pasajero_dni: dni, id_permiso: pId, permiso_propio: propio });
       if (!cancel) ocupadoSet.add(`${l.id}|${fecha}|${turno}`);
-    }
-    pagos.push({ id: uid(), id_reserva: rId, monto, metodo: pick(metodos), estado: cancel ? "rechazado" : "aprobado", comprobante: "CMP-" + rId.replace(/-/g, "").slice(0, 10).toUpperCase(), autorizacion: "AUT-" + Math.floor(rnd() * 1e6).toString(36).toUpperCase(), fecha_pago: new Date(fecha + "T10:05:00").toISOString() });
-
-    const numero = "PCC-" + String(seq++).padStart(6, "0");
-    const emision = new Date(fecha + "T10:05:00");
-    const vence = new Date(emision);
-    if (tipo === "anual") vence.setFullYear(vence.getFullYear() + 1);
-    else if (tipo === "semanal") vence.setDate(vence.getDate() + 7);
-    else vence.setHours(23, 59, 0, 0);
-    let estadoP = cancel ? "anulado" : (vence.getTime() < Date.now() ? "vencido" : "vigente");
-    permisos.push({
-      id: pId, id_reserva: rId, id_usuario: titular.id, id_especie: especie.id,
-      numero, tipo, codigo_qr: `${numero}|${titular.id}|${fecha}`,
-      fecha_emision: emision.toISOString(), fecha_vencimiento: vence.toISOString(), estado: estadoP,
     });
-    return { rId, numero };
+    const monto = cat.precio * elegidos.length + montoPermisos;
+    reservas.push({ id: rId, numero: numeroReserva(seqReserva++), id_usuario: titular.id, id_catamaran: cat.id, fecha, turno, estado: estadoReserva, cantidad_lugares: elegidos.length, monto_total: monto, monto_permiso: montoPermisos, created_at: emision.toISOString() });
+    pagos.push({ id: uid(), id_reserva: rId, monto, metodo: pick(metodos), estado: cancel ? "rechazado" : "aprobado", comprobante: "CMP-" + rId.replace(/-/g, "").slice(0, 10).toUpperCase(), autorizacion: "AUT-" + Math.floor(rnd() * 1e6).toString(36).toUpperCase(), fecha_pago: emision.toISOString() });
+    return { rId };
   }
 
   // Histórico: ~38 reservas entre hace 30 días y hoy.
-  const especiePesos = [pejerrey, pejerrey, pejerrey, especies[2], especies[1], especies[3]];
+  const especiePesos = [pejerrey, pejerrey, pejerrey, especies[2], especies[1], especies[3], especies[4]];
   for (let i = 0; i < 38; i++) {
     const off = -Math.floor(rnd() * 30);
     const fecha = dateISO(isoFromOffset(off));
     const cat = pick(activos);
     const past = off < 0;
     const estadoReserva = i % 19 === 0 ? "cancelada" : (past ? (rnd() < 0.7 ? "completada" : "confirmada") : "confirmada");
-    crearReservaDemo({ cat, fecha, turno: rnd() < 0.6 ? "manana" : "tarde", nLugares: 1 + Math.floor(rnd() * 4), especie: pick(especiePesos), estadoReserva, tipo: rnd() < 0.85 ? "diario" : (rnd() < 0.5 ? "semanal" : "anual"), titular: uPescador });
+    crearReservaDemo({ cat, fecha, turno: rnd() < 0.6 ? "manana" : "tarde", nLugares: 1 + Math.floor(rnd() * 4), especie: pick(especiePesos), estadoReserva, titular: uPescador });
   }
 
   // Reservas próximas (hoy + 3 días) en los catamaranes visibles, para que la
@@ -346,17 +360,15 @@ function seedDemo() {
   const donJuan = catamaranes.find((c) => c.nombre === "Don Juan II");
   const elPato  = catamaranes.find((c) => c.nombre === "El Pato");
   [[donJuan, 0, 6], [donJuan, 1, 4], [elPato, 0, 3], [elPato, 2, 5], [donJuan, 2, 8]].forEach(([cat, off, n]) =>
-    crearReservaDemo({ cat, fecha: dateISO(isoFromOffset(off)), turno: "manana", nLugares: n, especie: pejerrey, estadoReserva: "confirmada", tipo: "diario", titular: uPescador })
+    crearReservaDemo({ cat, fecha: dateISO(isoFromOffset(off)), turno: "manana", nLugares: n, especie: pejerrey, estadoReserva: "confirmada", titular: uPescador })
   );
 
-  // La reserva más reciente del pescador queda destacada con su permiso "estrella".
-  permisos.slice(-1).forEach((p) => { /* asegura vigente para la demo */ if (p.estado === "vencido") p.estado = "vigente"; });
 
   // El dueño también sale a pescar como pasajero en otras embarcaciones.
   const laVictoria = catamaranes.find((c) => c.nombre === "La Victoria");
   const donPescador = catamaranes.find((c) => c.nombre === "Don Pescador");
-  crearReservaDemo({ cat: donPescador, fecha: dateISO(isoFromOffset(-12)), turno: "manana", nLugares: 1, especie: pejerrey, estadoReserva: "completada", tipo: "diario", titular: uDueno });
-  crearReservaDemo({ cat: laVictoria, fecha: dateISO(isoFromOffset(5)), turno: "tarde", nLugares: 2, especie: pejerrey, estadoReserva: "confirmada", tipo: "semanal", titular: uDueno });
+  crearReservaDemo({ cat: donPescador, fecha: dateISO(isoFromOffset(-12)), turno: "manana", nLugares: 1, especie: pejerrey, estadoReserva: "completada", titular: uDueno });
+  crearReservaDemo({ cat: laVictoria, fecha: dateISO(isoFromOffset(5)), turno: "tarde", nLugares: 2, especie: pejerrey, estadoReserva: "confirmada", titular: uDueno });
 
   /* --- Gastos del dueño (finanzas): combustible, mantenimiento, personal… --- */
   const gastos = [
@@ -389,7 +401,7 @@ function seedDemo() {
     { id: uid(), id_especie: especies[2].id, periodo, permisos_emitidos: 210, umbral: 300, estado: "activa", created_at: isoFromOffset(-5).toISOString() },
   ];
 
-  DB = { __v: 8, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, gastos, reportes: [], tarifas: { ...TARIFAS_DEMO }, seq, seqReserva, session: null };
+  DB = { __v: 9, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, gastos, reportes: [], seq, seqReserva, session: null };
   saveDB(DB);
 }
 
@@ -823,81 +835,53 @@ export async function procesarPago({ metodo = "tarjeta", monto = 0, tarjeta = {}
   return { aprobado: true, autorizacion: "AUT-" + Math.random().toString(36).slice(2, 8).toUpperCase() };
 }
 
-/** Tarifas de los permisos: { diario, semanal, anual }. */
-export async function listTarifasPermiso() {
-  await ready();
-  if (MODE === "supabase") {
-    const { data, error } = await sb.from("tarifa_permiso").select("tipo, precio");
-    if (error) throw error;
-    const t = { diario: 0, semanal: 0, anual: 0 };
-    data.forEach((x) => (t[x.tipo] = Number(x.precio)));
-    return t;
-  }
-  return { ...TARIFAS_DEMO, ...(DB.tarifas || {}) };
-}
-
-/* "Ya tengo permiso": el permiso tiene que ser del mismo titular, no estar
- * anulado y cubrir la fecha de la salida (igual que public.validar_permiso). */
-function validarPermisoDemo(u, numero, fecha) {
-  const n = String(numero || "").trim().toUpperCase();
-  if (!n) throw new Error("Ingresá el número de tu permiso.");
-  const p = DB.permisos.find((x) => x.numero.toUpperCase() === n && x.id_usuario === u.id);
-  if (!p) throw new Error("No encontramos un permiso con ese número a tu nombre.");
-  if (p.estado === "anulado") throw new Error(`El permiso ${p.numero} está anulado.`);
-  const r = byId(DB.reservas, p.id_reserva);
-  const desde = r?.fecha || dateISO(new Date(p.fecha_emision));
-  const hasta = dateISO(new Date(p.fecha_vencimiento));
-  const f = (iso) => iso.split("-").reverse().join("/");
-  if (fecha < desde || fecha > hasta)
-    throw new Error(`El permiso ${p.numero} no cubre el ${f(fecha)}: vale del ${f(desde)} al ${f(hasta)}.`);
-  return { id: p.id, numero: p.numero, tipo: p.tipo, especie: byId(DB.especies, p.id_especie)?.nombre || null, desde, hasta };
-}
-
-/** Verifica un permiso propio para la fecha de la salida. Devuelve { id, numero, tipo, especie, desde, hasta }. */
-export async function validarPermiso(numero, fecha) {
-  await ready();
-  if (MODE === "supabase") {
-    const { data, error } = await sb.rpc("validar_permiso", { p_numero: String(numero || "").trim(), p_fecha: fecha });
-    if (error) throw new Error(error.message);
-    return data;
-  }
-  return validarPermisoDemo(demoSessionUser(), numero, fecha);
-}
-
-/* Acompañantes (lista de embarque): [{ nombre, dni }] para cada lugar después del
- * primero, que es el del titular. Las mismas reglas que crear_reserva_completa. */
+/* Pasajeros de una reserva (HU-005 y HU-006): uno por lugar, en el orden de los
+ * lugares; el primero es el titular (nombre y DNI de su perfil). Cada uno con
+ * su permiso: { propio: "N°" } si ya lo tiene (se registra tal cual, sin
+ * validarlo) o { especies: [id, ...] } para emitirle uno digital, que cuesta la
+ * suma de las especies. Las mismas reglas que crear_reserva_completa. */
 const soloDigitosDni = (v) => String(v || "").replace(/\D/g, "");
 export const formatoDni = (v) => soloDigitosDni(v).replace(/^(\d{1,2})(\d{3})(\d{3})$/, "$1.$2.$3");
-export function validarAcompanantes(acompanantes, cantidadLugares, dniTitular = "") {
-  if (!Array.isArray(acompanantes) || acompanantes.length !== cantidadLugares - 1)
-    throw new Error("Completá el nombre y el DNI de cada acompañante (uno por cada lugar además del tuyo).");
-  const vistos = new Set([soloDigitosDni(dniTitular)]);
-  acompanantes.forEach((a, i) => {
-    const nombre = String(a?.nombre || "").trim(), dni = soloDigitosDni(a?.dni);
-    if (nombre.length < 3 || nombre.length > 80) throw new Error(`Ingresá el nombre y apellido del acompañante ${i + 1}.`);
-    if (dni.length < 7 || dni.length > 8) throw new Error(`El DNI del acompañante ${i + 1} debe tener 7 u 8 dígitos.`);
-    if (vistos.has(dni)) throw new Error("Hay un DNI repetido entre los pasajeros.");
+export const precioPermiso = (ids, especies) =>
+  (ids || []).reduce((t, id) => t + Number(especies.find((e) => e.id === id)?.precio_permiso || 0), 0);
+
+export function validarPasajeros(pasajeros, { dniTitular = "", especies = [] } = {}) {
+  const habilitadas = new Set(especies.filter((e) => e.activa !== false).map((e) => e.id));
+  const vistos = new Set();
+  return pasajeros.map((x, i) => {
+    const quien = i ? `el permiso del acompañante ${i}` : "tu permiso";
+    const nombre = i ? String(x?.nombre || "").trim() : null;
+    const dni = soloDigitosDni(i ? x?.dni : dniTitular);
+    if (i && (nombre.length < 3 || nombre.length > 80)) throw new Error(`Ingresá el nombre y apellido del acompañante ${i}.`);
+    if (i && (dni.length < 7 || dni.length > 8)) throw new Error(`El DNI del acompañante ${i} debe tener 7 u 8 dígitos.`);
+    if (dni && vistos.has(dni)) throw new Error("Hay un DNI repetido entre los pasajeros.");
     vistos.add(dni);
+    const propio = String(x?.propio || "").trim();
+    if (propio) {
+      if (propio.length < 3 || propio.length > 40) throw new Error(`El número de ${quien} debe tener entre 3 y 40 caracteres.`);
+      return { nombre, dni: i ? formatoDni(dni) : null, propio, especies: [] };
+    }
+    const ids = [...new Set(x?.especies || [])];
+    if (!ids.length) throw new Error(`Elegí al menos una especie para ${quien}, o ingresá el número del que ya tiene.`);
+    if (ids.some((id) => !habilitadas.has(id))) throw new Error(`Una de las especies elegidas para ${quien} no está habilitada.`);
+    return { nombre, dni: i ? formatoDni(dni) : null, propio: null, especies: ids };
   });
-  return acompanantes.map((a) => ({ nombre: String(a.nombre).trim(), dni: formatoDni(a.dni) }));
 }
 
-/* Reserva completa (HU-005, HU-006 y HU-007). Con numeroPermiso, la salida queda
- * amparada por ese permiso ("Ya tengo permiso"); sin él, se compra un permiso
- * nuevo del tipo elegido y su tarifa se suma al total. `lugares`: el primero es
- * el del titular; `acompanantes`, quienes ocupan los demás, en el mismo orden. */
-export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo = "tarjeta", tipoPermiso = "diario", especieId = null, numeroPermiso = null, autorizacion = null, acompanantes = [] }) {
+/* Reserva completa (HU-005, HU-006 y HU-007). `lugares`: el primero es el del
+ * titular; `pasajeros`, uno por lugar en el mismo orden ({ nombre, dni } de los
+ * acompañantes y { propio } o { especies } de cada permiso). */
+export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo = "tarjeta", pasajeros = [], autorizacion = null }) {
   await ready();
-  const propio = String(numeroPermiso || "").trim();
   if (MODE === "supabase") {
-    const args = {
-      p_id_catamaran: catamaranId, p_fecha: fecha, p_turno: turno,
-      p_lugares: lugares, p_metodo_pago: metodo, p_tipo_permiso: tipoPermiso, p_id_especie: especieId,
-      p_numero_permiso: propio || null, p_autorizacion: autorizacion,
-    };
-    // Sin acompañantes no se envía: la función lo toma vacío por defecto.
-    if (acompanantes.length) args.p_acompanantes = acompanantes;
-    const { data, error } = await sb.rpc("crear_reserva_completa", args);
+    const { data, error } = await sb.rpc("crear_reserva_completa", {
+      p_id_catamaran: catamaranId, p_fecha: fecha, p_turno: turno, p_lugares: lugares,
+      p_metodo_pago: metodo, p_autorizacion: autorizacion,
+      p_pasajeros: pasajeros.map((x, i) => ({
+        ...(i ? { nombre: x.nombre, dni: x.dni } : {}),
+        ...(String(x.propio || "").trim() ? { permiso_propio: String(x.propio).trim() } : { especies: x.especies || [] }),
+      })),
+    });
     if (error) throw new Error(error.message);
     return data;
   }
@@ -913,50 +897,59 @@ export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo 
   for (const lid of lugares) {
     if ((byId(DB.lugares, lid) || {}).id_catamaran !== cat.id) throw new Error("Los lugares elegidos no pertenecen a ese catamarán.");
     if (byId(DB.lugares, lid).activo === false) throw new Error("Uno de los lugares ya no está disponible en ese catamarán. Actualizá el plano.");
+  }
+  if (!Array.isArray(pasajeros) || pasajeros.length !== lugares.length)
+    throw new Error("Completá los datos y el permiso de cada pasajero (uno por lugar).");
+  const pas = validarPasajeros(pasajeros, { dniTitular: u.dni, especies: DB.especies });
+  for (const lid of lugares) {
     const ocupado = DB.reserva_lugar.some((rl) => rl.id_lugar === lid && rl.fecha === fecha && (rl.turno || "manana") === turno && rl.estado === "confirmada");
     if (ocupado) throw new Error("Uno de los lugares ya fue reservado. Actualizá la grilla.");
   }
-  const pasajeros = validarAcompanantes(acompanantes, lugares.length, u.dni);
-  const existente = propio ? validarPermisoDemo(u, propio, fecha) : null;
-  const tarifas = { ...TARIFAS_DEMO, ...(DB.tarifas || {}) };
-  const montoPermiso = existente ? 0 : Number(tarifas[tipoPermiso] || 0);
-  const monto = cat.precio * lugares.length + montoPermiso;
+  const montoPermisos = pas.reduce((t, x) => t + (x.propio ? 0 : precioPermiso(x.especies, DB.especies)), 0);
+  const monto = cat.precio * lugares.length + montoPermisos;
   const rId = uid();
   const nroReserva = numeroReserva(DB.seqReserva++);
-  const reserva = { id: rId, numero: nroReserva, id_usuario: u.id, id_catamaran: cat.id, fecha, turno, estado: "confirmada", cantidad_lugares: lugares.length, monto_total: monto, monto_permiso: montoPermiso, id_permiso: existente?.id || null, created_at: new Date().toISOString() };
-  DB.reservas.push(reserva);
-  lugares.forEach((lid, i) => DB.reserva_lugar.push({
-    id: uid(), id_reserva: rId, id_lugar: lid, fecha, turno, estado: "confirmada",
-    pasajero_nombre: i ? pasajeros[i - 1].nombre : null, pasajero_dni: i ? pasajeros[i - 1].dni : null,
-  }));
-  const comprobante = "CMP-" + rId.replace(/-/g, "").slice(0, 10).toUpperCase();
-  DB.pagos.push({ id: uid(), id_reserva: rId, monto, metodo, estado: "aprobado", comprobante, autorizacion, fecha_pago: new Date().toISOString() });
-
+  DB.reservas.push({ id: rId, numero: nroReserva, id_usuario: u.id, id_catamaran: cat.id, fecha, turno, estado: "confirmada", cantidad_lugares: lugares.length, monto_total: monto, monto_permiso: montoPermisos, created_at: new Date().toISOString() });
   const emision = new Date();
-  let numero = existente?.numero, pId = existente?.id;
-  if (!existente) {
-    numero = "PCC-" + String(DB.seq++).padStart(6, "0");
-    const vence = new Date(fecha + "T23:59:00");
-    if (tipoPermiso === "anual") vence.setFullYear(vence.getFullYear() + 1);
-    else if (tipoPermiso === "semanal") vence.setDate(vence.getDate() + 7);
-    pId = uid();
-    DB.permisos.push({ id: pId, id_reserva: rId, id_usuario: u.id, id_especie: especieId, numero, tipo: tipoPermiso, codigo_qr: `${numero}|${u.id}|${fecha}`, fecha_emision: emision.toISOString(), fecha_vencimiento: vence.toISOString(), estado: "vigente" });
-    reserva.id_permiso = pId;
-    actualizarAlertaFaunaDemo(especieId, emision);
-  }
-  DB.notificaciones.unshift({ id: uid(), id_usuario: u.id, tipo: "reserva", titulo: "Reserva confirmada", mensaje: `Tu reserva ${nroReserva} para el ${fecha.split("-").reverse().join("/")} fue confirmada. Permiso ${numero} ${existente ? "asociado" : "emitido"}.`, leida: false, created_at: emision.toISOString() });
+  const vence = new Date(fecha + "T23:59:00");
+  const numeros = [];
+  lugares.forEach((lid, i) => {
+    const x = pas[i];
+    let pId = null;
+    if (!x.propio) {
+      const numero = "PCC-" + String(DB.seq++).padStart(6, "0");
+      const dni = i ? x.dni : formatoDni(u.dni);
+      pId = uid();
+      DB.permisos.push({
+        id: pId, id_reserva: rId, id_usuario: u.id,
+        titular_nombre: i ? x.nombre : `${u.nombre} ${u.apellido || ""}`.trim(), titular_dni: dni,
+        numero, codigo_qr: `${numero}|${soloDigitosDni(dni)}|${fecha}`, monto: precioPermiso(x.especies, DB.especies),
+        especies: x.especies.map((id) => ({ id_especie: id, precio: Number(byId(DB.especies, id).precio_permiso || 0) })),
+        fecha_emision: emision.toISOString(), fecha_vencimiento: vence.toISOString(), estado: "vigente",
+      });
+      x.especies.forEach((id) => actualizarAlertaFaunaDemo(id, emision));
+      numeros.push(numero);
+    }
+    DB.reserva_lugar.push({ id: uid(), id_reserva: rId, id_lugar: lid, fecha, turno, estado: "confirmada",
+      pasajero_nombre: i ? x.nombre : null, pasajero_dni: i ? x.dni : null, id_permiso: pId, permiso_propio: x.propio });
+  });
+  const comprobante = "CMP-" + rId.replace(/-/g, "").slice(0, 10).toUpperCase();
+  DB.pagos.push({ id: uid(), id_reserva: rId, monto, metodo, estado: "aprobado", comprobante, autorizacion, fecha_pago: emision.toISOString() });
+  DB.notificaciones.unshift({ id: uid(), id_usuario: u.id, tipo: "reserva", titulo: "Reserva confirmada", mensaje: `Tu reserva ${nroReserva} para el ${fecha.split("-").reverse().join("/")} fue confirmada.${numeros.length ? ` Permisos emitidos: ${numeros.join(", ")}.` : ""}`, leida: false, created_at: emision.toISOString() });
   persist();
-  return { reserva_id: rId, numero_reserva: nroReserva, permiso_id: pId, numero_permiso: numero, permiso_nuevo: !existente, monto_total: monto, monto_permiso: montoPermiso, comprobante };
+  return { reserva_id: rId, numero_reserva: nroReserva, monto_total: monto, monto_permiso: montoPermisos, comprobante, permisos: numeros };
 }
 
-/* Demo: replica el disparador actualizar_alerta_fauna (HU-015). Si los permisos
- * del mes de la especie alcanzan el 80 % del umbral, se registra la alerta y se
- * avisa a la administración municipal; si ya existe, se actualiza el conteo. */
+/* Demo: replica el disparador actualizar_alerta_fauna (HU-015). Por cada especie
+ * de un permiso emitido: si los permisos del mes de la especie alcanzan el 80 %
+ * del umbral, se registra la alerta y se avisa a la administración municipal; si
+ * ya existe, se actualiza el conteo. */
 function actualizarAlertaFaunaDemo(especieId, emision) {
   const esp = byId(DB.especies, especieId);
   if (!esp || !(esp.umbral_permisos > 0)) return;
   const periodo = dateISO(emision).slice(0, 7);
-  const cant = DB.permisos.filter((p) => p.id_especie === esp.id && p.estado !== "anulado" && dateISO(new Date(p.fecha_emision)).slice(0, 7) === periodo).length;
+  const cant = DB.permisos.filter((p) => p.estado !== "anulado" && (p.especies || []).some((e) => e.id_especie === esp.id)
+    && dateISO(new Date(p.fecha_emision)).slice(0, 7) === periodo).length;
   const alerta = DB.alertas.find((a) => a.id_especie === esp.id && a.periodo === periodo && a.estado === "activa");
   if (alerta) { alerta.permisos_emitidos = Math.max(alerta.permisos_emitidos, cant); alerta.umbral = esp.umbral_permisos; return; }
   if (cant * 100 < esp.umbral_permisos * 80) return;
@@ -985,9 +978,10 @@ export async function anularReserva(reservaId) {
   if (!admin && r.fecha < todayISO()) throw new Error("No se puede anular una salida que ya pasó.");
   r.estado = "cancelada";
   DB.reserva_lugar.filter((rl) => rl.id_reserva === reservaId).forEach((rl) => (rl.estado = "cancelada"));
-  // El permiso emitido con la reserva se anula, salvo que ampare otra reserva activa.
-  const enUso = (pid) => DB.reservas.some((x) => x.id !== reservaId && x.id_permiso === pid && (x.estado === "confirmada" || x.estado === "completada"));
-  DB.permisos.filter((p) => p.id_reserva === reservaId && !enUso(p.id)).forEach((p) => (p.estado = "anulado"));
+  // Los permisos emitidos con la reserva se anulan, salvo el que otra reserva activa declaró como propio.
+  const declarado = (numero) => DB.reserva_lugar.some((rl) => rl.id_reserva !== reservaId && String(rl.permiso_propio || "").toUpperCase() === numero.toUpperCase()
+    && ["confirmada", "completada"].includes(byId(DB.reservas, rl.id_reserva)?.estado));
+  DB.permisos.filter((p) => p.id_reserva === reservaId && !declarado(p.numero)).forEach((p) => (p.estado = "anulado"));
   persist();
   return true;
 }
@@ -1009,9 +1003,9 @@ function scopeReservasDemo(u) {
  * guardadas en el dispositivo y cualquiera puede consultarse sin conexión,
  * aunque no se haya abierto antes. El personal no usa ese modo y consulta cada
  * una por separado. */
-const CAMPOS_PERMISO_RESERVA = "id,numero,tipo,estado,codigo_qr,fecha_emision,fecha_vencimiento,especie(nombre)";
-const SEL_RESERVA = `*, catamaran(nombre,habilitacion,capacidad), usuario(nombre,apellido,dni,email), reserva_lugar(pasajero_nombre, pasajero_dni, lugar(numero)), pago(*), permiso!permiso_id_reserva_fkey(${CAMPOS_PERMISO_RESERVA})`;
-const SEL_PERMISO = "*, especie(nombre,nombre_cientifico), reserva!permiso_id_reserva_fkey(id,fecha,turno,cantidad_lugares,monto_total,catamaran(nombre),pago(comprobante,metodo,estado)), usuario(nombre,apellido,dni)";
+const CAMPOS_PERMISO_RESERVA = "id,numero,estado,codigo_qr,fecha_emision,fecha_vencimiento,titular_nombre,titular_dni,monto,permiso_especie(precio,especie(nombre))";
+const SEL_RESERVA = `*, catamaran(nombre,habilitacion,capacidad), usuario(nombre,apellido,dni,email), reserva_lugar(pasajero_nombre, pasajero_dni, id_permiso, permiso_propio, lugar(numero)), pago(*), permiso!permiso_id_reserva_fkey(${CAMPOS_PERMISO_RESERVA})`;
+const SEL_PERMISO = "*, permiso_especie(precio,especie(nombre,nombre_cientifico)), reserva!permiso_id_reserva_fkey(id,numero,fecha,turno,cantidad_lugares,monto_total,catamaran(nombre),pago(comprobante,metodo,estado))";
 const reservasCompletas = () => sb.from("reserva").select(SEL_RESERVA).order("fecha", { ascending: false });
 const permisosCompletos = () => sb.from("permiso").select(SEL_PERMISO).order("fecha_emision", { ascending: false });
 const detalleDesdeLista = () => Boolean(rolSesion) && !esRolPersonal(rolSesion);
@@ -1029,20 +1023,23 @@ async function buscarDetalle(lista, tabla, sel, id) {
   return data;
 }
 
+/* Permiso del titular de una reserva (el de su lugar: el primero sin acompañante):
+ * { permiso_id, numero_permiso } (el número declarado si ya tenía uno). */
+function permisoDelTitular(filas, permisos) {
+  const t = filas.slice().sort((a, b) => a.lugar - b.lugar).find((x) => !x.pasajero_nombre);
+  const per = t?.id_permiso ? permisos.find((p) => p.id === t.id_permiso) : null;
+  return { permiso_id: per?.id || null, numero_permiso: per?.numero || t?.permiso_propio || null };
+}
+
 export async function listReservas() {
   await ready();
   if (MODE === "supabase") {
     const { data, error } = await reservasCompletas();
     if (error) throw error;
     return data.map((r) => {
-      // PostgREST devuelve la relación 1‑a‑1 (permiso) como objeto; 1‑a‑N como arreglo.
-      const per = Array.isArray(r.permiso) ? r.permiso[0] : r.permiso;
-      return {
-        ...r, catamaran_nombre: r.catamaran?.nombre || "",
-        // La salida puede estar amparada por un permiso que el pescador ya tenía (id_permiso).
-        permiso_id: r.id_permiso || per?.id || null, numero_permiso: per?.numero || null,
-        lugares: (r.reserva_lugar || []).map((x) => x.lugar?.numero).filter(Boolean).sort((a, b) => a - b),
-      };
+      const filas = (r.reserva_lugar || []).map((x) => ({ ...x, lugar: x.lugar?.numero }));
+      const permisos = Array.isArray(r.permiso) ? r.permiso : r.permiso ? [r.permiso] : [];
+      return { ...r, catamaran_nombre: r.catamaran?.nombre || "", ...permisoDelTitular(filas, permisos), lugares: filas.map((x) => x.lugar).filter(Boolean).sort((a, b) => a - b) };
     });
   }
   const u = demoSessionUser();
@@ -1050,9 +1047,9 @@ export async function listReservas() {
     .slice().sort((a, b) => (a.fecha < b.fecha ? 1 : -1))
     .map((r) => {
       const cat = byId(DB.catamaranes, r.id_catamaran);
-      const per = (r.id_permiso && byId(DB.permisos, r.id_permiso)) || DB.permisos.find((p) => p.id_reserva === r.id);
-      const lugares = DB.reserva_lugar.filter((x) => x.id_reserva === r.id).map((x) => byId(DB.lugares, x.id_lugar)?.numero).filter(Boolean);
-      return { ...r, catamaran_nombre: cat?.nombre || "", permiso_id: per?.id || null, numero_permiso: per?.numero || null, lugares: lugares.sort((a, b) => a - b) };
+      const filas = DB.reserva_lugar.filter((x) => x.id_reserva === r.id).map((x) => ({ ...x, lugar: byId(DB.lugares, x.id_lugar)?.numero }));
+      const permisos = DB.permisos.filter((p) => p.id_reserva === r.id);
+      return { ...r, catamaran_nombre: cat?.nombre || "", ...permisoDelTitular(filas, permisos), lugares: filas.map((x) => x.lugar).filter(Boolean).sort((a, b) => a - b) };
     });
 }
 
@@ -1068,99 +1065,91 @@ export async function listPermisos() {
   if (MODE === "supabase") {
     const { data, error } = await permisosCompletos();
     if (error) throw error;
-    return data.map((p) => mapPermisoSupabase(p));
+    return data.map(mapPermisoSupabase);
   }
   const u = demoSessionUser();
   return scopePermisosDemo(u)
     .slice().sort((a, b) => (a.fecha_emision < b.fecha_emision ? 1 : -1))
-    .map((p) => enrichPermisoDemo(applyPermisoEstado(p)));
+    .map(enrichPermisoDemo);
 }
 
 export async function getPermiso(id) {
   await ready();
   if (MODE === "supabase") {
     const data = await buscarDetalle(permisosCompletos, "permiso", SEL_PERMISO, id);
-    return data ? mapPermisoSupabase(data, true) : null;
+    return data ? mapPermisoSupabase(data) : null;
   }
   const p = byId(DB.permisos, id);
   if (!p || !scopePermisosDemo(demoSessionUser()).includes(p)) return null;
-  return enrichPermisoDemo(applyPermisoEstado(p), true);
+  return enrichPermisoDemo(p);
 }
 
-function enrichPermisoDemo(p, full = false) {
-  const r = byId(DB.reservas, p.id_reserva);
-  const cat = r ? byId(DB.catamaranes, r.id_catamaran) : null;
-  const esp = p.id_especie ? byId(DB.especies, p.id_especie) : null;
-  const titular = byId(DB.usuarios, p.id_usuario);
-  const base = {
-    ...p, especie_nombre: esp?.nombre || "—", catamaran_nombre: cat?.nombre || "—",
-    fecha: r?.fecha || null, turno: r?.turno || null,
-    titular_nombre: titular ? `${titular.nombre} ${titular.apellido}`.trim() : "—",
-    titular_dni: titular?.dni || "—",
-  };
-  if (full) {
-    const pago = r ? DB.pagos.find((x) => x.id_reserva === r.id) : null;
-    base.especie_cientifico = esp?.nombre_cientifico || "";
-    base.cantidad_lugares = r?.cantidad_lugares || 0;
-    base.monto_total = r?.monto_total || 0;
-    base.pago_comprobante = pago?.comprobante || "";
-    base.pago_metodo = pago?.metodo || "";
-    base.reserva_id = r?.id || null;
-  }
-  return base;
-}
-
-function mapPermisoSupabase(p, full = false) {
-  const r = p.reserva || {};
+/* Permiso con los datos de su salida: especies (con su precio), quién lo usa,
+ * catamarán, fecha y turno, y el pago de la reserva. */
+function armarPermiso(p, { reserva = null, especies = [] } = {}) {
+  const r = reserva || {};
+  const pago = Array.isArray(r.pago) ? r.pago[0] : r.pago;
   p = applyPermisoEstado(p);   // un permiso vencido se muestra así aunque la base aún no lo haya marcado
-  const out = {
-    ...p, especie_nombre: p.especie?.nombre || "—",
+  return {
+    ...p, especies,
+    especie_nombre: especies.map((e) => e.nombre).join(", ") || "—",
     catamaran_nombre: r.catamaran?.nombre || "—",
-    fecha: r.fecha || null, turno: r.turno || null,
-    titular_nombre: p.usuario ? `${p.usuario.nombre} ${p.usuario.apellido || ""}`.trim() : "—",
-    titular_dni: p.usuario?.dni || "—",
+    fecha: r.fecha || null, turno: r.turno || null, reserva_numero: r.numero || null, reserva_id: r.id || null,
+    titular_nombre: p.titular_nombre || "—", titular_dni: p.titular_dni || "—", monto: Number(p.monto || 0),
+    pago_comprobante: pago?.comprobante || "", pago_metodo: pago?.metodo || "",
   };
-  if (full) {
-    const pago = Array.isArray(r.pago) ? r.pago[0] : r.pago;
-    out.especie_cientifico = p.especie?.nombre_cientifico || "";
-    out.cantidad_lugares = r.cantidad_lugares || 0;
-    out.monto_total = r.monto_total || 0;
-    out.pago_comprobante = pago?.comprobante || "";
-    out.pago_metodo = pago?.metodo || "";
-    out.reserva_id = r.id || null;
-  }
-  return out;
+}
+const especiesDePermisoSupabase = (p) => (p.permiso_especie || [])
+  .map((x) => ({ nombre: x.especie?.nombre || "—", cientifico: x.especie?.nombre_cientifico || "", precio: Number(x.precio || 0) }))
+  .sort((a, b) => a.nombre.localeCompare(b.nombre));
+const especiesDePermisoDemo = (p) => (p.especies || [])
+  .map((x) => { const e = byId(DB.especies, x.id_especie); return { nombre: e?.nombre || "—", cientifico: e?.nombre_cientifico || "", precio: Number(x.precio || 0) }; })
+  .sort((a, b) => a.nombre.localeCompare(b.nombre));
+const mapPermisoSupabase = (p) => armarPermiso(p, { reserva: p.reserva, especies: especiesDePermisoSupabase(p) });
+function enrichPermisoDemo(p) {
+  const r = byId(DB.reservas, p.id_reserva);
+  const reserva = r ? { ...r, catamaran: byId(DB.catamaranes, r.id_catamaran), pago: DB.pagos.find((x) => x.id_reserva === r.id) } : null;
+  return armarPermiso(p, { reserva, especies: especiesDePermisoDemo(p) });
 }
 
 /* ============================================================================
- *  COMPROBANTE DE LA OPERACIÓN (reserva + pago + permiso)
+ *  COMPROBANTE DE LA OPERACIÓN (reserva + pago + permisos)
  *  Devuelve { numero, fecha, turno, estado, catamaran, capacidad, lugares[],
- *  titular, monto_total, monto_permiso, monto_lugares, precio_lugar, pago,
- *  permiso } o null si no existe o no es visible para el usuario.
+ *  pasajeros[], titular, monto_total, monto_permiso, monto_lugares,
+ *  precio_lugar, pago } o null si no existe o no es visible para el usuario.
+ *  pasajeros: uno por lugar (el titular primero), con su permiso digital o el
+ *  número del que ya tenía.
  * ========================================================================== */
 const numeroReservaDe = (r) => r.numero || "RES-" + String(r.id).replace(/-/g, "").slice(0, 8).toUpperCase();
 
-/* Acompañantes de una reserva a partir de sus lugares: [{ lugar, nombre, dni }]. */
-const acompanantesDe = (filas) => filas.filter((x) => x.nombre).sort((a, b) => a.lugar - b.lugar);
-
-function armarComprobante(r, { cat, titular, lugares, pago, permiso, propio, acompanantes = [] }) {
+function armarComprobante(r, { cat, titular, filas, permisos = [], pago }) {
   const montoPermiso = Number(r.monto_permiso || 0);
   const montoLugares = Number(r.monto_total || 0) - montoPermiso;
-  const per = permiso ? applyPermisoEstado(permiso) : null;
+  const porId = new Map(permisos.map((x) => [x.id, x]));
+  const orden = filas.slice().sort((a, b) => a.lugar - b.lugar);
+  let conTitular = false;
+  const pasajeros = orden.map((f) => {
+    const esTitular = !f.pasajero_nombre && !conTitular;
+    if (esTitular) conTitular = true;
+    const per = f.id_permiso ? porId.get(f.id_permiso) : null;
+    return {
+      lugar: f.lugar, titular: esTitular,
+      nombre: f.pasajero_nombre || (esTitular && titular ? `${titular.nombre || ""} ${titular.apellido || ""}`.trim() : null),
+      dni: f.pasajero_dni || (esTitular ? titular?.dni || null : null),
+      permiso: per ? { id: per.id, numero: per.numero, estado: per.estado, monto: per.monto, especies: per.especies, especie_nombre: per.especie_nombre } : null,
+      permiso_propio: f.permiso_propio || null,
+    };
+  }).sort((a, b) => Number(b.titular) - Number(a.titular) || a.lugar - b.lugar);
   return {
     id: r.id, id_usuario: r.id_usuario, numero: numeroReservaDe(r), fecha: r.fecha, turno: r.turno, estado: r.estado, created_at: r.created_at,
     catamaran: cat?.nombre || "—", habilitacion: cat?.habilitacion || "", capacidad: Number(cat?.capacidad || 0),
-    lugares: lugares.slice().sort((a, b) => a - b),
-    acompanantes,
+    lugares: orden.map((f) => f.lugar),
+    pasajeros,
     titular: titular ? { nombre: `${titular.nombre || ""} ${titular.apellido || ""}`.trim(), dni: titular.dni || "—", email: titular.email || "" } : null,
     monto_total: Number(r.monto_total || 0), monto_permiso: montoPermiso, monto_lugares: montoLugares,
     precio_lugar: r.cantidad_lugares ? montoLugares / r.cantidad_lugares : 0, cantidad_lugares: r.cantidad_lugares,
+    permisos_emitidos: pasajeros.filter((x) => x.permiso).length,
     pago: pago ? { comprobante: pago.comprobante, metodo: pago.metodo, estado: pago.estado, monto: Number(pago.monto || 0), fecha_pago: pago.fecha_pago, autorizacion: pago.autorizacion || "" } : null,
-    permiso: per ? {
-      id: per.id, numero: per.numero, tipo: per.tipo, estado: per.estado, codigo_qr: per.codigo_qr,
-      fecha_emision: per.fecha_emision, fecha_vencimiento: per.fecha_vencimiento,
-      especie: per.especie?.nombre || per.especie_nombre || "—", propio,
-    } : null,
   };
 }
 
@@ -1169,37 +1158,25 @@ export async function getComprobante(reservaId) {
   if (MODE === "supabase") {
     const r = await buscarDetalle(reservasCompletas, "reserva", SEL_RESERVA, reservaId);
     if (!r) return null;
-    const pago = Array.isArray(r.pago) ? r.pago[0] : r.pago;
-    let permiso = Array.isArray(r.permiso) ? r.permiso[0] : r.permiso;
-    let propio = false;
-    if (r.id_permiso && r.id_permiso !== permiso?.id) {
-      // Permiso que el pescador ya tenía: es suyo, así que está en su lista.
-      const previo = await buscarDetalle(permisosCompletos, "permiso", CAMPOS_PERMISO_RESERVA, r.id_permiso).catch(() => null);
-      if (previo) { permiso = previo; propio = true; }
-    }
+    const permisos = (Array.isArray(r.permiso) ? r.permiso : r.permiso ? [r.permiso] : [])
+      .map((x) => armarPermiso(x, { reserva: r, especies: especiesDePermisoSupabase(x) }));
     return armarComprobante(r, {
-      cat: r.catamaran, titular: r.usuario, pago, permiso, propio,
-      lugares: (r.reserva_lugar || []).map((x) => x.lugar?.numero).filter(Boolean),
-      acompanantes: acompanantesDe((r.reserva_lugar || []).map((x) => ({ lugar: x.lugar?.numero, nombre: x.pasajero_nombre, dni: x.pasajero_dni }))),
+      cat: r.catamaran, titular: r.usuario, pago: Array.isArray(r.pago) ? r.pago[0] : r.pago, permisos,
+      filas: (r.reserva_lugar || []).map((x) => ({ ...x, lugar: x.lugar?.numero })).filter((x) => x.lugar),
     });
   }
   const u = demoSessionUser();
   const r = byId(DB.reservas, reservaId);
   if (!r || !u || !scopeReservasDemo(u).includes(r)) return null;
   // Como en la base (RLS): el dueño ve la reserva de un pasajero en su
-  // catamarán, pero no sus datos personales, su pago ni su permiso.
+  // catamarán, pero no sus datos personales, su pago ni sus permisos.
   const ajena = r.id_usuario !== u.id && !esRolPersonal(u.rol);
-  const propia = ajena ? null : DB.permisos.find((p) => p.id_reserva === r.id);
-  const permiso = ajena ? null : (r.id_permiso && byId(DB.permisos, r.id_permiso)) || propia || null;
-  const esp = permiso?.id_especie ? byId(DB.especies, permiso.id_especie) : null;
   return armarComprobante(r, {
     cat: byId(DB.catamaranes, r.id_catamaran), titular: ajena ? null : byId(DB.usuarios, r.id_usuario),
     pago: ajena ? null : DB.pagos.find((x) => x.id_reserva === r.id),
-    permiso: permiso ? { ...permiso, especie_nombre: esp?.nombre } : null,
-    propio: Boolean(permiso && propia?.id !== permiso.id),
-    lugares: DB.reserva_lugar.filter((x) => x.id_reserva === r.id).map((x) => byId(DB.lugares, x.id_lugar)?.numero).filter(Boolean),
-    acompanantes: ajena ? [] : acompanantesDe(DB.reserva_lugar.filter((x) => x.id_reserva === r.id)
-      .map((x) => ({ lugar: byId(DB.lugares, x.id_lugar)?.numero, nombre: x.pasajero_nombre, dni: x.pasajero_dni }))),
+    permisos: ajena ? [] : DB.permisos.filter((p) => p.id_reserva === r.id).map(enrichPermisoDemo),
+    filas: DB.reserva_lugar.filter((x) => x.id_reserva === r.id)
+      .map((x) => ajena ? { lugar: byId(DB.lugares, x.id_lugar)?.numero } : { ...x, lugar: byId(DB.lugares, x.id_lugar)?.numero }),
   });
 }
 
@@ -1280,13 +1257,44 @@ export async function generarRecordatorios() {
 /* ============================================================================
  *  ESPECIES (fauna)
  * ========================================================================== */
+/* Especies (HU-006 y HU-015) con el precio de cada una en el permiso. */
 export async function listEspecies() {
   await ready();
   if (MODE === "supabase") {
     const { data, error } = await sb.from("especie").select("*").order("nombre");
-    if (error) throw error; return data;
+    if (error) throw error;
+    return data.map((e) => ({ ...e, precio_permiso: Number(e.precio_permiso || 0) }));
   }
   return [...DB.especies].sort((a, b) => a.nombre.localeCompare(b.nombre));
+}
+
+/* Alta o cambio de una especie (municipio y administración): nombre, nombre
+ * científico, precio del permiso, umbral de alertas, descripción y si está
+ * habilitada. Las especies no se borran (tienen permisos): se desactivan. */
+export async function guardarEspecie({ id = null, nombre, nombre_cientifico = "", precio_permiso, umbral_permisos = 500, descripcion = "", activa = true }) {
+  await ready();
+  const fila = {
+    nombre: String(nombre || "").trim(), nombre_cientifico: String(nombre_cientifico || "").trim() || null,
+    precio_permiso: Number(precio_permiso), umbral_permisos: Number(umbral_permisos),
+    descripcion: String(descripcion || "").trim() || null, activa: Boolean(activa),
+  };
+  if (fila.nombre.length < 2 || fila.nombre.length > 60) throw new Error("El nombre debe tener entre 2 y 60 caracteres.");
+  if (!Number.isFinite(fila.precio_permiso) || fila.precio_permiso < 0) throw new Error("Ingresá un precio válido (0 o más).");
+  if (!Number.isInteger(fila.umbral_permisos) || fila.umbral_permisos < 0) throw new Error("El umbral debe ser un número entero (0 o más).");
+  if (MODE === "supabase") {
+    const q = id ? sb.from("especie").update(fila).eq("id", id) : sb.from("especie").insert(fila);
+    const { data, error } = await q.select("id");
+    if (error) throw new Error(error.code === "23505" ? "Ya existe una especie con ese nombre." : traducirDB(error.message));
+    if (!data?.length) throw new Error("No autorizado para modificar las especies.");
+    return data[0].id;
+  }
+  const u = demoSessionUser();
+  if (!esRolPersonal(u?.rol)) throw new Error("No autorizado para modificar las especies.");
+  if (DB.especies.some((e) => e.id !== id && e.nombre.toLowerCase() === fila.nombre.toLowerCase())) throw new Error("Ya existe una especie con ese nombre.");
+  if (id) Object.assign(byId(DB.especies, id), fila);
+  else DB.especies.push({ id: id = uid(), ...fila, created_at: new Date().toISOString() });
+  persist();
+  return id;
 }
 
 /* ============================================================================
@@ -1352,7 +1360,7 @@ export async function permisosPorEspecie() {
   }
   return DB.especies.map((e) => ({
     id: e.id, especie: e.nombre, umbral_permisos: e.umbral_permisos,
-    permisos_emitidos: DB.permisos.filter((p) => p.id_especie === e.id && p.estado !== "anulado").length,
+    permisos_emitidos: DB.permisos.filter((p) => p.estado !== "anulado" && (p.especies || []).some((x) => x.id_especie === e.id)).length,
   })).sort((a, b) => b.permisos_emitidos - a.permisos_emitidos);
 }
 
@@ -1373,22 +1381,20 @@ export async function ultimosPermisos(limit = 6) {
   await ready();
   if (MODE === "supabase") {
     const { data, error } = await sb.from("permiso")
-      .select("id,numero,estado,fecha_emision,especie(nombre),usuario(nombre,apellido),reserva!permiso_id_reserva_fkey(fecha)")
+      .select("id,numero,estado,fecha_emision,titular_nombre,permiso_especie(especie(nombre)),reserva!permiso_id_reserva_fkey(fecha)")
       .order("fecha_emision", { ascending: false }).limit(limit);
     if (error) throw error;
     return data.map((p) => ({
-      id: p.id, numero: p.numero, estado: p.estado,
-      titular: p.usuario ? `${p.usuario.nombre} ${p.usuario.apellido || ""}`.trim() : "—",
-      especie: p.especie?.nombre || "—", fecha: p.reserva?.fecha || null,
+      id: p.id, numero: p.numero, estado: p.estado, titular: p.titular_nombre || "—",
+      especie: (p.permiso_especie || []).map((x) => x.especie?.nombre).filter(Boolean).sort().join(", ") || "—", fecha: p.reserva?.fecha || null,
     }));
   }
   return DB.permisos.map(applyPermisoEstado).slice()
     .sort((a, b) => (a.fecha_emision < b.fecha_emision ? 1 : -1)).slice(0, limit)
-    .map((p) => {
-      const r = byId(DB.reservas, p.id_reserva);
-      const t = byId(DB.usuarios, p.id_usuario);
-      return { id: p.id, numero: p.numero, estado: p.estado, titular: t ? `${t.nombre} ${t.apellido}`.trim() : "—", especie: (byId(DB.especies, p.id_especie) || {}).nombre || "—", fecha: r?.fecha || null };
-    });
+    .map((p) => ({
+      id: p.id, numero: p.numero, estado: p.estado, titular: p.titular_nombre || "—",
+      especie: especiesDePermisoDemo(p).map((e) => e.nombre).join(", ") || "—", fecha: byId(DB.reservas, p.id_reserva)?.fecha || null,
+    }));
 }
 
 /* ============================================================================
@@ -1774,8 +1780,9 @@ export async function avisarPasajeros({ catamaranId, fecha, turno, titulo, mensa
 }
 
 /** Lista de embarque de una salida, un pasajero por lugar:
- *  [{ numero, lugar, pasajero, dni, titular }] (pasajero nulo: lugar de una
- *  reserva anterior sin acompañante cargado). */
+ *  [{ numero, lugar, pasajero, dni, titular, permiso, permiso_digital }]
+ *  (pasajero nulo: lugar de una reserva anterior sin acompañante cargado;
+ *  permiso: el digital o el número declarado). */
 export async function listaEmbarque(catamaranId, fecha, turno) {
   await ready();
   if (MODE === "supabase") {
@@ -1796,10 +1803,12 @@ export async function listaEmbarque(catamaranId, fecha, turno) {
       asientos.forEach((x) => {
         const esTitular = !x.pasajero_nombre && !titularListo;
         if (esTitular) titularListo = true;
+        const digital = x.id_permiso ? byId(DB.permisos, x.id_permiso)?.numero : null;
         filas.push({
           numero: r.numero, lugar: x.numero, titular: esTitular,
           pasajero: x.pasajero_nombre || (esTitular ? [t.apellido, t.nombre].filter(Boolean).join(", ") : null),
           dni: x.pasajero_dni || (esTitular ? t.dni || null : null),
+          permiso: digital || x.permiso_propio || null, permiso_digital: Boolean(digital),
         });
       });
     });

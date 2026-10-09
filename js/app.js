@@ -5,7 +5,7 @@
  * ========================================================================== */
 import * as D from "./data.js";
 import * as V from "./views.js";
-import { toast, esc, avisar } from "./ui.js";
+import { toast, esc, avisar, escucharInstalacion } from "./ui.js";
 
 const isAdmin = (rol) => rol === "admin_municipal" || rol === "admin_sistema";
 
@@ -28,6 +28,7 @@ const ROUTES = {
   reportes:    { view: V.viewReportes,    auth: true, roles: ["admin_municipal", "admin_sistema"] },
   usuarios:    { view: V.viewUsuarios,    auth: true, roles: ["admin_municipal", "admin_sistema"] },
   avisos:      { view: V.viewAvisos,      auth: true, roles: ["admin_municipal", "admin_sistema"] },
+  especies:    { view: V.viewEspecies,    auth: true, roles: ["admin_municipal", "admin_sistema"] },
   personal:    { view: V.viewPersonal,    auth: true, roles: ["admin_sistema"] },
 };
 
@@ -121,6 +122,8 @@ async function render() {
 
     const ctx = { session, params, go, rerender: render };
     await route.view(ctx);
+    // Al ingresar, se ofrece instalar la app y activar los avisos en el teléfono.
+    if (base === "home" && session) V.ofrecerAppYAvisos(ctx).catch((e) => console.warn(e));
   } catch (err) {
     console.error("Error al renderizar la vista:", err);
     document.getElementById("app").innerHTML = `
@@ -139,6 +142,7 @@ async function render() {
 
 /* ------------------------------ Arranque --------------------------------- */
 window.addEventListener("hashchange", render);
+escucharInstalacion();   // el navegador avisa que la app se puede instalar
 
 // Re-render ante cambios de sesión o de perfil. La renovación periódica del
 // token no redibuja, para no perder lo que el usuario esté cargando; tampoco

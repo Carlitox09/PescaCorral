@@ -35,8 +35,8 @@ No hay servidor propio ni proceso de compilación: el repositorio se sirve tal c
 | HU-002 | Inicio de sesión con Google para el público y con usuario y contraseña para el personal; mensaje de error si se cancela o las credenciales son incorrectas; redirección al ingreso sin sesión | `#/login`, `/Municipio`, `/Admin` |
 | HU-003 | **Mi flota** del dueño (puede tener varios catamaranes): alta y edición de catamaranes (descripción, **fotos**, cantidad de lugares, precio, habilitación y estado; no se pueden quitar lugares con reservas desde hoy), **salidas** con la ocupación de cada fecha y turno sobre el plano, **aviso a los pasajeros** de una salida y **lista de embarque** (nombre y DNI de cada pasajero), y **finanzas**: ingresos por lugares vendidos, gastos por categoría y resultado del mes (ganancia o pérdida) por catamarán, con CSV. La administración asigna el dueño de cada catamarán | `#/gestion`, `#/embarque` |
 | HU-004 | Disponibilidad por fecha y turno con **lugares libres por catamarán** (cada asiento se reserva por fecha y turno) | `#/catamaranes` |
-| HU-005 | Reserva sobre el **plano del catamarán** visto desde arriba (proa, popa, babor y estribor; numeración en sentido horario desde la proa); marca los lugares propios y avisa si ya hay una reserva en el otro turno; sin doble reserva (índice único por asiento, fecha y turno). Con más de un lugar se cargan el **nombre y el DNI de cada acompañante** | `#/reserva/:id` |
-| HU-006 | Permiso digital con QR, vencimiento y estado (vigente / vencido / anulado). En la reserva se elige **"Comprar permiso"** (diario, semanal o anual, con su tarifa) o **"Ya tengo permiso"** (se valida el número: mismo titular, no anulado y vigente para la fecha). Se comparte como imagen por WhatsApp u otras aplicaciones | `#/permiso/:id` |
+| HU-005 | Reserva sobre el **plano del catamarán** visto desde arriba (proa, popa, babor y estribor; numeración en sentido horario desde la proa); marca los lugares propios y avisa si ya hay una reserva en el otro turno; sin doble reserva (índice único por asiento, fecha y turno). Un lugar por persona: se cargan los **datos y el permiso de cada pasajero** (nombre y DNI de cada acompañante); los datos no se pierden al cambiar de opción, de lugares o de turno, ni si falla el pago | `#/reserva/:id` |
+| HU-006 | **Un permiso por pasajero**. **"Comprar permiso"**: se eligen **una o varias especies** (por ejemplo Dorado $ 2.000 + Pejerrey $ 2.000 + Dentudo $ 1.000) y se emite un permiso digital con QR, a nombre de esa persona, que vale para la fecha de la salida y cuesta la suma de las especies. **"Ya tengo permiso"**: se registra el número tal como se ingresa, sin validarlo en el sistema (se presenta al embarcar). Estado vigente / vencido / anulado; se comparte como imagen por WhatsApp u otras aplicaciones | `#/permiso/:id` |
 | HU-007 | **Pasarela de pago simulada** (tarjeta, Mercado Pago o efectivo en la boletería) con escenario de rechazo. Al pagar se muestra el **comprobante**: número de reserva, comprobante de pago y permiso | `#/comprobante/:id` |
 | HU-008 | Reportes con gráficos, exportación CSV (Excel) y PDF | `#/reportes` |
 | HU-009 | **Envío de reportes al municipio** (manual y cierre mensual automático) con registro de fecha, destinatario y origen | `#/reportes` |
@@ -45,7 +45,7 @@ No hay servidor propio ni proceso de compilación: el repositorio se sirve tal c
 | HU-012 | Gestión de roles y activación o desactivación de cuentas: el tipo de cuenta (pescador o dueño) lo cambian el municipio y la administración, también desde el teléfono, con búsqueda y filtros | `#/usuarios` |
 | HU-013 | Panel municipal con **filtros por rango de fechas y embarcación** y exportación PDF | `#/admin` |
 | HU-014 | Perfil de usuario | `#/perfil` |
-| HU-015 | Monitoreo de fauna: permisos por especie y **alertas automáticas** cuando los permisos del mes alcanzan el 80 % del umbral | `#/reportes` |
+| HU-015 | Monitoreo de fauna: permisos por especie y **alertas automáticas** cuando los permisos del mes alcanzan el 80 % del umbral. La administración carga las **especies, su precio en el permiso** y su umbral, y las habilita o no | `#/reportes`, `#/especies` |
 
 ---
 
@@ -83,7 +83,7 @@ PescaCorral/
     ├── verificar_base.sql  # Chequeo de sólo lectura: compara la base con schema.sql y revisa los datos
     ├── pruebas_seguridad.sql     # Pruebas de acceso con cada perfil (no deja datos)
     └── migrations/
-        └── 013_acompanantes_push.sql # Para una base existente: acompañantes de cada reserva y avisos al teléfono
+        └── 014_permisos_especies.sql # Para una base existente: permiso por especie y por pasajero, especies con precio
 ```
 
 ---
@@ -119,6 +119,10 @@ Los avisos del municipio, los del dueño sobre una salida ("Estamos por zarpar",
 4. La extensión `pg_net` la crean `schema.sql` y la migración 013. La dirección de la función está en `enviar_push()`: en otro proyecto de Supabase hay que cambiarla.
 
 Cada usuario los activa en **Perfil → Avisos en el teléfono → Activar** (también se ofrece después de reservar) y acepta el permiso de notificaciones del navegador. En iPhone (iOS 16.4 o posterior) primero hay que agregar la aplicación a la pantalla de inicio y abrirla desde ahí. Al cerrar sesión el teléfono deja de recibirlos.
+
+### Instalar la aplicación
+
+Al ingresar, a pescadores y dueños se les ofrece instalar PescaCorral en el teléfono y activar los avisos, si les falta alguna de las dos cosas: en Chrome, Edge o Samsung Internet con el botón **Instalar**; en iPhone, con las instrucciones de Safari (**Compartir → Agregar a inicio**). Se muestra una vez por sesión y, con **Ahora no**, deja de mostrarse por tres días. Desde **Perfil** también se puede instalar. Instalada, se abre desde su ícono, sin la barra del navegador.
 
 ### Ingreso con Google
 
@@ -176,13 +180,17 @@ El dueño tiene todas las opciones del pescador (también reserva y saca su perm
 * **Catamaranes**: puede tener varios. Alta con nombre, descripción, hasta 6 fotos (la primera es la portada; se reducen en el teléfono antes de subirse a Supabase Storage y los pescadores las ven en la lista y al reservar), cantidad de lugares, precio por lugar, habilitación municipal y estado. La cantidad de lugares se puede cambiar después: al sumar se crean los lugares nuevos y al quitar no se permite sacar lugares con reservas desde hoy (los que tuvieron reservas quedan fuera de servicio y conservan el historial). El plano se recalcula. Lo hacen las funciones `crear_catamaran` y `cambiar_capacidad`.
 * **Salidas**: cada fecha y turno con reservas en sus catamaranes, con los lugares vendidos sobre el plano, la cantidad de reservas y el importe. Desde cada salida:
   * **Avisar a los pasajeros** (`avisar_pasajeros`): un aviso con plantillas ("Estamos por zarpar", "Salida suspendida", "Salida demorada" u otro) que llega a la campanita de todos los que reservaron (y a su teléfono, si activaron los avisos), sin que el dueño vea quiénes son. Hasta 10 por salida, de hoy en adelante.
-  * **Lista de embarque** (`#/embarque`, `lista_embarque`): un renglón por lugar, con el nombre, el DNI y el número de reserva de cada pasajero (el titular y los acompañantes que se cargan al reservar), para imprimir o guardar en PDF y descargar en CSV (por ejemplo, para Prefectura). En las reservas hechas antes de registrar acompañantes, los lugares de más figuran sin nombre para anotarlos al embarcar.
+  * **Lista de embarque** (`#/embarque`, `lista_embarque`): un renglón por lugar, con el nombre, el DNI, el permiso (el digital o el número del propio, para verificarlo al embarcar) y el número de reserva de cada pasajero (el titular y los acompañantes que se cargan al reservar), para imprimir o guardar en PDF y descargar en CSV (por ejemplo, para Prefectura). En las reservas hechas antes de registrar acompañantes, los lugares de más figuran sin nombre para anotarlos al embarcar.
   * El correo, el teléfono, el pago y el permiso de los pasajeros no se le muestran.
 * **Finanzas**: resultado del mes (ganancia o pérdida), ingresos por lugares vendidos (el permiso de pesca es del Municipio y no se suma), gastos por categoría (combustible, mantenimiento, sueldos, seguros, amarre, impuestos y otros), comparación de los últimos 6 meses, detalle por catamarán y descarga en CSV. Los gastos se registran, corrigen y eliminan desde la misma pantalla y son privados de cada dueño (tabla `gasto`).
 
 La pantalla principal del dueño suma un resumen de su flota: lugares vendidos hoy, ingresos y resultado del mes y las próximas salidas.
 
 La administración (municipio y administrador del sistema) asigna el dueño de cada catamarán en **Catamaranes** (`asignar_propietario`): así los catamaranes cargados por el municipio pasan a su dueño, y un dueño puede tener varios. Al cambiar de dueño, los gastos del anterior en ese catamarán quedan como gastos generales suyos.
+
+### Especies y precios
+
+La administración (municipio y administrador del sistema) carga en **Especies** (`#/especies`) cada especie con su nombre científico, su **precio en el permiso de pesca** y el umbral de permisos por mes que dispara la alerta de fauna. Al reservar, cada pasajero elige las especies de su permiso, que cuesta la suma de sus precios. Un cambio de precio rige para los permisos que se emiten desde ese momento: los emitidos conservan el precio pagado (`permiso_especie.precio`). Una especie no habilitada deja de ofrecerse; no se borra porque tiene permisos emitidos.
 
 ### Avisos a los usuarios
 
@@ -205,13 +213,14 @@ La administración (municipio y administrador del sistema) publica avisos en **A
 * **RLS**: cada perfil (pescador, dueño, administración municipal, administrador del sistema) solo puede leer y modificar los registros que le corresponden, aun consultando la API directamente.
 * **Escrituras sólo por funciones**: reservas, lugares, permisos y pagos se crean y anulan únicamente con `crear_reserva_completa` y `anular_reserva`, que validan fecha, catamarán, lugares libres, pago y permiso. Los catamaranes se dan de alta con `crear_catamaran` y su cantidad de lugares cambia sólo con `cambiar_capacidad`.
 * **Gastos privados**: cada dueño ve y modifica sólo sus gastos, y sólo de sus propios catamaranes; ni otros usuarios ni la administración los leen.
-* **Datos de los pasajeros**: el dueño sólo ve el nombre y el DNI de los pasajeros de sus salidas (titulares y acompañantes), en la lista de embarque; los avisos a los pasajeros se envían sin revelar quiénes son. Los acompañantes se validan en `crear_reserva_completa` (uno por lugar además del titular, DNI de 7 u 8 dígitos sin repetir).
+* **Datos de los pasajeros**: el dueño sólo ve el nombre, el DNI y el número de permiso de los pasajeros de sus salidas (titulares y acompañantes), en la lista de embarque; los avisos a los pasajeros se envían sin revelar quiénes son. Los pasajeros se validan en `crear_reserva_completa` (uno por lugar, DNI de 7 u 8 dígitos sin repetir).
+* **Permisos y precios**: el importe de cada permiso lo calcula la base con el precio vigente de las especies elegidas (habilitadas); el cliente no puede fijarlo. Sólo la administración da de alta especies y cambia sus precios, y no puede borrarlas. Un permiso propio se registra tal como lo declara el pasajero, sin validarlo: se verifica al embarcar con la lista de embarque.
 * **Avisos al teléfono**: cada usuario registra y borra sólo sus propios teléfonos (`registrar_push`, `borrar_push`; hasta 10 por cuenta); la tabla `suscripcion_push` no admite escrituras directas. La función `enviar-push` sólo manda notificaciones creadas por la base en los últimos 10 minutos y que todavía no se enviaron, así que no sirve para mandar mensajes propios ni repetirlos. La clave privada VAPID vive sólo en los secretos de Supabase.
 * **Fotos**: el depósito `catamaranes` de Supabase Storage es público para mirar; subir, reemplazar y borrar fotos sólo puede el dueño de cada catamarán y la administración (`es_foto_propia`), hasta 2 MB por foto y sólo imágenes.
 * **Privilegios mínimos**: sin sesión no se accede a ninguna tabla, vista ni función; con sesión sólo se ejecutan las funciones que usa la aplicación.
 * **Frontend**: política de seguridad de contenido (CSP) que sólo admite código propio, conexiones a Supabase e imágenes propias, de Google (foto de la cuenta) y de Supabase Storage (fotos de los catamaranes); el cliente de Supabase es una copia local con versión fija; todo dato se muestra escapado; los mensajes de error no se toman de la dirección.
 * **Sesiones del personal**: se cierran solas después de 30 minutos sin actividad, para que no queden abiertas en una computadora compartida.
-* **Pruebas**: `database/pruebas_seguridad.sql` verifica estos controles con 142 casos.
+* **Pruebas**: `database/pruebas_seguridad.sql` verifica estos controles con 158 casos.
 
 ## Accesibilidad
 
@@ -267,10 +276,10 @@ El plan gratuito de Supabase pausa el proyecto después de siete días sin uso. 
 
 Definido en `database/schema.sql`:
 
-* **usuario** (extiende `auth.users`; rol, perfil completo, foto de Google), **especie**, **catamaran** (con sus fotos en Supabase Storage), **lugar** (con su ubicación en el plano), **reserva** (número `RES-`, permiso que ampara la salida e importe del permiso), **reserva_lugar** (asiento por fecha y turno, con el nombre y el DNI del acompañante que lo ocupa), **permiso**, **tarifa_permiso**, **pago** (con código de autorización), **reporte** (con destinatario, origen y estado de envío), **notificacion** (con `id_reserva` para recordatorios y la marca de envío al teléfono), **alerta_fauna**, **gasto** (gastos del dueño por catamarán o generales de la flota), **suscripcion_push** (teléfonos habilitados para recibir avisos).
-* Funciones: `crear_reserva_completa` (valida catamarán, asientos, fecha, turno, acompañantes, medio de pago y permiso propio, y crea reserva + asientos + pago + permiso nuevo + notificación en una transacción), `validar_permiso`, `ubicacion_lugar`, `actualizar_estados` (marca permisos vencidos y salidas realizadas; la llama `generar_recordatorios` a diario), `anular_reserva` (no anula un permiso que ampara otra reserva activa), `crear_catamaran` (alta con todos sus lugares), `cambiar_capacidad` (suma o quita lugares sin afectar reservas desde hoy), `asignar_propietario`, `avisar_pasajeros`, `lista_embarque`, `es_foto_propia` (fotos en Storage), `registrar_push` y `borrar_push` (teléfonos para los avisos), `generar_reporte_municipal` (el automático resume el mes que cerró), `generar_recordatorios`, `handle_new_user` (alta del perfil con los datos de Google) y `proteger_perfil` (protección de rol, correo y estado).
+* **usuario** (extiende `auth.users`; rol, perfil completo, foto de Google), **especie** (con su precio en el permiso y si está habilitada), **catamaran** (con sus fotos en Supabase Storage), **lugar** (con su ubicación en el plano), **reserva** (número `RES-` e importe de los permisos), **reserva_lugar** (asiento por fecha y turno, con el nombre y el DNI del acompañante que lo ocupa y su permiso: el digital o el número del propio), **permiso** (uno por pasajero: a nombre de quien lo usa, con su importe; vale para la fecha de la salida), **permiso_especie** (especies de cada permiso, con su precio al emitirse), **pago** (con código de autorización), **reporte** (con destinatario, origen y estado de envío), **notificacion** (con `id_reserva` para recordatorios y la marca de envío al teléfono), **alerta_fauna**, **gasto** (gastos del dueño por catamarán o generales de la flota), **suscripcion_push** (teléfonos habilitados para recibir avisos).
+* Funciones: `crear_reserva_completa` (valida catamarán, asientos, fecha, turno, medio de pago, los pasajeros y el permiso de cada uno, y crea reserva + asientos + permisos + pago + notificación en una transacción), `ubicacion_lugar`, `actualizar_estados` (marca permisos vencidos y salidas realizadas; la llama `generar_recordatorios` a diario), `anular_reserva` (anula los permisos emitidos con la reserva, salvo el que otra reserva activa declaró como propio), `crear_catamaran` (alta con todos sus lugares), `cambiar_capacidad` (suma o quita lugares sin afectar reservas desde hoy), `asignar_propietario`, `avisar_pasajeros`, `lista_embarque`, `es_foto_propia` (fotos en Storage), `registrar_push` y `borrar_push` (teléfonos para los avisos), `generar_reporte_municipal` (el automático resume el mes que cerró), `generar_recordatorios`, `handle_new_user` (alta del perfil con los datos de Google) y `proteger_perfil` (protección de rol, correo y estado).
 * Disparador `trg_notificacion_push` (`enviar_push`): manda al teléfono los avisos, los avisos de una salida y los recordatorios, por medio de la Edge Function `enviar-push`.
-* Disparador `actualizar_alerta_fauna`: al emitirse un permiso, si los permisos del mes de la especie alcanzan el 80 % del umbral, registra la alerta y avisa a la administración municipal.
+* Disparador `trg_permiso_especie_alerta` (`actualizar_alerta_fauna`): por cada especie de un permiso emitido, si los permisos del mes de esa especie alcanzan el 80 % del umbral, registra la alerta y avisa a la administración municipal.
 * Vistas: `v_dashboard_resumen`, `v_reservas_por_dia`, `v_ocupacion_catamaran`, `v_permisos_por_especie`, `v_lugares_ocupados`.
 
 ---
@@ -283,7 +292,7 @@ Definido en `database/schema.sql`:
 * **Google muestra "Error 400: redirect_uri_mismatch"**: el URI de redireccionamiento del cliente de OAuth debe ser exactamente `https://<proyecto>.supabase.co/auth/v1/callback`.
 * **Después de elegir la cuenta vuelve a otra dirección**: agregar la dirección de la app en *Authentication → URL Configuration → Redirect URLs*.
 * **Solo pueden ingresar algunas cuentas**: la pantalla de consentimiento de Google sigue *En prueba*; publicarla.
-* **Al reservar varios lugares falla con "function … does not exist"**: falta aplicar `database/migrations/013_acompanantes_push.sql` en la base.
+* **Al reservar falla con "function … does not exist" o no aparecen las especies con su precio**: falta aplicar `database/migrations/014_permisos_especies.sql` en la base.
 * **Los avisos no llegan al teléfono**: revisar en Perfil que diga "Activados en este teléfono"; que la función `enviar-push` esté desplegada con *Verify JWT* desactivado y con sus tres secretos; y su registro en *Edge Functions → Logs*. En iPhone la aplicación tiene que estar instalada en la pantalla de inicio; en Android, el ahorro de batería puede demorarlos.
 * **Las fotos no se ven**: revisar que exista el depósito `catamaranes` (público) en *Storage* y que `index.html` admita imágenes de `https://*.supabase.co` en la política de seguridad de contenido.
 * **Una cuenta registrada como dueño ve sólo las opciones del pescador**: quedó guardada como *Pescador/Turista*; la administración la cambia a *Dueño de catamarán* en Usuarios.

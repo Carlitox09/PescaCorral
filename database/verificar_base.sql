@@ -15,8 +15,8 @@
 with
 esperado_tabla(n) as (values
     ('alerta_fauna'), ('aviso'), ('catamaran'), ('especie'), ('gasto'), ('lugar'), ('notificacion'), ('pago'),
-    ('permiso'), ('personal_autorizado'), ('reporte'), ('reserva'), ('reserva_lugar'),
-    ('suscripcion_push'), ('tarifa_permiso'), ('usuario')),
+    ('permiso'), ('permiso_especie'), ('personal_autorizado'), ('reporte'), ('reserva'), ('reserva_lugar'),
+    ('suscripcion_push'), ('usuario')),
 esperado_vista(n) as (values
     ('v_dashboard_resumen'), ('v_lugares_ocupados'), ('v_ocupacion_catamaran'),
     ('v_permisos_por_especie'), ('v_reservas_por_dia')),
@@ -25,26 +25,27 @@ esperado_funcion(n, args) as (values
     ('asignar_propietario', 2), ('avisar_pasajeros', 5), ('es_foto_propia', 1), ('lista_embarque', 3),
     ('validar_fotos_catamaran', 0), ('cambiar_capacidad', 2), ('cambiar_clave_personal', 2), ('cerrar_sesiones_desactivada', 0),
     ('clave_segura', 1), ('crear_catamaran', 6), ('crear_cuenta_personal', 5),
-    ('crear_reserva_completa', 10), ('registrar_push', 3), ('borrar_push', 1), ('enviar_push', 0), ('es_admin', 0),
+    ('crear_reserva_completa', 7), ('registrar_push', 3), ('borrar_push', 1), ('enviar_push', 0), ('es_admin', 0),
     ('exigir_cuenta_activa', 0), ('generar_numero_permiso', 0), ('publicar_aviso', 4),
     ('generar_recordatorios', 1), ('generar_reporte_municipal', 2), ('handle_new_user', 0),
     ('proteger_perfil', 0), ('rol_actual', 0), ('set_updated_at', 0),
-    ('ubicacion_lugar', 2), ('validar_permiso', 2)),
+    ('ubicacion_lugar', 2)),
 -- Funciones que pueden ejecutar los usuarios con sesión (las demás son internas).
 esperado_funcion_api(n) as (values
     ('anular_reserva'), ('asignar_propietario'), ('registrar_push'), ('borrar_push'), ('avisar_pasajeros'), ('es_foto_propia'), ('lista_embarque'),
     ('cambiar_capacidad'), ('cambiar_clave_personal'), ('crear_catamaran'),
     ('crear_cuenta_personal'), ('crear_reserva_completa'), ('es_admin'), ('generar_recordatorios'),
-    ('generar_reporte_municipal'), ('publicar_aviso'), ('rol_actual'), ('validar_permiso')),
+    ('generar_reporte_municipal'), ('publicar_aviso'), ('rol_actual')),
 esperado_disparador(t, n) as (values
     ('usuario', 'trg_usuario_updated'), ('usuario', 'trg_usuario_proteger'),
     ('usuario', 'trg_usuario_cerrar_sesiones'),
     ('catamaran', 'trg_catamaran_updated'), ('catamaran', 'trg_catamaran_fotos'), ('reserva', 'trg_reserva_updated'),
-    ('permiso', 'trg_permiso_alerta_fauna'), ('notificacion', 'trg_notificacion_push'), ('auth.users', 'on_auth_user_created')),
+    ('permiso_especie', 'trg_permiso_especie_alerta'), ('notificacion', 'trg_notificacion_push'), ('auth.users', 'on_auth_user_created')),
 esperado_indice(n) as (values
     ('idx_reserva_usuario'), ('idx_reserva_catamaran'), ('idx_reserva_fecha'),
-    ('idx_reserva_lugar_reserva'), ('idx_reserva_lugar_lugar'), ('uq_lugar_fecha_turno_activa'),
-    ('uq_reserva_numero'), ('idx_permiso_usuario'), ('idx_permiso_especie'), ('idx_permiso_estado'),
+    ('idx_reserva_lugar_reserva'), ('idx_reserva_lugar_lugar'), ('idx_reserva_lugar_permiso'), ('uq_lugar_fecha_turno_activa'),
+    ('uq_reserva_numero'), ('idx_permiso_usuario'), ('idx_permiso_reserva'), ('idx_permiso_estado'),
+    ('idx_permiso_especie_especie'),
     ('idx_notificacion_usuario'), ('idx_notificacion_reserva'), ('idx_gasto_propietario'), ('idx_suscripcion_push_usuario')),
 esperado_secuencia(n) as (values ('seq_numero_permiso'), ('seq_numero_reserva')),
 esperado_politica(t, n) as (values
@@ -53,10 +54,9 @@ esperado_politica(t, n) as (values
     ('catamaran', 'catamaran_select'), ('catamaran', 'catamaran_update'),
     ('catamaran', 'catamaran_delete'), ('lugar', 'lugar_select'), ('gasto', 'gasto_dueno'),
     ('reserva', 'reserva_select'), ('reserva_lugar', 'reserva_lugar_select'),
-    ('permiso', 'permiso_select'), ('pago', 'pago_select'),
+    ('permiso', 'permiso_select'), ('permiso_especie', 'permiso_especie_select'), ('pago', 'pago_select'),
     ('reporte', 'reporte_admin'), ('notificacion', 'notificacion_select'),
-    ('notificacion', 'notificacion_update'), ('tarifa_permiso', 'tarifa_permiso_select'),
-    ('tarifa_permiso', 'tarifa_permiso_admin'), ('alerta_fauna', 'alerta_fauna_admin'),
+    ('notificacion', 'notificacion_update'), ('alerta_fauna', 'alerta_fauna_admin'),
     ('aviso', 'aviso_select'), ('suscripcion_push', 'suscripcion_push_propia')),
 esperado_cron(n) as (values ('pescacorral-reporte-mensual'), ('pescacorral-recordatorios')),
 -- Fotos de los catamaranes (Supabase Storage): políticas del depósito "catamaranes".
@@ -138,16 +138,18 @@ hallazgos(tipo, objeto, detalle) as (
           and (has_table_privilege('anon', r.oid, 'select') or has_table_privilege('anon', r.oid, 'insert')
                or has_table_privilege('anon', r.oid, 'update') or has_table_privilege('anon', r.oid, 'delete'))
     union all select 'Escritura directa habilitada', t.n || ' · ' || p.p, 'sólo mediante las funciones de negocio'
-        from (values ('reserva'), ('reserva_lugar'), ('permiso'), ('pago'), ('notificacion'),
+        from (values ('reserva'), ('reserva_lugar'), ('permiso'), ('permiso_especie'), ('pago'), ('notificacion'),
                      ('catamaran'), ('lugar'), ('personal_autorizado'), ('aviso'), ('suscripcion_push')) t(n)
         cross join (values ('insert'), ('update'), ('delete')) p(p)
         where has_table_privilege('authenticated', 'public.' || t.n, p.p)
           and not (t.n = 'catamaran' and p.p = 'delete')
+    union all select 'Especies borrables', 'especie', 'se desactivan; revocar delete a authenticated'
+        where has_table_privilege('authenticated', 'public.especie', 'delete')
     union all select 'Autorizaciones legibles', 'personal_autorizado', 'revocar a authenticated'
         where has_table_privilege('authenticated', 'public.personal_autorizado', 'select')
     union all select 'Políticas de escritura', tablename || '.' || policyname, 'esa tabla se escribe sólo con funciones'
         from pg_policies where schemaname = 'public'
-          and tablename in ('reserva', 'reserva_lugar', 'permiso', 'pago', 'aviso', 'lugar', 'suscripcion_push') and cmd <> 'SELECT'
+          and tablename in ('reserva', 'reserva_lugar', 'permiso', 'permiso_especie', 'pago', 'aviso', 'lugar', 'suscripcion_push') and cmd <> 'SELECT'
 
     -- Cuentas
     union all select 'Cuenta sin perfil', u.email, 'está en auth.users y no en usuario' from auth.users u
@@ -168,7 +170,6 @@ hallazgos(tipo, objeto, detalle) as (
         from public.permiso where estado = 'vigente' and fecha_vencimiento < now()
     union all select 'Salida pasada sin completar', numero, to_char(fecha, 'DD/MM/YYYY')
         from public.reserva where estado = 'confirmada' and fecha < (select d from hoy)
-    union all select 'Reserva sin permiso asociado', numero, '' from public.reserva where id_permiso is null
     union all select 'Lugares de la reserva no coinciden', r.numero, r.cantidad_lugares || ' declarados, ' || count(rl.id) || ' registrados'
         from public.reserva r left join public.reserva_lugar rl on rl.id_reserva = r.id
         group by r.id, r.numero, r.cantidad_lugares having count(rl.id) <> r.cantidad_lugares
@@ -195,15 +196,27 @@ hallazgos(tipo, objeto, detalle) as (
         where c.id_propietario is distinct from g.id_propietario
     union all select 'Alerta de fauna sin respaldo', e.nombre || ' · ' || a.periodo, a.permisos_emitidos || ' registrados'
         from public.alerta_fauna a join public.especie e on e.id = a.id_especie
-        where a.permisos_emitidos > (select count(*) from public.permiso p
-            where p.id_especie = a.id_especie and p.estado <> 'anulado'
+        where a.permisos_emitidos > (select count(*) from public.permiso_especie pe
+            join public.permiso p on p.id = pe.id_permiso
+            where pe.id_especie = a.id_especie and p.estado <> 'anulado'
               and to_char(p.fecha_emision at time zone 'America/Argentina/Salta', 'YYYY-MM') = a.periodo)
     union all select 'Reporte automático del mes en curso', titulo, to_char(fecha, 'DD/MM/YYYY')
         from public.reporte where origen = 'automatico' and parametros ->> 'periodo' = to_char(fecha, 'YYYY-MM')
     union all select 'Reporte automático duplicado', parametros ->> 'periodo', count(*) || ' reportes'
         from public.reporte where origen = 'automatico' group by parametros ->> 'periodo' having count(*) > 1
-    union all select 'Falta tarifa de permiso', t.tipo, '' from (values ('diario'), ('semanal'), ('anual')) t(tipo)
-        where not exists (select 1 from public.tarifa_permiso x where x.tipo = t.tipo)
+    union all select 'Permiso sin especies', p.numero, '' from public.permiso p
+        where not exists (select 1 from public.permiso_especie x where x.id_permiso = p.id)
+    union all select 'Importe del permiso distinto de sus especies', p.numero, 'permiso ' || p.monto || ', especies ' || sum(x.precio)
+        from public.permiso p join public.permiso_especie x on x.id_permiso = p.id
+        group by p.id, p.numero, p.monto having sum(x.precio) <> p.monto
+    union all select 'Importe de permisos distinto en la reserva', r.numero, 'reserva ' || r.monto_permiso || ', permisos ' || coalesce(sum(p.monto), 0)
+        from public.reserva r left join public.permiso p on p.id_reserva = r.id
+        group by r.id, r.numero, r.monto_permiso having coalesce(sum(p.monto), 0) <> r.monto_permiso
+    union all select 'Permiso de otra reserva en un lugar', r.numero, p.numero
+        from public.reserva_lugar rl join public.reserva r on r.id = rl.id_reserva join public.permiso p on p.id = rl.id_permiso
+        where p.id_reserva <> rl.id_reserva
+    union all select 'Falta especie habilitada', 'especie', 'sin especies activas no se pueden emitir permisos'
+        where not exists (select 1 from public.especie where activa)
 )
 select tipo, objeto, detalle from hallazgos
 union all

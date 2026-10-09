@@ -79,6 +79,7 @@ function adminLayout({ active, title, subtitle = "", actions = "", body = "" }, 
     ["usuarios", "Usuarios", "users", "#/usuarios"],
     ["avisos", "Avisos", "megaphone", "#/avisos"],
     ["gestion", "Catamaranes", "boat", "#/gestion"],
+    ["especies", "Especies", "fish", "#/especies"],
     ...(p.rol === "admin_sistema" ? [["personal", "Personal", "key", "#/personal"]] : []),
   ];
   const links = nav.map(([key, label, ic, href]) =>
@@ -537,15 +538,16 @@ function boatCard(c, fecha, turno) {
 
 /* ============================================================================
  *  RESERVA DE LUGARES
- *  1. Lugares en el plano del catamarán · 2. Permiso de pesca (comprar uno o
- *  usar el que ya tiene) · 3. Medio de pago. Al pagar se muestra el comprobante.
+ *  1. Lugares en el plano del catamarán · 2. Pasajeros y permisos: los datos
+ *  de cada persona y su permiso de pesca (comprarlo, eligiendo las especies, o
+ *  el número del que ya tiene) · 3. Medio de pago. Al pagar se muestra el
+ *  comprobante.
  * ========================================================================== */
 const MEDIOS_PAGO = [
   ["tarjeta", "credit-card", "Tarjeta", "Crédito o débito"],
   ["mercadopago", "wallet", "Mercado Pago", "Con tu cuenta"],
   ["efectivo", "cash", "Efectivo", "En la boletería del muelle"],
 ];
-const TIPOS_PERMISO = [["diario", "Diario"], ["semanal", "Semanal"], ["anual", "Anual"]];
 const lugaresTexto = (nums) => nums.slice().sort((a, b) => a - b).join(", ");
 
 export async function viewReserva(ctx) {
@@ -554,18 +556,28 @@ export async function viewReserva(ctx) {
   let fecha = ctx.params.fecha || U.todayISO();
   let turno = ctx.params.turno === "tarde" ? "tarde" : "manana";
 
-  const [cat, lugares, especies, tarifas, permisos] = await Promise.all([
-    D.getCatamaran(catId), D.getLugares(catId), D.listEspecies(), D.listTarifasPermiso(), D.listPermisos(),
-  ]);
+  const [cat, lugares, todasEspecies] = await Promise.all([D.getCatamaran(catId), D.getLugares(catId), D.listEspecies()]);
   if (!cat) { U.mount(appShell({ active: null, rol: p.rol, topbarHtml: topbar({ title: "Reservar", back: true, bell: false }), bodyHtml: emptyState("Catamarán no encontrado", "Volvé a la lista de catamaranes.", "boat") })); wireChrome(ctx); return; }
+  const especies = todasEspecies.filter((e) => e.activa !== false);
 
   const seleccion = new Set();
   let ocupacion = { manana: [], tarde: [] };
   let mios = [];
-  let modoPermiso = "comprar";        // comprar | propio
-  let permisoValido = null;           // resultado de D.validarPermiso
   let metodo = "tarjeta";
   const numeroDe = (id) => lugares.find((l) => l.id === id)?.numero;
+  const lugaresOrdenados = () => [...seleccion].sort((a, b) => numeroDe(a) - numeroDe(b));
+  // Pasajeros en el orden de los lugares (el primero es el titular). Sus datos se
+  // conservan al cambiar de lugares, de fecha o de turno, y si el pago falla.
+  const pasajeros = [];
+  const pasajero = (i) => (pasajeros[i] ||= { nombre: "", dni: "", modo: "comprar", especies: new Set(), propio: "" });
+  const activos = () => lugaresOrdenados().map((_, i) => pasajero(i));
+  const montoDe = (x) => (x.modo === "comprar" ? D.precioPermiso([...x.especies], especies) : 0);
+  const datosPasajeros = () => activos().map((x) => ({
+    nombre: x.nombre, dni: x.dni,
+    propio: x.modo === "propio" ? x.propio : "", especies: x.modo === "comprar" ? [...x.especies] : [],
+  }));
+  const errorPasajeros = () => { try { D.validarPasajeros(datosPasajeros(), { dniTitular: p.dni, especies }); return null; } catch (e) { return e.message; } };
+  const titularNombre = `${p.nombre} ${p.apellido || ""}`.trim();
 
   U.mount(appShell({
     active: null, rol: p.rol,
@@ -589,8 +601,8 @@ export async function viewReserva(ctx) {
         <div id="r-mios"></div>
       </div>
 
-      <h2 class="section-title mt-16"><span><span class="paso">1</span>Elegí tus lugares</span></h2>
-      <p class="muted" style="font-size:.84rem;margin:-6px 2px 10px">Vista desde arriba, con la proa adelante. Los números siguen el sentido de las agujas del reloj desde la proa, por estribor.</p>
+      <h2 class="section-title mt-16"><span><span class="paso">1</span>Elegí los lugares</span></h2>
+      <p class="muted" style="font-size:.84rem;margin:-6px 2px 10px">Un lugar por persona. Vista desde arriba, con la proa adelante; los números siguen el sentido de las agujas del reloj desde la proa, por estribor.</p>
       <div id="seatmap"></div>
       <div class="seat-legend">
         <span><i class="lg-free"></i>Libre</span>
@@ -598,35 +610,11 @@ export async function viewReserva(ctx) {
         <span><i class="lg-occ"></i>Ocupado</span>
         <span><i class="lg-mio"></i>Tuyo</span>
       </div>
-      <div id="r-pasajeros"></div>
 
-      <h2 class="section-title mt-24"><span><span class="paso">2</span>Permiso de pesca</span></h2>
-      <div class="opciones opciones--2" role="radiogroup" aria-label="Permiso de pesca">
-        <button type="button" class="opcion is-on" role="radio" aria-checked="true" data-permiso="comprar">
-          ${U.icon("plus-circle", { size: 22 })}<b>Comprar permiso</b><small>Se emite con la reserva</small></button>
-        <button type="button" class="opcion" role="radio" aria-checked="false" data-permiso="propio">
-          ${U.icon("ticket", { size: 22 })}<b>Ya tengo permiso</b><small>Ingresá su número</small></button>
-      </div>
-      <div class="card card--flat mt-12" id="permiso-comprar">
-        <div class="field"><label for="r-especie">Especie a pescar</label>
-          <select class="select" id="r-especie">${especies.map((e) => `<option value="${e.id}">${U.esc(e.nombre)}</option>`).join("")}</select>
-        </div>
-        <label class="field-label">Tipo de permiso</label>
-        <div class="opciones opciones--3" role="radiogroup" aria-label="Tipo de permiso">
-          ${TIPOS_PERMISO.map(([k, label], i) => `<button type="button" class="opcion opcion--sm${i === 0 ? " is-on" : ""}" role="radio" aria-checked="${i === 0}" data-tipo="${k}">
-            <b>${label}</b><small>${tarifas[k] ? U.fmtMoney(tarifas[k]) : "Sin cargo"}</small></button>`).join("")}
-        </div>
-      </div>
-      <div class="card card--flat mt-12 hide" id="permiso-propio">
-        <div class="field" style="margin-bottom:8px"><label for="r-numperm">Número de permiso</label>
-          <div class="flex gap-8">
-            <input class="input grow" id="r-numperm" placeholder="PCC-000215" autocapitalize="characters" spellcheck="false"/>
-            <button class="btn btn--outline" type="button" id="r-verificar">Verificar</button>
-          </div>
-        </div>
-        <div id="r-misperm"></div>
-        <div id="r-permres" class="mt-8"></div>
-      </div>
+      <h2 class="section-title mt-24"><span><span class="paso">2</span>Pasajeros y permisos</span></h2>
+      <p class="muted" style="font-size:.84rem;margin:-6px 2px 10px">Cada pasajero necesita su permiso de pesca: compralo acá, eligiendo las especies, o ingresá el número del que ya tiene.</p>
+      <div id="r-pasajeros"></div>
+      <p class="field__error" id="r-pasajeros-error" role="alert"></p>
 
       <h2 class="section-title mt-24"><span><span class="paso">3</span>Medio de pago</span></h2>
       <div class="opciones opciones--3" role="radiogroup" aria-label="Medio de pago">
@@ -649,28 +637,27 @@ export async function viewReserva(ctx) {
 
   const summaryEl = U.$("#summary");
   const confirmBtn = U.$("#confirm-btn");
-  const tipoActual = () => U.$("[data-tipo].is-on")?.dataset.tipo || "diario";
   const marcar = (grupo, btn) => U.$$(grupo).forEach((b) => { const on = b === btn; b.classList.toggle("is-on", on); b.setAttribute("aria-checked", String(on)); });
 
   const refreshSummary = () => {
     const n = seleccion.size;
     const montoLugares = n * cat.precio;
-    const montoPermiso = modoPermiso === "comprar" ? Number(tarifas[tipoActual()] || 0) : 0;
-    const total = n ? montoLugares + montoPermiso : 0;
-    const nums = [...seleccion].map(numeroDe);
+    const act = activos();
+    const digitales = act.filter((x) => x.modo === "comprar").length;
+    const propios = act.length - digitales;
+    const montoPermisos = act.reduce((t, x) => t + montoDe(x), 0);
+    const total = n ? montoLugares + montoPermisos : 0;
+    const detalle = [digitales ? `${digitales} digital${digitales > 1 ? "es" : ""}` : "", propios ? `${propios} propio${propios > 1 ? "s" : ""}` : ""].filter(Boolean).join(" · ");
     summaryEl.innerHTML = `
       <div class="flex between"><span>Lugares${n ? ` (${n} × ${U.fmtMoney(cat.precio)})` : ""}</span><b>${U.fmtMoney(montoLugares)}</b></div>
-      ${modoPermiso === "comprar"
-        ? `<div class="flex between mt-8"><span>Permiso ${U.tipoPermisoLabel(tipoActual()).toLowerCase()}</span><b>${montoPermiso ? U.fmtMoney(montoPermiso) : "Sin cargo"}</b></div>`
-        : `<div class="flex between mt-8"><span>Permiso propio${permisoValido ? " " + U.esc(permisoValido.numero) : ""}</span><b>${permisoValido ? "Sin cargo" : "Sin verificar"}</b></div>`}
+      ${n ? `<div class="flex between mt-8"><span>Permisos de pesca${detalle ? ` (${detalle})` : ""}</span><b>${digitales ? U.fmtMoney(montoPermisos) : "Sin cargo"}</b></div>` : ""}
       <div class="flex between mt-8 total"><span><b>Total a pagar</b></span><b>${U.fmtMoney(total)}</b></div>
-      ${n ? `<div class="muted mt-8" style="font-size:.8rem">Lugares: ${nums.sort((a, b) => a - b).map((x) => `${x} (${D.ubicacionLugar(x, lugares.length)})`).join(", ")} · Turno ${U.turnoLabel(turno).toLowerCase()} · ${U.fmtDate(fecha)}</div>` : ""}`;
+      ${n ? `<div class="muted mt-8" style="font-size:.8rem">Lugares: ${lugaresOrdenados().map(numeroDe).map((x) => `${x} (${D.ubicacionLugar(x, lugares.length)})`).join(", ")} · Turno ${U.turnoLabel(turno).toLowerCase()} · ${U.fmtDate(fecha)}</div>` : ""}`;
     U.$("#paybar-total").textContent = U.fmtMoney(total);
-    const falta = !n ? "Elegí tus lugares"
-      : n > 1 && errorAcompanantes() ? "Completá los pasajeros"
-      : modoPermiso === "propio" && !permisoValido ? "Verificá tu permiso" : null;
+    const falta = !n ? "Elegí tus lugares" : errorPasajeros() ? "Completá pasajeros y permisos" : null;
     U.$("#paybar-cant").textContent = falta || `${n} lugar${n > 1 ? "es" : ""} · ${U.turnoLabel(turno).toLowerCase()}`;
     confirmBtn.disabled = Boolean(falta);
+    return { total, montoPermisos, digitales };
   };
 
   const pintarTurnos = () => {
@@ -700,44 +687,80 @@ export async function viewReserva(ctx) {
     U.$("#seatmap").innerHTML = planoCatamaran(lugares, ocup, seleccion, propios);
   };
 
-  // Pasajeros (lista de embarque): el primer lugar es del titular; para cada uno
-  // más se piden el nombre y el DNI de quien lo ocupa.
-  const acompanantes = new Map();   // id del lugar -> { nombre, dni }
-  const lugaresOrdenados = () => [...seleccion].sort((a, b) => numeroDe(a) - numeroDe(b));
-  const listaAcompanantes = () => lugaresOrdenados().slice(1).map((id) => acompanantes.get(id) || { nombre: "", dni: "" });
-  function errorAcompanantes() {
-    try { D.validarAcompanantes(listaAcompanantes(), seleccion.size, p.dni); return null; } catch (e) { return e.message; }
-  }
+  /* --- Pasajeros y permisos: una tarjeta por lugar --- */
+  const tarjetaPasajero = (x, i, idLugar) => {
+    const n = numeroDe(idLugar);
+    const de = i ? `del acompañante ${i}` : "del titular";
+    return `<div class="pasajero-card" data-i="${i}">
+      <div class="pasajero-card__head">
+        <span class="pasajero__lugar" title="Lugar ${n}">${n}</span>
+        <span class="grow">${i
+          ? `<b>Acompañante ${i}</b><small class="muted d-block">Lugar ${n} · ${U.esc(D.ubicacionLugar(n, lugares.length))}</small>`
+          : `<b>${U.esc(titularNombre)}</b><small class="muted d-block">Vos, titular · DNI ${U.esc(p.dni || "—")} · lugar ${n}</small>`}</span>
+        <b class="pasajero-card__monto" data-monto="${i}"></b>
+      </div>
+      ${i ? `<div class="pasajero-card__datos">
+        <input class="input grow" data-i="${i}" data-campo="nombre" value="${U.esc(x.nombre)}" placeholder="Nombre y apellido" maxlength="80" autocomplete="off" aria-label="Nombre y apellido del acompañante ${i}"/>
+        <input class="input pasajero__dni" data-i="${i}" data-campo="dni" value="${U.esc(x.dni)}" placeholder="DNI" inputmode="numeric" maxlength="10" autocomplete="off" aria-label="DNI del acompañante ${i}"/>
+      </div>` : ""}
+      <div class="segmented segmented--permiso" role="radiogroup" aria-label="Permiso de pesca ${de}">
+        ${[["comprar", "Comprar permiso"], ["propio", "Ya tengo permiso"]].map(([m, label]) =>
+          `<button type="button" role="radio" aria-checked="${x.modo === m}" class="${x.modo === m ? "is-on" : ""}" data-i="${i}" data-modo="${m}">${label}</button>`).join("")}
+      </div>
+      <div data-panel="comprar" class="${x.modo === "comprar" ? "" : "hide"}">
+        <div class="chips" role="group" aria-label="Especies del permiso ${de}">${especies.map((e) => {
+          const on = x.especies.has(e.id);
+          return `<button type="button" class="chip chip--especie${on ? " is-on" : ""}" aria-pressed="${on}" data-i="${i}" data-especie="${e.id}">${U.esc(e.nombre)} <small>${U.fmtMoney(e.precio_permiso)}</small></button>`;
+        }).join("") || `<span class="muted">No hay especies habilitadas.</span>`}</div>
+        <small class="muted d-block mt-8">Permiso digital válido para la salida del ${U.fmtDate(fecha)}.</small>
+      </div>
+      <div data-panel="propio" class="${x.modo === "propio" ? "" : "hide"}">
+        <input class="input" data-i="${i}" data-campo="propio" value="${U.esc(x.propio)}" placeholder="Número de permiso" maxlength="40" autocomplete="off" spellcheck="false" aria-label="Número del permiso ${de}"/>
+        <small class="muted d-block mt-8">Se registra tal como lo ingresás. Presentalo al embarcar.</small>
+      </div>
+    </div>`;
+  };
+  const actualizarMontos = () => U.$$("[data-monto]").forEach((el) => {
+    const x = pasajero(Number(el.dataset.monto));
+    el.textContent = x.modo === "propio" ? "Propio" : x.especies.size ? U.fmtMoney(montoDe(x)) : "";
+  });
+  // Con todos los datos cargados se dice qué falta corregir (por ejemplo, un DNI repetido).
+  const avisarPasajeros = () => {
+    const completos = activos().every((x, i) => (!i || (x.nombre.trim() && x.dni.trim())) && (x.modo === "propio" ? x.propio.trim() : x.especies.size));
+    U.$("#r-pasajeros-error").textContent = seleccion.size && completos ? errorPasajeros() || "" : "";
+  };
   const pintarPasajeros = () => {
     const ids = lugaresOrdenados();
-    const box = U.$("#r-pasajeros");
-    if (ids.length < 2) { box.innerHTML = ""; return; }
-    box.innerHTML = `<h3 class="pasajeros__titulo">Pasajeros</h3>
-      <p class="muted" style="font-size:.84rem;margin:0 2px 10px">Para la lista de embarque del catamarán: nombre y DNI de quien ocupa cada lugar.</p>
-      <div class="pasajero"><span class="pasajero__lugar">${numeroDe(ids[0])}</span>
-        <span class="grow"><b>${U.esc(`${p.nombre} ${p.apellido || ""}`.trim())}</b><small class="muted d-block">Vos, titular de la reserva · DNI ${U.esc(p.dni || "—")}</small></span></div>
-      ${ids.slice(1).map((id) => {
-        const a = acompanantes.get(id) || {}, n = numeroDe(id);
-        return `<div class="pasajero"><span class="pasajero__lugar">${n}</span>
-          <input class="input grow" data-acomp="${id}" data-campo="nombre" value="${U.esc(a.nombre || "")}" placeholder="Nombre y apellido" maxlength="80" autocomplete="off" aria-label="Nombre y apellido de quien ocupa el lugar ${n}"/>
-          <input class="input pasajero__dni" data-acomp="${id}" data-campo="dni" value="${U.esc(a.dni || "")}" placeholder="DNI" inputmode="numeric" maxlength="10" autocomplete="off" aria-label="DNI de quien ocupa el lugar ${n}"/>
-        </div>`;
-      }).join("")}
-      <p class="field__error" id="r-pasajeros-error" role="alert"></p>`;
-    avisarPasajeros();
+    U.$("#r-pasajeros").innerHTML = ids.length ? ids.map((id, i) => tarjetaPasajero(pasajero(i), i, id)).join("")
+      : `<div class="card card--flat muted center" style="font-size:.88rem">Elegí al menos un lugar en el plano.</div>`;
+    actualizarMontos(); avisarPasajeros();
   };
-  // Con todos los datos escritos, se dice qué falta corregir (por ejemplo, un DNI repetido).
-  const avisarPasajeros = () => {
-    const el = U.$("#r-pasajeros-error");
+  const cajaPasajeros = U.$("#r-pasajeros");
+  cajaPasajeros.addEventListener("input", (e) => {
+    const el = e.target.closest("[data-campo]");
     if (!el) return;
-    const completos = listaAcompanantes().every((a) => String(a.nombre || "").trim() && String(a.dni || "").trim());
-    el.textContent = completos ? errorAcompanantes() || "" : "";
-  };
-  U.$("#r-pasajeros").addEventListener("input", (e) => {
-    const el = e.target.closest("[data-acomp]");
-    if (!el) return;
-    acompanantes.set(el.dataset.acomp, { ...(acompanantes.get(el.dataset.acomp) || {}), [el.dataset.campo]: el.value });
+    pasajero(Number(el.dataset.i))[el.dataset.campo] = el.value;
     avisarPasajeros(); refreshSummary();
+  });
+  cajaPasajeros.addEventListener("click", (e) => {
+    const modo = e.target.closest("[data-modo]");
+    if (modo) {
+      const x = pasajero(Number(modo.dataset.i));
+      const card = modo.closest(".pasajero-card");
+      x.modo = modo.dataset.modo;
+      U.$$("[data-modo]", card).forEach((b) => { const on = b === modo; b.classList.toggle("is-on", on); b.setAttribute("aria-checked", String(on)); });
+      U.$('[data-panel="comprar"]', card).classList.toggle("hide", x.modo !== "comprar");
+      U.$('[data-panel="propio"]', card).classList.toggle("hide", x.modo !== "propio");
+      if (x.modo === "propio") U.$('[data-campo="propio"]', card).focus();
+    } else {
+      const chip = e.target.closest("[data-especie]");
+      if (!chip) return;
+      const x = pasajero(Number(chip.dataset.i)), id = chip.dataset.especie;
+      if (x.especies.has(id)) x.especies.delete(id); else x.especies.add(id);
+      chip.classList.toggle("is-on", x.especies.has(id));
+      chip.setAttribute("aria-pressed", String(x.especies.has(id)));
+    }
+    actualizarMontos(); avisarPasajeros(); refreshSummary();
   });
 
   const cargar = async () => {
@@ -766,85 +789,35 @@ export async function viewReserva(ctx) {
   U.$("#r-fecha").addEventListener("change", async () => {
     fecha = U.$("#r-fecha").value || U.todayISO();
     seleccion.clear();
-    if (permisoValido) { permisoValido = null; U.$("#r-permres").innerHTML = ""; }
-    pintarMisPermisos();
     await cargar();
   });
-
-  /* --- Permiso: comprar o usar uno propio --- */
-  const resPermiso = U.$("#r-permres");
-  const pintarMisPermisos = () => {
-    // Permisos propios vigentes que cubren la fecha elegida (desde la salida para la que se emitieron hasta su vencimiento).
-    const dia = (ts) => { const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
-    const sirven = permisos.filter((x) => x.id_usuario === ctx.session.user.id && x.estado === "vigente"
-      && (x.fecha || dia(x.fecha_emision)) <= fecha && dia(x.fecha_vencimiento) >= fecha);
-    U.$("#r-misperm").innerHTML = sirven.length
-      ? `<div class="field__hint" style="margin-top:0">Tus permisos vigentes para esta fecha:</div><div class="chips">${sirven.slice(0, 6).map((x) => `<button type="button" class="chip" data-usar="${U.esc(x.numero)}">${U.esc(x.numero)} · ${U.tipoPermisoLabel(x.tipo)}</button>`).join("")}</div>`
-      : "";
-  };
-  pintarMisPermisos();
-  const verificar = async () => {
-    const num = U.$("#r-numperm").value.trim();
-    permisoValido = null; refreshSummary();
-    if (!num) { resPermiso.innerHTML = `<div class="nota nota--error">${U.icon("alert-triangle", { size: 18 })}<span>Ingresá el número de tu permiso.</span></div>`; return; }
-    const b = U.$("#r-verificar"); b.disabled = true; b.textContent = "Verificando…";
-    try {
-      permisoValido = await D.validarPermiso(num, fecha);
-      U.$("#r-numperm").value = permisoValido.numero;
-      resPermiso.innerHTML = `<div class="nota nota--ok">${U.icon("check-circle", { size: 18 })}<span>Permiso <b>${U.esc(permisoValido.numero)}</b> válido · ${U.tipoPermisoLabel(permisoValido.tipo)}${permisoValido.especie ? " · " + U.esc(permisoValido.especie) : ""} · vale hasta el ${U.fmtDate(permisoValido.hasta)}.</span></div>`;
-    } catch (err) {
-      resPermiso.innerHTML = `<div class="nota nota--error">${U.icon("alert-triangle", { size: 18 })}<span>${U.esc(err.message)}</span></div>`;
-    } finally {
-      b.disabled = false; b.textContent = "Verificar"; refreshSummary();
-    }
-  };
-  U.$("#r-verificar").addEventListener("click", verificar);
-  U.$("#r-numperm").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); verificar(); } });
-  U.$("#r-numperm").addEventListener("input", () => { if (permisoValido) { permisoValido = null; resPermiso.innerHTML = ""; refreshSummary(); } });
-  U.$("#r-misperm").addEventListener("click", (e) => { const b = e.target.closest("[data-usar]"); if (b) { U.$("#r-numperm").value = b.dataset.usar; verificar(); } });
-
-  U.$$("[data-permiso]").forEach((b) => b.addEventListener("click", () => {
-    modoPermiso = b.dataset.permiso;
-    marcar("[data-permiso]", b);
-    U.$("#permiso-comprar").classList.toggle("hide", modoPermiso !== "comprar");
-    U.$("#permiso-propio").classList.toggle("hide", modoPermiso !== "propio");
-    if (modoPermiso === "propio" && !U.$("#r-numperm").value) U.$("#r-numperm").focus();
-    refreshSummary();
-  }));
-  U.$$("[data-tipo]").forEach((b) => b.addEventListener("click", () => { marcar("[data-tipo]", b); refreshSummary(); }));
   U.$$("[data-metodo]").forEach((b) => b.addEventListener("click", () => { metodo = b.dataset.metodo; marcar("[data-metodo]", b); }));
 
   const labelBtn = `${U.icon("credit-card", { size: 20 })} Pagar y confirmar`;
   confirmBtn.addEventListener("click", async () => {
     if (!seleccion.size) return;
-    const errorPasajeros = seleccion.size > 1 ? errorAcompanantes() : null;
-    if (errorPasajeros) { U.toast(errorPasajeros, "err"); U.$("#r-pasajeros input")?.focus(); return; }
-    if (modoPermiso === "propio" && !permisoValido) { await verificar(); if (!permisoValido) return; }
-    const montoPermiso = modoPermiso === "comprar" ? Number(tarifas[tipoActual()] || 0) : 0;
-    const monto = seleccion.size * cat.precio + montoPermiso;
-    // 1) Pago (pasarela simulada, HU-007). Si se rechaza, no se reserva ni se emite permiso.
-    const pago = await pagoModal({ metodo, monto, lugares: seleccion.size, catamaran: cat.nombre, permiso: modoPermiso === "comprar" ? `Permiso ${U.tipoPermisoLabel(tipoActual()).toLowerCase()}` : null, montoPermiso, email: ctx.session.user.email });
+    const error = errorPasajeros();
+    if (error) { U.toast(error, "err"); U.$("#r-pasajeros-error").textContent = error; return; }
+    const { total, montoPermisos, digitales } = refreshSummary();
+    // 1) Pago (pasarela simulada, HU-007). Si se rechaza, no se reserva ni se emiten permisos.
+    const pago = await pagoModal({ metodo, monto: total, lugares: seleccion.size, catamaran: cat.nombre, permiso: digitales ? `Permisos de pesca (${digitales})` : null, montoPermiso: montoPermisos, email: ctx.session.user.email });
     if (!pago) return;                              // canceló
     confirmBtn.disabled = true; confirmBtn.innerHTML = "Procesando…";
     try {
       const res = await D.crearReserva({
-        catamaranId: catId, fecha, turno,
-        lugares: lugaresOrdenados(),
-        acompanantes: listaAcompanantes(),
-        metodo,
-        tipoPermiso: tipoActual(),
-        especieId: U.$("#r-especie").value,
-        numeroPermiso: modoPermiso === "propio" ? permisoValido.numero : null,
-        autorizacion: pago.autorizacion,
+        catamaranId: catId, fecha, turno, lugares: lugaresOrdenados(), pasajeros: datosPasajeros(),
+        metodo, autorizacion: pago.autorizacion,
       });
       U.toast("Pago aprobado · Reserva confirmada", "ok");
       ctx.go(`/comprobante/${res.reserva_id}?nuevo=1`);
     } catch (err) {
       U.toast(err.message || "No se pudo completar la reserva.", "err");
-      confirmBtn.disabled = false;
       confirmBtn.innerHTML = labelBtn;
-      seleccion.clear();
-      await cargar();
+      // Se conservan los lugares y los datos cargados; sólo se quitan los lugares que otro ocupó.
+      try { [ocupacion, mios] = await Promise.all([D.ocupacionPorTurno(catId, fecha), D.misLugares(catId, fecha)]); } catch { /* sin conexión */ }
+      const ocupados = new Set(ocupacion[turno]);
+      lugaresOrdenados().filter((id) => ocupados.has(id)).forEach((id) => seleccion.delete(id));
+      pintarTurnos(); pintarMios(); pintarAsientos(); pintarPasajeros(); refreshSummary();
     }
   });
 }
@@ -969,16 +942,17 @@ function planoCatamaran(lugares, ocupados, seleccion, propios = new Set(), { lec
 }
 
 /* ============================================================================
- *  COMPROBANTE (reserva + pago + permiso)
+ *  COMPROBANTE (reserva + pago + permisos de los pasajeros)
  * ========================================================================== */
+const permisoTexto = (x) => x.permiso ? `${x.permiso.numero} (${x.permiso.especie_nombre})`
+  : x.permiso_propio ? `propio, N° ${x.permiso_propio}` : "sin registrar";
+
 function textoComprobante(c) {
   return [
     `*Reserva ${c.numero}* · ${CFG.LUGAR || "Dique Cabra Corral"}`,
     `Catamarán: ${c.catamaran}`,
     `Salida: ${U.fmtDate(c.fecha)} · turno ${U.turnoLabel(c.turno).toLowerCase()}`,
-    `Lugares: ${c.lugares.map((n) => `${n} (${D.ubicacionLugar(n, c.capacidad || c.lugares.length)})`).join(", ")}`,
-    c.acompanantes?.length ? `Acompañantes: ${c.acompanantes.map((a) => `${a.nombre} (lugar ${a.lugar})`).join(", ")}` : "",
-    c.permiso ? `Permiso de pesca: ${c.permiso.numero} (${U.tipoPermisoLabel(c.permiso.tipo).toLowerCase()})` : "",
+    ...c.pasajeros.map((x) => `Lugar ${x.lugar} (${D.ubicacionLugar(x.lugar, c.capacidad || c.lugares.length)}): ${x.nombre || "sin registrar"} · permiso ${permisoTexto(x)}`),
     c.pago ? `Pago: ${c.pago.comprobante} · ${U.metodoPagoLabel(c.pago.metodo)} · ${U.fmtMoney(c.monto_total)}` : "",
     CFG.MUNICIPIO || "Municipio de Coronel Moldes",
   ].filter(Boolean).join("\n");
@@ -990,7 +964,7 @@ function imagenComprobante(c) {
     ["Salida", `${U.fmtDate(c.fecha)} · ${U.turnoLabel(c.turno)}`],
     ["Lugares", lugaresTexto(c.lugares)],
     ["Titular", c.titular?.nombre || "—"],
-    ["Permiso", c.permiso ? `${c.permiso.numero} · ${U.tipoPermisoLabel(c.permiso.tipo)}` : "—"],
+    ["Permisos digitales", c.permisos_emitidos ? `${c.permisos_emitidos} · ${U.fmtMoney(c.monto_permiso)}` : "—"],
     ["Comprobante", c.pago?.comprobante || "—"],
     ["Medio de pago", c.pago ? U.metodoPagoLabel(c.pago.metodo) : "—"],
     ["Fecha de pago", c.pago ? U.fmtDateTime(c.pago.fecha_pago) : "—"],
@@ -1008,10 +982,9 @@ export async function viewComprobante(ctx) {
   const c = await D.getComprobante(ctx.params.id);
   if (!c) { U.mount(appShell({ active: null, rol: p.rol, topbarHtml: topbar({ title: "Comprobante", back: true, bell: false }), bodyHtml: emptyState("Comprobante no encontrado", "Revisá tus reservas en el historial.", "receipt") })); wireChrome(ctx); return; }
   const nuevo = ctx.params.nuevo === "1";
-  const per = c.permiso;
-  const perBadge = per ? U.estadoPermisoBadge(per.estado) : null;
   const resBadge = U.estadoReservaBadge(c.estado);
   const fila = (k, v) => `<div class="permit__row"><span>${U.esc(k)}</span><b>${v}</b></div>`;
+  const chipsLugares = `<div class="chips">${c.lugares.map((n) => `<span class="chip chip--lugar"><b>${n}</b> ${U.esc(D.ubicacionLugar(n, c.capacidad || c.lugares.length))}</span>`).join("")}</div>`;
   // Reserva de un pasajero en un catamarán del dueño: sólo la salida y los lugares.
   const pasajero = c.id_usuario !== p.id && !isAdmin(p.rol);
   if (pasajero) {
@@ -1026,18 +999,18 @@ export async function viewComprobante(ctx) {
             ${fila("Catamarán", U.esc(c.catamaran))}
             ${fila("Fecha de salida", U.fmtDate(c.fecha))}
             ${fila("Turno", U.turnoLabel(c.turno))}
-            <div class="permit__row permit__row--col"><span>Lugares</span>
-              <div class="chips">${c.lugares.map((n) => `<span class="chip chip--lugar"><b>${n}</b> ${U.esc(D.ubicacionLugar(n, c.capacidad || c.lugares.length))}</span>`).join("")}</div></div>
+            <div class="permit__row permit__row--col"><span>Lugares</span>${chipsLugares}</div>
             <div class="permit__row doc__total"><span>Total de la reserva</span><b>${U.fmtMoney(c.monto_total)}</b></div>
           </div>
         </section>
-        <p class="muted center mt-12" style="font-size:.8rem">${U.icon("shield", { size: 14 })} El nombre y el DNI del titular están en la lista de embarque de la salida. El correo, el teléfono, el pago y el permiso sólo los ven el pasajero y el Municipio. Al embarcar, pedile su permiso digital.</p>
+        <p class="muted center mt-12" style="font-size:.8rem">${U.icon("shield", { size: 14 })} El nombre, el DNI y el permiso de cada pasajero están en la lista de embarque de la salida. El correo, el teléfono y el pago sólo los ven el pasajero y el Municipio.</p>
       `,
     }));
     wireChrome(ctx);
     return;
   }
 
+  const emitidos = c.pasajeros.filter((x) => x.permiso);
   U.mount(appShell({
     active: null, rol: p.rol,
     topbarHtml: topbar({ title: "Comprobante", back: !nuevo, bell: false }),
@@ -1046,7 +1019,7 @@ export async function viewComprobante(ctx) {
       ${nuevo ? `<div class="exito">
         <span class="exito__ic">${U.icon("check", { size: 34, stroke: 3 })}</span>
         <h2>¡Listo! Tu reserva está confirmada</h2>
-        <p>Guardá o compartí este comprobante: lo vas a presentar al embarcar junto con tu permiso.</p>
+        <p>Guardá o compartí este comprobante: lo vas a presentar al embarcar junto con los permisos de pesca.</p>
       </div>` : ""}
 
       <section class="doc" id="comprobante">
@@ -1057,10 +1030,15 @@ export async function viewComprobante(ctx) {
           ${fila("Fecha de salida", U.fmtDate(c.fecha))}
           ${fila("Turno", U.turnoLabel(c.turno))}
           ${fila("Titular", U.esc(c.titular?.nombre || "—"))}
-          <div class="permit__row permit__row--col"><span>Lugares</span>
-            <div class="chips">${c.lugares.map((n) => `<span class="chip chip--lugar"><b>${n}</b> ${U.esc(D.ubicacionLugar(n, c.capacidad || c.lugares.length))}</span>`).join("")}</div></div>
-          ${c.acompanantes?.length ? `<div class="permit__row permit__row--col"><span>Acompañantes</span>
-            <div class="pasajeros-lista">${c.acompanantes.map((a) => `<div><b>${a.lugar}</b><span>${U.esc(a.nombre)}</span><small>DNI ${U.esc(a.dni)}</small></div>`).join("")}</div></div>` : ""}
+          <div class="permit__row permit__row--col"><span>Lugares</span>${chipsLugares}</div>
+          <div class="permit__row permit__row--col"><span>Pasajeros y permisos</span>
+            <div class="pasajeros-lista">${c.pasajeros.map((x) => `<div>
+              <b>${x.lugar}</b>
+              <span>${U.esc(x.nombre || "Sin registrar")}<small class="muted d-block">${x.titular ? "Titular" : "Acompañante"}${x.dni ? ` · DNI ${U.esc(x.dni)}` : ""}</small></span>
+              <small class="pasajeros-lista__permiso">${x.permiso
+                ? `${U.esc(x.permiso.numero)}<span class="d-block">${U.esc(x.permiso.especie_nombre)}</span>`
+                : x.permiso_propio ? `Propio<span class="d-block">${U.esc(x.permiso_propio)}</span>` : "—"}</small>
+            </div>`).join("")}</div></div>
         </div>
       </section>
 
@@ -1072,21 +1050,19 @@ export async function viewComprobante(ctx) {
           ${c.pago ? fila("Medio de pago", U.esc(U.metodoPagoLabel(c.pago.metodo))) : ""}
           ${c.pago?.autorizacion ? fila("Autorización", U.esc(c.pago.autorizacion)) : ""}
           ${fila(`Lugares (${c.cantidad_lugares} × ${U.fmtMoney(c.precio_lugar)})`, U.fmtMoney(c.monto_lugares))}
-          ${per ? fila(per.propio ? `Permiso propio ${per.numero}` : `Permiso ${U.tipoPermisoLabel(per.tipo).toLowerCase()}`, c.monto_permiso ? U.fmtMoney(c.monto_permiso) : "Sin cargo") : ""}
+          ${fila(`Permisos de pesca${emitidos.length ? ` (${emitidos.length})` : ""}`, c.monto_permiso ? U.fmtMoney(c.monto_permiso) : "Sin cargo")}
           <div class="permit__row doc__total"><span>Total abonado</span><b>${U.fmtMoney(c.monto_total)}</b></div>
         </div>
       </section>
 
-      ${per ? `<section class="doc mt-16">
-        <div class="doc__head">${U.icon("ticket", { size: 18 })}<span>Permiso de pesca</span><span class="badge ${perBadge.cls}">${perBadge.label}</span></div>
-        <div class="doc__numero"><small>N° de permiso</small><b>${U.esc(per.numero)}</b></div>
+      ${emitidos.length ? `<section class="doc mt-16">
+        <div class="doc__head">${U.icon("ticket", { size: 18 })}<span>Permisos de pesca emitidos</span></div>
         <div class="permit__body">
-          ${fila("Tipo", U.tipoPermisoLabel(per.tipo))}
-          ${fila("Especie", U.esc(per.especie))}
-          ${fila("Vence", U.fmtDate(per.fecha_vencimiento))}
-          ${fila("Origen", per.propio ? "Permiso que ya tenías" : "Emitido con esta reserva")}
+          ${emitidos.map((x) => { const b = U.estadoPermisoBadge(x.permiso.estado); return `<a class="permiso-fila" href="#/permiso/${x.permiso.id}">
+            <span class="grow"><b>${U.esc(x.permiso.numero)}</b><small class="muted d-block">${U.esc(x.nombre || "—")} · ${U.esc(x.permiso.especie_nombre)}</small></span>
+            <span class="badge ${b.cls}">${b.label}</span>${U.icon("qr", { size: 20 })}</a>`; }).join("")}
+          <p class="muted" style="font-size:.8rem;margin:10px 0 0">Válidos para la salida del ${U.fmtDate(c.fecha)}. Abrí cada permiso para ver su código QR y compartirlo con quien lo va a usar.</p>
         </div>
-        <div class="permit__actions"><a class="btn btn--outline btn--block" href="#/permiso/${per.id}">${U.icon("qr", { size: 18 })} Ver permiso con código QR</a></div>
       </section>` : ""}
 
       <div class="stack mt-16">
@@ -1106,13 +1082,15 @@ export async function viewComprobante(ctx) {
 }
 
 /* ============================================================================
- *  PERMISO DIGITAL
+ *  PERMISO DIGITAL (uno por pasajero; vale para la fecha de la salida)
  * ========================================================================== */
+const especiesTexto = (permiso) => permiso.especies.map((e) => e.nombre).join(", ") || "—";
+
 function textoPermiso(permiso) {
   return [
     `*Permiso de pesca ${permiso.numero}* · ${U.estadoPermisoBadge(permiso.estado).label}`,
     `Titular: ${permiso.titular_nombre} (DNI ${permiso.titular_dni})`,
-    `Especie: ${permiso.especie_nombre} · ${U.tipoPermisoLabel(permiso.tipo)}`,
+    `Especies: ${especiesTexto(permiso)}`,
     permiso.fecha ? `Salida: ${U.fmtDate(permiso.fecha)}${permiso.turno ? " · turno " + U.turnoLabel(permiso.turno).toLowerCase() : ""} · ${permiso.catamaran_nombre}` : "",
     `Vence: ${U.fmtDate(permiso.fecha_vencimiento)}`,
     `${CFG.LUGAR || "Dique Cabra Corral"} · ${CFG.MUNICIPIO || "Municipio de Coronel Moldes"}`,
@@ -1127,9 +1105,9 @@ function imagenPermiso(permiso) {
     banda, qr: permiso.codigo_qr, titulo: permiso.numero,
     filas: [
       ["Titular", permiso.titular_nombre], ["DNI", permiso.titular_dni],
-      ["Especie", permiso.especie_nombre], ["Catamarán", permiso.catamaran_nombre],
+      ["Especies", especiesTexto(permiso)], ["Catamarán", permiso.catamaran_nombre],
       ["Fecha de salida", permiso.fecha ? U.fmtDate(permiso.fecha) : "—"],
-      ["Tipo", U.tipoPermisoLabel(permiso.tipo)], ["Vencimiento", U.fmtDate(permiso.fecha_vencimiento)],
+      ["Vencimiento", U.fmtDate(permiso.fecha_vencimiento)],
     ],
     pie: "Presentá este permiso al personal de control.",
     lugar: CFG.LUGAR || "Dique Cabra Corral", municipio: CFG.MUNICIPIO || "Municipio de Coronel Moldes",
@@ -1155,14 +1133,14 @@ export async function viewPermiso(ctx) {
         <div class="permit__body">
           ${permitRow("Titular", permiso.titular_nombre)}
           ${permitRow("DNI", permiso.titular_dni)}
-          ${permitRow("Especie", permiso.especie_nombre)}
+          <div class="permit__row permit__row--col"><span>Especies</span>
+            <div class="chips">${permiso.especies.map((e) => `<span class="chip">${U.esc(e.nombre)}${e.cientifico ? ` <i class="muted">${U.esc(e.cientifico)}</i>` : ""}</span>`).join("") || "—"}</div></div>
           ${permitRow("Catamarán", permiso.catamaran_nombre)}
           ${permitRow("Fecha de salida", permiso.fecha ? U.fmtDate(permiso.fecha) : "—")}
           ${permitRow("Turno", permiso.turno ? U.turnoLabel(permiso.turno) : "—")}
-          ${permitRow("Tipo", U.tipoPermisoLabel(permiso.tipo))}
           ${permitRow("Emisión", U.fmtDate(permiso.fecha_emision))}
           ${permitRow("Vencimiento", U.fmtDate(permiso.fecha_vencimiento))}
-          ${permiso.monto_total ? permitRow("Importe abonado", U.fmtMoney(permiso.monto_total)) : ""}
+          ${permiso.monto ? permitRow("Importe del permiso", U.fmtMoney(permiso.monto)) : ""}
           ${permiso.pago_comprobante ? permitRow("Comprobante de pago", `${permiso.pago_comprobante} · ${U.metodoPagoLabel(permiso.pago_metodo)}`) : ""}
         </div>
         <div class="permit__actions stack">
@@ -1171,7 +1149,7 @@ export async function viewPermiso(ctx) {
           ${permiso.reserva_id ? `<a class="btn btn--outline btn--block" href="#/comprobante/${permiso.reserva_id}">${U.icon("receipt", { size: 18 })} Ver comprobante de la reserva</a>` : ""}
         </div>
       </div>
-      <p class="muted center mt-12" style="font-size:.8rem">${U.icon("shield", { size: 14 })} Presentá este permiso al personal de control. El código QR permite validar su autenticidad.</p>
+      <p class="muted center mt-12" style="font-size:.8rem">${U.icon("shield", { size: 14 })} Presentá este permiso al personal de control. Vale sólo para la salida del ${permiso.fecha ? U.fmtDate(permiso.fecha) : "día indicado"} y para las especies que figuran. El código QR permite validar su autenticidad.</p>
     `,
   }));
   wireChrome(ctx);
@@ -1225,7 +1203,7 @@ export async function viewHistorial(ctx) {
     const b = U.estadoPermisoBadge(per.estado);
     return `<a class="permit-mini" href="#/permiso/${per.id}" style="margin-bottom:10px">
       <div class="permit-mini__badge ${cls}">${U.icon("ticket", { size: 22 })}</div>
-      <div class="grow"><h2>${U.esc(per.numero)}</h2><small>${U.esc(per.especie_nombre)} · ${per.fecha ? U.fmtDate(per.fecha) : "—"}</small></div>
+      <div class="grow"><h2>${U.esc(per.numero)}</h2><small>${U.esc(per.titular_nombre)} · ${U.esc(per.especie_nombre)} · ${per.fecha ? U.fmtDate(per.fecha) : "—"}</small></div>
       <span class="badge ${b.cls}">${b.label}</span>
     </a>`;
   }).join("") : emptyState("Sin permisos todavía", "Tus permisos digitales aparecerán acá.", "ticket");
@@ -1245,7 +1223,7 @@ export async function viewHistorial(ctx) {
 
   U.$$("[data-tab]").forEach((b) => b.addEventListener("click", () => ctx.go(`/historial?tab=${b.dataset.tab}`)));
   U.$$("[data-anular]").forEach((b) => b.addEventListener("click", async () => {
-    const ok = await U.confirmDialog({ title: "Anular reserva", message: "Se cancelará la reserva y su permiso quedará anulado. ¿Confirmás?", okLabel: "Sí, anular", okVariant: "btn--primary" });
+    const ok = await U.confirmDialog({ title: "Anular reserva", message: "Se cancelará la reserva y sus permisos de pesca quedarán anulados. ¿Confirmás?", okLabel: "Sí, anular", okVariant: "btn--primary" });
     if (!ok) return;
     try { await D.anularReserva(b.dataset.anular); U.toast("Reserva anulada", "ok"); ctx.rerender(); }
     catch (err) { U.toast(err.message, "err"); }
@@ -1299,6 +1277,7 @@ export async function viewPerfil(ctx) {
           <input type="checkbox" id="pf-recordatorios" ${D.prefRecordatorios() ? "checked" : ""} style="width:22px;height:22px;accent-color:var(--blue-600)"/>
         </label>
         <div id="pf-push"></div>
+        <div id="pf-app"></div>
       </div>
 
       <h2 class="section-title mt-24">Cuenta</h2>
@@ -1320,7 +1299,7 @@ export async function viewPerfil(ctx) {
   }));
   wireChrome(ctx);
 
-  if (!isAdmin(p.rol)) panelAvisosTelefono(U.$("#pf-push"));
+  if (!isAdmin(p.rol)) { panelAvisosTelefono(U.$("#pf-push")); panelInstalarApp(U.$("#pf-app")); }
   U.$("#f-perfil").addEventListener("submit", async (e) => {
     e.preventDefault();
     const obligatorios = [["#pf-nombre", "nombre"], ["#pf-apellido", "apellido"], ["#pf-dni", "DNI"]];
@@ -1359,6 +1338,23 @@ const TEXTO_PUSH = {
   bloqueado: "Las notificaciones de este sitio están bloqueadas. Habilitalas en la configuración del navegador para recibir los avisos.",
   instalar: "En iPhone, primero agregá PescaCorral a la pantalla de inicio (Compartir › Agregar a inicio) y abrila desde ahí para activar los avisos.",
 };
+
+/* Perfil: instalar la aplicación en el teléfono (si todavía se usa desde el navegador). */
+function panelInstalarApp(box) {
+  if (!box || U.appInstalada()) return;
+  const pintar = () => {
+    box.innerHTML = `<div class="push-panel">
+      <span><b>Aplicación en el teléfono</b><small class="muted d-block">${U.puedeInstalar()
+        ? "Instalala para abrirla desde su ícono, sin la barra del navegador."
+        : U.esIOS() ? "En Safari, tocá Compartir y después Agregar a inicio; abrila siempre desde ese ícono."
+        : "Desde el menú del navegador (⋮), elegí Instalar aplicación para abrirla desde su ícono."}</small></span>
+      ${U.puedeInstalar() ? `<button type="button" class="btn btn--primary btn--sm" data-instalar>${U.icon("download", { size: 16 })} Instalar</button>` : ""}
+    </div>`;
+    U.$("[data-instalar]", box)?.addEventListener("click", async () => { if (await U.instalarApp()) box.innerHTML = ""; else pintar(); });
+  };
+  pintar();
+  window.addEventListener("pescacorral:instalable", pintar, { once: true });
+}
 
 async function panelAvisosTelefono(box) {
   if (!box) return;
@@ -1790,6 +1786,139 @@ export async function viewAvisos(ctx) {
  *  PERSONAL (sólo administrador del sistema): alta de cuentas del municipio y
  *  de la administración, cambio de contraseña y activación
  * ========================================================================== */
+/* ============================================================================
+ *  ESPECIES Y PRECIOS (municipio y administración · HU-006 y HU-015)
+ *  El permiso de pesca cuesta la suma de las especies que elige cada pasajero.
+ * ========================================================================== */
+export async function viewEspecies(ctx) {
+  const especies = await D.listEspecies();
+  U.mount(adminLayout({
+    active: "especies",
+    title: "Especies y precios",
+    subtitle: "Precio de cada especie en el permiso de pesca",
+    actions: `<button class="btn btn--cta btn--sm" data-nueva>${U.icon("plus", { size: 16 })} Nueva especie</button>`,
+    body: `<div class="panel">
+      <table class="table table--tarjetas">
+        <thead><tr><th>Especie</th><th>Precio en el permiso</th><th>Umbral de alerta</th><th>Estado</th><th><span class="sr-only">Acciones</span></th></tr></thead>
+        <tbody>${especies.map((e) => `<tr>
+          <td data-label="Especie"><b>${U.esc(e.nombre)}</b>${e.nombre_cientifico ? `<small class="muted d-block"><i>${U.esc(e.nombre_cientifico)}</i></small>` : ""}</td>
+          <td data-label="Precio en el permiso"><b>${U.fmtMoney(e.precio_permiso)}</b></td>
+          <td data-label="Umbral de alerta">${e.umbral_permisos} permisos por mes</td>
+          <td data-label="Estado"><span class="badge ${e.activa !== false ? "badge--ok" : "badge--muted"}">${e.activa !== false ? "Habilitada" : "No habilitada"}</span></td>
+          <td data-label=""><button class="btn btn--soft btn--sm" data-editar="${e.id}">${U.icon("edit", { size: 16 })} Editar</button></td>
+        </tr>`).join("")}</tbody>
+      </table>
+      <p class="panel__foot">Cada pasajero elige al reservar las especies de su permiso, que vale para la fecha de la salida y cuesta la suma de sus precios. Un cambio de precio rige para los permisos que se emitan desde ese momento: los ya emitidos conservan el precio pagado. Una especie no habilitada deja de ofrecerse al reservar; no se borra porque tiene permisos emitidos. El umbral es la cantidad de permisos por mes que dispara la alerta de presión pesquera.</p>
+    </div>`,
+  }, ctx));
+  wireAdmin(ctx);
+  const porId = Object.fromEntries(especies.map((e) => [e.id, e]));
+  U.$("[data-nueva]").addEventListener("click", () => especieModal(ctx, null));
+  U.$$("[data-editar]").forEach((b) => b.addEventListener("click", () => especieModal(ctx, porId[b.dataset.editar])));
+}
+
+function especieModal(ctx, e) {
+  const m = U.modal({
+    title: e ? `Editar ${e.nombre}` : "Nueva especie",
+    body: `
+      <div class="field"><label for="es-nombre">Nombre</label><input class="input" id="es-nombre" maxlength="60" value="${U.esc(e?.nombre || "")}"/></div>
+      <div class="field"><label for="es-cientifico">Nombre científico</label><input class="input" id="es-cientifico" maxlength="80" value="${U.esc(e?.nombre_cientifico || "")}"/></div>
+      <div class="flex gap-12">
+        <div class="field grow"><label for="es-precio">Precio en el permiso ($)</label><input class="input" id="es-precio" type="number" min="0" step="100" inputmode="numeric" value="${e ? Number(e.precio_permiso) : ""}"/></div>
+        <div class="field grow"><label for="es-umbral">Umbral de alerta (permisos por mes)</label><input class="input" id="es-umbral" type="number" min="0" step="1" inputmode="numeric" value="${e ? e.umbral_permisos : 300}"/></div>
+      </div>
+      <div class="field"><label for="es-desc">Descripción</label><textarea class="input" id="es-desc" rows="2" maxlength="300">${U.esc(e?.descripcion || "")}</textarea></div>
+      <label class="flex items-center gap-8" style="cursor:pointer"><input type="checkbox" id="es-activa" ${e?.activa === false ? "" : "checked"} style="width:20px;height:20px;accent-color:var(--granate-600)"/> Habilitada para los permisos</label>
+      <div class="field__error hide" id="es-err"></div>`,
+    actions: [
+      { label: "Cancelar", variant: "btn--soft" },
+      {
+        label: e ? "Guardar cambios" : "Agregar especie", variant: "btn--primary", close: false,
+        onClick: async () => {
+          const btn = U.$('[data-act="1"]', m.root); btn.disabled = true;
+          const precio = U.$("#es-precio").value;
+          try {
+            await D.guardarEspecie({
+              id: e?.id || null, nombre: U.$("#es-nombre").value, nombre_cientifico: U.$("#es-cientifico").value,
+              precio_permiso: precio === "" ? NaN : Number(precio), umbral_permisos: Number(U.$("#es-umbral").value || 0),
+              descripcion: U.$("#es-desc").value, activa: U.$("#es-activa").checked,
+            });
+            U.closeModal(); U.toast(e ? "Especie actualizada" : "Especie agregada", "ok"); ctx.rerender();
+          } catch (err) { showErr(U.$("#es-err"), err.message); btn.disabled = false; }
+          return false;
+        },
+      },
+    ],
+  });
+}
+
+/* Invitación a usar PescaCorral como app (pescadores y dueños): al ingresar se
+ * ofrece instalarla y activar los avisos en el teléfono, si falta alguna de las
+ * dos. Se muestra una vez por sesión; con "Ahora no" se pausa unos días. */
+const OFERTA_KEY = "pescacorral.ofertaApp";
+const PAUSA_OFERTA_MS = 3 * 24 * 3600 * 1000;
+export async function ofrecerAppYAvisos(ctx) {
+  const p = ctx.session?.profile;
+  if (!p || isAdmin(p.rol) || !D.perfilCompleto(p) || document.getElementById("app-modal")) return;
+  try {
+    if (sessionStorage.getItem(OFERTA_KEY) === p.id || Date.now() < Number(localStorage.getItem(OFERTA_KEY) || 0)) return;
+  } catch { return; }
+  const push = await D.estadoPush();
+  const instalar = !U.appInstalada();
+  const avisos = push === "inactivo" || push === "instalar";
+  if ((!instalar && !avisos) || document.getElementById("app-modal")) return;
+  try { sessionStorage.setItem(OFERTA_KEY, p.id); } catch { /* sin almacenamiento */ }
+
+  let acepto = false;
+  const comoInstalar = () => U.puedeInstalar()
+    ? `<button type="button" class="btn btn--primary btn--sm" data-instalar>${U.icon("download", { size: 16 })} Instalar</button>`
+    : U.esIOS() ? `<small class="oferta__pasos">En Safari, tocá <b>Compartir</b> y después <b>Agregar a inicio</b>. Abrila siempre desde ese ícono.</small>`
+    : `<small class="oferta__pasos">Desde el menú del navegador (⋮), elegí <b>Instalar aplicación</b> o <b>Agregar a la pantalla principal</b>.</small>`;
+  const m = U.modal({
+    title: "Usá PescaCorral como app",
+    dismissable: false,
+    body: `<div class="oferta">
+      ${instalar ? `<div class="oferta__item">
+        <span class="oferta__ic">${U.icon("download", { size: 20 })}</span>
+        <div class="grow"><b>Instalala en tu teléfono</b>
+          <small class="muted d-block">Se abre desde su ícono, sin la barra del navegador, y tus permisos quedan a mano aunque no haya señal.</small>
+          <div class="oferta__accion" id="of-instalar">${comoInstalar()}</div></div></div>` : ""}
+      ${avisos ? `<div class="oferta__item">
+        <span class="oferta__ic">${U.icon("bell", { size: 20 })}</span>
+        <div class="grow"><b>Activá los avisos en el teléfono</b>
+          <small class="muted d-block">Te llegan aunque la app esté cerrada: si tu salida se suspende o está por zarpar, los recordatorios y los avisos del municipio.</small>
+          <div class="oferta__accion" id="of-avisos">${push === "inactivo"
+            ? `<button type="button" class="btn btn--primary btn--sm" data-activar>${U.icon("bell", { size: 16 })} Activar avisos</button>`
+            : `<small class="oferta__pasos">En iPhone se activan después de instalar la app, desde Perfil.</small>`}</div></div></div>` : ""}
+    </div>`,
+    actions: [{
+      label: "Ahora no", variant: "btn--soft",
+      onClick: () => { if (!acepto) { try { localStorage.setItem(OFERTA_KEY, String(Date.now() + PAUSA_OFERTA_MS)); } catch { /* sin almacenamiento */ } } },
+    }],
+  });
+  const listo = (box, texto) => {
+    acepto = true;
+    box.innerHTML = `<small class="oferta__ok">${U.icon("check-circle", { size: 16 })} ${texto}</small>`;
+    const cerrar = U.$('[data-act="0"]', m.root);
+    if (cerrar) cerrar.textContent = "Listo";
+  };
+  const conectarInstalar = () => U.$("[data-instalar]", m.root)?.addEventListener("click", async () => {
+    if (await U.instalarApp()) listo(U.$("#of-instalar", m.root), "Instalada. Abrila desde su ícono.");
+  });
+  conectarInstalar();
+  // Si el navegador avisa después que se puede instalar, aparece el botón.
+  const alPoderInstalar = () => {
+    const box = U.$("#of-instalar", m.root);
+    if (box && !U.$("[data-instalar]", box) && !acepto) { box.innerHTML = comoInstalar(); conectarInstalar(); }
+  };
+  window.addEventListener("pescacorral:instalable", alPoderInstalar, { once: true });
+  U.$("[data-activar]", m.root)?.addEventListener("click", async (e) => {
+    e.currentTarget.disabled = true;
+    try { await D.activarPush(); listo(U.$("#of-avisos", m.root), "Avisos activados en este teléfono."); }
+    catch (err) { U.toast(err.message, "err"); e.currentTarget.disabled = false; }
+  });
+}
+
 export async function viewPersonal(ctx) {
   const yo = ctx.session.profile.id;
   const personal = (await D.listUsuarios()).filter((u) => D.esRolPersonal(u.rol))
@@ -2210,12 +2339,13 @@ export async function viewEmbarque(ctx) {
         </div>
         ${error ? `<div class="nota nota--error" style="margin:0 18px 16px">${U.icon("alert-triangle", { size: 18 })}<span>${U.esc(error)}</span></div>` : filas.length ? `
         <table class="table embarque__tabla">
-          <thead><tr><th>Lugar</th><th>Pasajero</th><th>DNI</th></tr></thead>
+          <thead><tr><th>Lugar</th><th>Pasajero</th><th>DNI</th><th>Permiso</th></tr></thead>
           <tbody>${filas.map((f) => `<tr>
             <td>${f.lugar}</td>
             <td>${f.pasajero ? `<b>${U.esc(f.pasajero)}</b>` : `<span class="muted">Acompañante sin registrar</span>`}
-              <small class="muted d-block">${f.titular ? "Titular" : "Acompañante"} · ${U.esc(f.numero)}</small></td>
-            <td>${U.esc(f.dni || "—")}</td>
+              <small class="muted d-block">${f.titular ? "Titular" : "Acompañante"} · <span class="nowrap">${U.esc(f.numero)}</span></small></td>
+            <td class="nowrap">${U.esc(f.dni || "—")}</td>
+            <td>${f.permiso ? `<span class="nowrap">${U.esc(f.permiso)}</span><small class="muted d-block">${f.permiso_digital ? "Digital" : "Propio"}</small>` : "—"}</td>
           </tr>`).join("")}</tbody>
         </table>
         <p class="embarque__firma">Firma del responsable: ______________________________</p>` : `<p class="muted center" style="padding:0 18px 18px">No hay reservas para esta salida.</p>`}
@@ -2225,14 +2355,16 @@ export async function viewEmbarque(ctx) {
         <button class="btn btn--primary btn--block" data-print>${U.icon("download", { size: 18 })} Imprimir o guardar en PDF</button>
         <button class="btn btn--soft btn--block" data-csv>${U.icon("file-text", { size: 18 })} Descargar CSV (Excel)</button>
       </div>` : ""}
-      <p class="muted center mt-12" style="font-size:.8rem">${U.icon("shield", { size: 14 })} Sólo ves el nombre y el DNI de los pasajeros de tus salidas. El correo, el teléfono, el pago y el permiso sólo los ven el pasajero y el Municipio.</p>`,
+      <p class="muted center mt-12" style="font-size:.8rem">${U.icon("shield", { size: 14 })} Sólo ves el nombre, el DNI y el número de permiso de los pasajeros de tus salidas. El correo, el teléfono y el pago sólo los ven el pasajero y el Municipio. Los permisos propios se registran como los declaró cada pasajero: verificalos al embarcar.</p>`,
   }));
   wireChrome(ctx);
   U.$("[data-print]")?.addEventListener("click", () => window.print());
   U.$("[data-csv]")?.addEventListener("click", () => {
     U.downloadText(`embarque-${(cat.nombre || "salida").replace(/\s+/g, "-").toLowerCase()}-${fecha}-${turno}.csv`, U.toCSV(
-      filas.map((f) => ({ lugar: f.lugar, pasajero: f.pasajero || "(sin registrar)", dni: f.dni || "", tipo: f.titular ? "Titular" : "Acompañante", reserva: f.numero })),
-      [{ key: "lugar", label: "Lugar" }, { key: "pasajero", label: "Pasajero" }, { key: "dni", label: "DNI" }, { key: "tipo", label: "Tipo" }, { key: "reserva", label: "Reserva" }]));
+      filas.map((f) => ({ lugar: f.lugar, pasajero: f.pasajero || "(sin registrar)", dni: f.dni || "", tipo: f.titular ? "Titular" : "Acompañante",
+        permiso: f.permiso || "", origen: f.permiso ? (f.permiso_digital ? "Digital" : "Propio") : "", reserva: f.numero })),
+      [{ key: "lugar", label: "Lugar" }, { key: "pasajero", label: "Pasajero" }, { key: "dni", label: "DNI" }, { key: "tipo", label: "Tipo" },
+       { key: "permiso", label: "Permiso" }, { key: "origen", label: "Origen del permiso" }, { key: "reserva", label: "Reserva" }]));
     U.toast("CSV descargado", "ok");
   });
 }

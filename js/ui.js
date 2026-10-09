@@ -105,6 +105,7 @@ const ICONS = {
   dots:        '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   megaphone:   '<path d="M3.5 10.5v3a1 1 0 0 0 1 1H7l7 4.5v-14L7 9.5H4.5a1 1 0 0 0-1 1Z"/><path d="M17.5 9a4 4 0 0 1 0 6M7.5 14.5l1.4 4.5h2.4l-1.1-3.6"/>',
   key:         '<circle cx="8" cy="15" r="4.5"/><path d="M11.2 11.8 20 3M16.5 6.5l2.5 2.5M14 9l2 2"/>',
+  fish:        '<path d="M2.5 12c2.6-4.6 8.4-6.5 13.2-3.2L20.5 6v12l-4.8-2.8C10.9 18.5 5.1 16.6 2.5 12Z"/><circle cx="8" cy="11" r=".9"/>',
   "wifi-off":  '<path d="M3 3l18 18M8.5 15.5a5 5 0 0 1 7 0M5 12a10 10 0 0 1 4.2-2.5M14.5 9.6A10 10 0 0 1 19 12M2 8.5a15 15 0 0 1 4.6-3M10.6 4.6A15 15 0 0 1 22 8.5"/><circle cx="12" cy="19" r=".8"/>',
 };
 
@@ -140,6 +141,31 @@ export function aviso() {
   return null;
 }
 export function borrarAviso() { try { sessionStorage.removeItem(AVISO_KEY); } catch {} }
+
+/* ----------------------- Instalar como aplicación ------------------------
+ * Chrome, Edge y Samsung Internet avisan que la app se puede instalar
+ * (beforeinstallprompt): el aviso se guarda para ofrecerlo desde la app. En
+ * iPhone no existe: se instala desde Safari con Compartir › Agregar a inicio. */
+let pedidoInstalacion = null;
+export function escucharInstalacion() {
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    pedidoInstalacion = e;
+    window.dispatchEvent(new Event("pescacorral:instalable"));
+  });
+  window.addEventListener("appinstalled", () => { pedidoInstalacion = null; });
+}
+export const appInstalada = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+export const esIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+export const puedeInstalar = () => Boolean(pedidoInstalacion);
+export async function instalarApp() {
+  if (!pedidoInstalacion) return false;
+  const pedido = pedidoInstalacion;
+  pedidoInstalacion = null;
+  pedido.prompt();
+  const { outcome } = await pedido.userChoice;
+  return outcome === "accepted";
+}
 
 /* -------------------------------- Toasts --------------------------------- */
 export function toast(message, type = "info", timeout = 3200) {
@@ -260,13 +286,6 @@ export function fmtMes(periodo, corto = false) {
   const [y, m] = String(periodo).split("-").map(Number);
   return corto ? MESES[m - 1] : `${MESES_LARGO[m - 1]} de ${y}`;
 }
-/** Importe abreviado para gráficos: $ 245 mil, $ 1,2 M. */
-export function fmtMoneyCorto(n) {
-  const v = Math.abs(Number(n || 0)), s = n < 0 ? "-" : "";
-  if (v >= 1e6) return `${s}$ ${(v / 1e6).toLocaleString("es-AR", { maximumFractionDigits: 1 })} M`;
-  if (v >= 1e3) return `${s}$ ${Math.round(v / 1e3)} mil`;
-  return `${s}$ ${Math.round(v)}`;
-}
 export function fmtDateTime(d) {
   const x = toDate(d);
   return `${fmtDate(x)} · ${String(x.getHours()).padStart(2, "0")}:${String(x.getMinutes()).padStart(2, "0")}`;
@@ -292,7 +311,6 @@ export function addDaysISO(iso, days) {
 }
 
 export const turnoLabel = (t) => (t === "tarde" ? "Tarde" : "Mañana");
-export const tipoPermisoLabel = (t) => ({ diario: "Diario", semanal: "Semanal", anual: "Anual" }[t] || t);
 export const metodoPagoLabel = (m) => ({ tarjeta: "Tarjeta", transferencia: "Transferencia", mercadopago: "Mercado Pago", efectivo: "Efectivo" }[m] || m);
 export const rolLabel = (r) => ({ pescador: "Pescador / Turista", dueno: "Dueño de catamarán", admin_municipal: "Administración municipal", admin_sistema: "Administrador del sistema" }[r] || r);
 

@@ -377,9 +377,8 @@ textarea.input { min-height: 110px; resize: vertical; line-height: 1.45; }
 .segmented button.is-on { background: #fff; color: var(--granate-700); box-shadow: var(--shadow-sm); }
 .segmented button.is-on small { color: var(--verde-700); }
 
-/* Opciones como tarjetas (permiso, tipo y medio de pago) */
+/* Opciones como tarjetas (medio de pago) */
 .opciones { display: grid; gap: 10px; }
-.opciones--2 { grid-template-columns: 1fr 1fr; }
 .opciones--3 { grid-template-columns: repeat(3, 1fr); }
 .opcion {
   display: flex; flex-direction: column; align-items: flex-start; gap: 3px; text-align: left;
@@ -404,7 +403,6 @@ textarea.input { min-height: 110px; resize: vertical; line-height: 1.45; }
 .nota > span { flex: 1; min-width: 180px; }
 .nota .btn { margin-left: auto; }
 .nota--agua { background: var(--agua-100); color: var(--agua-700); }
-.nota--ok { background: var(--verde-100); color: var(--verde-700); }
 .nota--error { background: var(--rojo-100); color: var(--rojo-700); }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
@@ -666,21 +664,38 @@ details.salida[open] summary::after { content: "Ocultar"; }
 .galeria img:only-child { flex-basis: 100%; max-width: none; }
 .credito-fotos { color: var(--muted); font-size: .7rem; text-align: right; margin: 4px 2px 0; }
 
-/* Reserva: pasajeros (acompañantes) */
-#r-pasajeros:not(:empty) { margin-top: 16px; padding: 14px; border-radius: var(--r); background: #fff; border: 1px solid var(--border); box-shadow: var(--shadow-sm); }
-.pasajeros__titulo { font-size: 1rem; font-weight: 800; margin-bottom: 4px; }
-#r-pasajeros-error:empty { display: none; }
-.pasajero { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--surface-2); }
-.pasajero:first-of-type { border-top: none; }
+/* Reserva: pasajeros con su permiso de pesca (una tarjeta por lugar) */
+.pasajero-card { margin-bottom: 10px; padding: 12px 14px 14px; border-radius: var(--r); background: #fff; border: 1px solid var(--border); box-shadow: var(--shadow-sm); }
+.pasajero-card__head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.pasajero-card__monto { flex: none; font-weight: 800; color: var(--granate-700); font-size: .92rem; }
+.pasajero-card__datos { display: flex; gap: 8px; margin-bottom: 10px; }
+.pasajero-card__datos .input { min-width: 0; padding: 10px 12px; }
+.pasajero-card [data-panel] { margin-top: 10px; }
 .pasajero__lugar { flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: var(--granate-600); color: #fff; font-weight: 800; font-size: .85rem; }
-.pasajero .input { min-width: 0; padding: 10px 12px; }
 .pasajero__dni { flex: 0 0 34%; }
-.pasajeros-lista > div { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; }
-.pasajeros-lista b { flex: none; min-width: 24px; text-align: center; border-radius: 7px; background: var(--granate-600); color: #fff; font-size: .78rem; }
-.pasajeros-lista span { font-weight: 700; }
-.pasajeros-lista small { color: var(--muted); margin-left: auto; white-space: nowrap; }
+.segmented--permiso button { min-height: 40px; justify-content: center; font-weight: 800; font-size: .88rem; }
+.chip--especie small { font-weight: 700; opacity: .8; }
+#r-pasajeros-error:empty { display: none; }
+.nowrap { white-space: nowrap; }
+/* Comprobante: pasajeros y permisos */
+.pasajeros-lista > div { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; border-top: 1px solid var(--surface-2); }
+.pasajeros-lista > div:first-child { border-top: none; }
+.pasajeros-lista b { flex: none; min-width: 24px; margin-top: 2px; text-align: center; border-radius: 7px; background: var(--granate-600); color: #fff; font-size: .78rem; }
+.pasajeros-lista > div > span { flex: 1; font-weight: 700; }
+.pasajeros-lista__permiso { flex: none; max-width: 45%; text-align: right; font-weight: 700; color: var(--text-2); }
+.pasajeros-lista__permiso span { font-weight: 600; color: var(--muted); }
+.permiso-fila { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--surface-2); color: var(--text); }
+.permiso-fila:first-child { border-top: none; padding-top: 0; }
+.permiso-fila > svg { flex: none; color: var(--granate-600); }
+/* Invitación a instalar la app y activar los avisos */
+.oferta__item { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid var(--surface-2); }
+.oferta__item:first-child { border-top: none; padding-top: 0; }
+.oferta__ic { flex: none; width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; background: var(--granate-50); color: var(--granate-600); }
+.oferta__accion { margin-top: 10px; }
+.oferta__pasos { display: block; padding: 9px 11px; border-radius: 10px; background: var(--surface-2); color: var(--text-2); font-weight: 600; line-height: 1.4; }
+.oferta__ok { display: inline-flex; align-items: center; gap: 6px; color: var(--verde-700); font-weight: 700; }
 
-/* Perfil: avisos al teléfono */
+/* Perfil: avisos al teléfono e instalación */
 .push-panel { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--surface-2); }
 .push-panel > span { flex: 1; }
 .push-panel .btn { flex: none; }
@@ -698,6 +713,7 @@ details.salida[open] summary::after { content: "Ocultar"; }
 .embarque__tabla { font-size: .88rem; }
 .embarque__tabla th, .embarque__tabla td { padding: 9px 12px; }
 .embarque__tabla td:first-child { font-weight: 800; white-space: nowrap; }
+@media (max-width: 480px) { .embarque__tabla th, .embarque__tabla td { padding: 8px 6px; } }
 .embarque__firma { padding: 26px 18px 18px; color: var(--muted); font-size: .85rem; }
 .chip.is-on { background: var(--granate-600); border-color: var(--granate-700); color: #fff; }
 .d-block { display: block; }

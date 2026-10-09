@@ -42,6 +42,7 @@ drop table if exists public.tarifa_permiso cascade;
 drop table if exists public.notificacion   cascade;
 drop table if exists public.reporte        cascade;
 drop table if exists public.pago           cascade;
+drop table if exists public.permiso_especie cascade;
 drop table if exists public.permiso        cascade;
 drop table if exists public.reserva_lugar  cascade;
 drop table if exists public.reserva        cascade;
@@ -56,6 +57,8 @@ drop sequence if exists public.seq_numero_reserva cascade;
 -- Funciones de versiones anteriores (otra firma u objetos que ya no se usan).
 drop function if exists public.crear_reserva_completa(uuid, date, text, uuid[], text, text, uuid);
 drop function if exists public.crear_reserva_completa(uuid, date, text, uuid[], text, text, uuid, text, text);
+drop function if exists public.crear_reserva_completa(uuid, date, text, uuid[], text, text, uuid, text, text, jsonb);
+drop function if exists public.validar_permiso(text, date);
 drop function if exists public.lista_embarque(uuid, date, text);
 drop function if exists public.registrar_intento_acceso(text, boolean);
 drop function if exists public.acceso_bloqueado(text);
@@ -94,12 +97,18 @@ comment on table  public.usuario is 'Perfil de usuario; extiende auth.users. El 
 comment on column public.usuario.rol is 'pescador | dueno | admin_municipal | admin_sistema';
 
 -- ---------------------------------------------------------------------------
--- ESPECIE  (fauna habilitada · soporte a HU-015 Monitoreo de fauna)
+-- ESPECIE  (fauna habilitada · HU-006 permiso por especie y HU-015 monitoreo)
+--   precio_permiso: lo que cuesta incluir la especie en un permiso (el permiso
+--   suma las especies elegidas). Las carga y modifica la administración; una
+--   especie que ya no se habilita se desactiva (no se borra: tiene permisos).
 -- ---------------------------------------------------------------------------
 create table public.especie (
     id               uuid primary key default gen_random_uuid(),
-    nombre           text        not null unique,
+    nombre           text        not null unique
+                        check (char_length(trim(nombre)) between 2 and 60),
     nombre_cientifico text,
+    precio_permiso   numeric(12,2) not null default 0 check (precio_permiso >= 0),
+    activa           boolean     not null default true,
     umbral_permisos  integer     not null default 500
                         check (umbral_permisos >= 0),
     descripcion      text,
@@ -145,8 +154,8 @@ create table public.lugar (
 -- ---------------------------------------------------------------------------
 -- RESERVA  (HU-005)
 --   numero: número legible de la reserva (RES-001001).
---   id_permiso: permiso que ampara la salida, emitido con la reserva o uno que
---   el pescador ya tenía ("Ya tengo permiso"). monto_total incluye monto_permiso.
+--   monto_permiso: lo cobrado por los permisos emitidos con la reserva (uno por
+--   pasajero que lo compra); monto_total lo incluye.
 -- ---------------------------------------------------------------------------
 create sequence public.seq_numero_reserva start 1001 increment 1;
 
@@ -164,7 +173,6 @@ create table public.reserva (
     cantidad_lugares integer not null default 0 check (cantidad_lugares >= 0),
     monto_total     numeric(12,2) not null default 0 check (monto_total >= 0),
     monto_permiso   numeric(12,2) not null default 0 check (monto_permiso >= 0),
-    id_permiso      uuid,                          -- FK a permiso (se agrega debajo)
     created_at      timestamptz not null default now(),
     updated_at      timestamptz not null default now()
 );
@@ -179,6 +187,9 @@ create index idx_reserva_fecha     on public.reserva (fecha);
 --   del mismo asiento en la misma salida mediante un índice único parcial.
 --   pasajero_nombre y pasajero_dni: acompañante que ocupa el lugar (nulos en el
 --   lugar del titular de la reserva); con ellos se arma la lista de embarque.
+--   Permiso de quien ocupa el lugar: id_permiso, el permiso digital emitido con
+--   la reserva, o permiso_propio, el número del que ya tenía ("Ya tengo
+--   permiso"), registrado tal como se ingresó y sin validarlo.
 -- ---------------------------------------------------------------------------
 create table public.reserva_lugar (
     id          uuid primary key default gen_random_uuid(),
@@ -191,11 +202,15 @@ create table public.reserva_lugar (
                     check (estado in ('confirmada','cancelada')),
     pasajero_nombre text check (char_length(pasajero_nombre) between 3 and 80),
     pasajero_dni    text check (pasajero_dni ~ '^[0-9]{1,2}[.][0-9]{3}[.][0-9]{3}$'),
+    id_permiso      uuid,                          -- FK a permiso (se agrega debajo)
+    permiso_propio  text check (char_length(permiso_propio) between 3 and 40),
     created_at  timestamptz not null default now(),
-    constraint reserva_lugar_pasajero_check check ((pasajero_nombre is null) = (pasajero_dni is null))
+    constraint reserva_lugar_pasajero_check check ((pasajero_nombre is null) = (pasajero_dni is null)),
+    constraint reserva_lugar_permiso_check check (id_permiso is null or permiso_propio is null)
 );
 create index idx_reserva_lugar_reserva on public.reserva_lugar (id_reserva);
 create index idx_reserva_lugar_lugar   on public.reserva_lugar (id_lugar);
+create index idx_reserva_lugar_permiso on public.reserva_lugar (id_permiso);
 
 -- Un asiento sólo puede estar reservado una vez por fecha y turno (si no está cancelado).
 create unique index uq_lugar_fecha_turno_activa
@@ -204,16 +219,21 @@ create unique index uq_lugar_fecha_turno_activa
 
 -- ---------------------------------------------------------------------------
 -- PERMISO  (HU-006 · permiso digital con código de verificación)
+--   Uno por pasajero que lo compra al reservar: vale para la fecha de la salida
+--   (hasta las 23:59 de Salta) y para las especies elegidas (permiso_especie).
+--   id_usuario: quien lo compró (el titular de la reserva, que lo ve en su
+--   cuenta); titular_nombre y titular_dni: la persona que lo usa.
+--   monto: suma del precio de sus especies al emitirse.
 -- ---------------------------------------------------------------------------
 create table public.permiso (
     id                uuid primary key default gen_random_uuid(),
-    id_reserva        uuid not null unique references public.reserva (id) on delete cascade,
+    id_reserva        uuid not null references public.reserva (id) on delete cascade,
     id_usuario        uuid not null references public.usuario (id) on delete cascade,
-    id_especie        uuid references public.especie (id) on delete set null,
+    titular_nombre    text not null,
+    titular_dni       text not null,
     numero            text not null unique,           -- p.ej. PCC-000215
-    tipo              text not null default 'diario'
-                          check (tipo in ('diario','semanal','anual')),
     codigo_qr         text not null,                  -- contenido codificado en el QR
+    monto             numeric(12,2) not null default 0 check (monto >= 0),
     fecha_emision     timestamptz not null default now(),
     fecha_vencimiento timestamptz not null,
     estado            text not null default 'vigente'
@@ -221,23 +241,23 @@ create table public.permiso (
     created_at        timestamptz not null default now()
 );
 create index idx_permiso_usuario on public.permiso (id_usuario);
-create index idx_permiso_especie on public.permiso (id_especie);
+create index idx_permiso_reserva on public.permiso (id_reserva);
 create index idx_permiso_estado  on public.permiso (estado);
 
-alter table public.reserva
-    add constraint reserva_id_permiso_fkey foreign key (id_permiso)
+alter table public.reserva_lugar
+    add constraint reserva_lugar_id_permiso_fkey foreign key (id_permiso)
     references public.permiso (id) on delete set null;
 
 -- ---------------------------------------------------------------------------
--- TARIFA_PERMISO  (precio de cada tipo de permiso de pesca)
+-- PERMISO_ESPECIE  (especies que habilita cada permiso, con su precio al emitirlo)
 -- ---------------------------------------------------------------------------
-create table public.tarifa_permiso (
-    tipo        text primary key check (tipo in ('diario','semanal','anual')),
+create table public.permiso_especie (
+    id_permiso  uuid not null references public.permiso (id) on delete cascade,
+    id_especie  uuid not null references public.especie (id) on delete restrict,
     precio      numeric(12,2) not null check (precio >= 0),
-    updated_at  timestamptz not null default now()
+    primary key (id_permiso, id_especie)
 );
-insert into public.tarifa_permiso (tipo, precio) values
-    ('diario', 5000), ('semanal', 15000), ('anual', 45000);
+create index idx_permiso_especie_especie on public.permiso_especie (id_especie);
 
 -- ---------------------------------------------------------------------------
 -- PAGO  (HU-007)
@@ -644,82 +664,34 @@ create trigger trg_usuario_cerrar_sesiones
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
--- validar_permiso: verifica un permiso que el pescador ya tiene. Sirve para
--- una salida si es del mismo titular, no está anulado y la fecha de la salida
--- cae dentro de su vigencia.
--- ----------------------------------------------------------------------------
-create or replace function public.validar_permiso(p_numero text, p_fecha date)
-returns jsonb
-language plpgsql
-stable
-security definer
-set search_path = public
-as $$
-declare
-    v_uid   uuid := public.exigir_cuenta_activa();
-    p       record;
-    v_desde date;
-    v_hasta date;
-begin
-    if coalesce(trim(p_numero), '') = '' then
-        raise exception 'Ingresá el número de tu permiso';
-    end if;
-
-    select pe.id, pe.numero, pe.tipo, pe.estado, pe.fecha_emision, pe.fecha_vencimiento,
-           r.fecha as fecha_reserva, e.nombre as especie
-      into p
-      from public.permiso pe
-      left join public.reserva r on r.id = pe.id_reserva
-      left join public.especie e on e.id = pe.id_especie
-     where upper(pe.numero) = upper(trim(p_numero))
-       and pe.id_usuario = v_uid;
-    if not found then
-        raise exception 'No encontramos un permiso con ese número a tu nombre';
-    end if;
-    if p.estado = 'anulado' then
-        raise exception 'El permiso % está anulado', p.numero;
-    end if;
-
-    v_desde := coalesce(p.fecha_reserva, (p.fecha_emision at time zone 'America/Argentina/Salta')::date);
-    v_hasta := (p.fecha_vencimiento at time zone 'America/Argentina/Salta')::date;
-    if p_fecha < v_desde or p_fecha > v_hasta then
-        raise exception 'El permiso % no cubre el %: vale del % al %', p.numero,
-            to_char(p_fecha, 'DD/MM/YYYY'), to_char(v_desde, 'DD/MM/YYYY'), to_char(v_hasta, 'DD/MM/YYYY');
-    end if;
-
-    return jsonb_build_object('id', p.id, 'numero', p.numero, 'tipo', p.tipo,
-                              'especie', p.especie, 'desde', v_desde, 'hasta', v_hasta);
-end;
-$$;
-
--- ----------------------------------------------------------------------------
 -- crear_reserva_completa
 --   Operación atómica que implementa el flujo del TFG (HU-005 + HU-006 + HU-007):
---     1. Valida el catamarán (activo), los asientos (de esa embarcación), la
---        fecha y el medio de pago, y verifica que los asientos estén libres en
---        esa fecha y turno.
---     2. Permiso: con p_numero_permiso ("Ya tengo permiso") valida ese permiso;
---        sin él ("Comprar permiso") suma la tarifa del tipo elegido.
---     3. Crea la reserva (número RES-), sus asientos y el pago aprobado.
---     4. Si se compró, genera el permiso digital (número, código y vencimiento).
---     5. Crea una notificación para el usuario.
---   Devuelve los números de reserva, permiso y comprobante.
+--     1. Valida el catamarán (activo), los asientos (de esa embarcación y en
+--        servicio), la fecha y el medio de pago, y que los asientos estén libres
+--        en esa fecha y turno.
+--     2. Pasajeros, uno por lugar: el primero es el titular (sus datos salen de
+--        su perfil); de los demás se piden nombre y DNI, sin DNI repetidos.
+--     3. Permiso de cada pasajero: "Ya tengo permiso" registra el número tal
+--        como se ingresó, sin validarlo; si no, se emite un permiso digital para
+--        las especies elegidas (habilitadas), al precio de cada una, válido para
+--        la fecha de la salida.
+--     4. Crea la reserva (número RES-), sus asientos, los permisos, el pago
+--        aprobado y una notificación para el usuario.
+--   Devuelve los números de reserva, de comprobante y de los permisos emitidos.
 --
---   p_lugares: arreglo de UUID de asientos (lugar.id); el primero es el del titular.
---   p_acompanantes: [{"nombre", "dni"}] de quien ocupa cada uno de los demás
---   lugares, en el mismo orden (uno menos que la cantidad de lugares).
+--   p_lugares: asientos (lugar.id); el primero es el del titular.
+--   p_pasajeros: uno por lugar, en el mismo orden:
+--     {"nombre", "dni", "permiso_propio": "N°"}  o  {"nombre", "dni", "especies": [id, ...]}
+--   (en el titular, nombre y DNI se toman del perfil).
 -- ----------------------------------------------------------------------------
 create or replace function public.crear_reserva_completa(
-    p_id_catamaran   uuid,
-    p_fecha          date,
-    p_turno          text,
-    p_lugares        uuid[],
-    p_metodo_pago    text default 'tarjeta',
-    p_tipo_permiso   text default 'diario',
-    p_id_especie     uuid default null,
-    p_numero_permiso text default null,
-    p_autorizacion   text default null,
-    p_acompanantes   jsonb default '[]'::jsonb
+    p_id_catamaran uuid,
+    p_fecha        date,
+    p_turno        text,
+    p_lugares      uuid[],
+    p_metodo_pago  text default 'tarjeta',
+    p_pasajeros    jsonb default '[]'::jsonb,
+    p_autorizacion text default null
 )
 returns jsonb
 language plpgsql
@@ -730,28 +702,31 @@ declare
     v_uid         uuid := public.exigir_cuenta_activa();
     v_turno       text := coalesce(p_turno, 'manana');
     v_metodo      text := coalesce(p_metodo_pago, 'tarjeta');
-    v_tipo        text := coalesce(p_tipo_permiso, 'diario');
-    v_nuevo       boolean := coalesce(trim(p_numero_permiso), '') = '';
     v_hoy         date := (now() at time zone 'America/Argentina/Salta')::date;
+    v_cant        integer := coalesce(array_length(p_lugares, 1), 0);
+    v_pas         jsonb := coalesce(p_pasajeros, '[]'::jsonb);
+    v_vence       timestamptz := (p_fecha + time '23:59') at time zone 'America/Argentina/Salta';
     v_precio      numeric(12,2);
     v_estado_cat  text;
-    v_cant        integer := coalesce(array_length(p_lugares, 1), 0);
-    v_tarifa      numeric(12,2) := 0;
+    v_titular     record;
+    v_item        jsonb;
+    v_quien       text;
+    v_nombre      text;
+    v_dni         text;
+    v_dnis        text[] := '{}';
+    v_propio      text;
+    v_especies    uuid[];
+    v_monto_p     numeric(12,2);
+    v_permisos    numeric(12,2) := 0;
     v_total       numeric(12,2);
     v_reserva     uuid;
     v_nro_reserva text;
     v_lugar       uuid;
     v_ocupado     integer;
-    v_valido      jsonb;
-    v_numero      text;
-    v_codigo      text;
-    v_vence       timestamptz;
     v_permiso     uuid;
+    v_numero      text;
+    v_numeros     text[] := '{}';
     v_comprobante text;
-    v_acomp       jsonb := coalesce(p_acompanantes, '[]'::jsonb);
-    v_nombre      text;
-    v_dni         text;
-    v_dnis        text[];
 begin
     if v_cant = 0 then
         raise exception 'Debe seleccionar al menos un lugar';
@@ -782,39 +757,59 @@ begin
         raise exception 'Uno de los lugares ya no está disponible en ese catamarán. Actualizá el plano';
     end if;
 
-    -- Acompañantes (lista de embarque): nombre y DNI de quien ocupa cada lugar
-    -- además del titular, sin DNI repetidos entre los pasajeros.
-    if jsonb_typeof(v_acomp) <> 'array' or jsonb_array_length(v_acomp) <> v_cant - 1 then
-        raise exception 'Completá el nombre y el DNI de cada acompañante (uno por cada lugar además del tuyo)';
+    -- Pasajeros y permisos: se valida todo antes de escribir.
+    if jsonb_typeof(v_pas) <> 'array' or jsonb_array_length(v_pas) <> v_cant then
+        raise exception 'Completá los datos y el permiso de cada pasajero (uno por lugar)';
     end if;
-    select array[regexp_replace(coalesce(dni, ''), '[^0-9]', '', 'g')] into v_dnis from public.usuario where id = v_uid;
-    for i in 0 .. v_cant - 2 loop
-        v_nombre := trim(coalesce(v_acomp -> i ->> 'nombre', ''));
-        v_dni    := regexp_replace(coalesce(v_acomp -> i ->> 'dni', ''), '[^0-9]', '', 'g');
-        if char_length(v_nombre) not between 3 and 80 then
-            raise exception 'Ingresá el nombre y apellido del acompañante %', i + 1;
+    select nombre, apellido, dni into v_titular from public.usuario where id = v_uid;
+    for i in 0 .. v_cant - 1 loop
+        v_item  := v_pas -> i;
+        v_quien := case when i = 0 then 'tu permiso' else 'el permiso del acompañante ' || i end;
+        if i = 0 then
+            v_dni := regexp_replace(coalesce(v_titular.dni, ''), '[^0-9]', '', 'g');
+        else
+            v_nombre := trim(coalesce(v_item ->> 'nombre', ''));
+            v_dni    := regexp_replace(coalesce(v_item ->> 'dni', ''), '[^0-9]', '', 'g');
+            if char_length(v_nombre) not between 3 and 80 then
+                raise exception 'Ingresá el nombre y apellido del acompañante %', i;
+            end if;
+            if char_length(v_dni) not between 7 and 8 then
+                raise exception 'El DNI del acompañante % debe tener 7 u 8 dígitos', i;
+            end if;
         end if;
-        if char_length(v_dni) not between 7 and 8 then
-            raise exception 'El DNI del acompañante % debe tener 7 u 8 dígitos', i + 1;
-        end if;
-        if v_dni = any (v_dnis) then
+        if v_dni <> '' and v_dni = any (v_dnis) then
             raise exception 'Hay un DNI repetido entre los pasajeros';
         end if;
         v_dnis := v_dnis || v_dni;
-    end loop;
 
-    -- Permiso: el que ya tiene el pescador (se valida) o uno nuevo (se cobra la tarifa).
-    if v_nuevo then
-        if v_tipo not in ('diario', 'semanal', 'anual') then
-            raise exception 'Tipo de permiso inválido';
+        v_propio := trim(coalesce(v_item ->> 'permiso_propio', ''));
+        if v_propio <> '' then
+            if char_length(v_propio) not between 3 and 40 then
+                raise exception 'El número de % debe tener entre 3 y 40 caracteres', v_quien;
+            end if;
+        else
+            if jsonb_typeof(v_item -> 'especies') is distinct from 'array'
+               or jsonb_array_length(v_item -> 'especies') = 0 then
+                raise exception 'Elegí al menos una especie para %, o ingresá el número del que ya tiene', v_quien;
+            end if;
+            begin
+                select array_agg(distinct x::uuid) into v_especies
+                from jsonb_array_elements_text(v_item -> 'especies') as x;
+            exception when invalid_text_representation then
+                raise exception 'Especie inválida en %', v_quien;
+            end;
+            if cardinality(v_especies) <> jsonb_array_length(v_item -> 'especies') then
+                raise exception 'Hay una especie repetida en %', v_quien;
+            end if;
+            if exists (select 1 from unnest(v_especies) as e(id)
+                       left join public.especie s on s.id = e.id
+                       where s.id is null or not s.activa) then
+                raise exception 'Una de las especies elegidas para % no está habilitada', v_quien;
+            end if;
+            select sum(precio_permiso) into v_monto_p from public.especie where id = any (v_especies);
+            v_permisos := v_permisos + v_monto_p;
         end if;
-        select precio into v_tarifa from public.tarifa_permiso where tipo = v_tipo;
-        v_tarifa := coalesce(v_tarifa, 0);
-    else
-        v_valido  := public.validar_permiso(p_numero_permiso, p_fecha);
-        v_permiso := (v_valido ->> 'id')::uuid;
-        v_numero  := v_valido ->> 'numero';
-    end if;
+    end loop;
 
     -- Disponibilidad de cada asiento en la fecha y el turno pedidos.
     foreach v_lugar in array p_lugares loop
@@ -829,70 +824,73 @@ begin
         end if;
     end loop;
 
-    v_total := v_precio * v_cant + v_tarifa;
+    v_total := v_precio * v_cant + v_permisos;
 
     insert into public.reserva (id_usuario, id_catamaran, fecha, turno, estado,
-                                cantidad_lugares, monto_total, monto_permiso, id_permiso)
-    values (v_uid, p_id_catamaran, p_fecha, v_turno, 'confirmada',
-            v_cant, v_total, v_tarifa, v_permiso)
+                                cantidad_lugares, monto_total, monto_permiso)
+    values (v_uid, p_id_catamaran, p_fecha, v_turno, 'confirmada', v_cant, v_total, v_permisos)
     returning id, numero into v_reserva, v_nro_reserva;
 
-    for i in 1 .. v_cant loop
-        v_nombre := null; v_dni := null;
-        if i > 1 then
-            v_nombre := trim(v_acomp -> (i - 2) ->> 'nombre');
-            v_dni    := regexp_replace(regexp_replace(v_acomp -> (i - 2) ->> 'dni', '[^0-9]', '', 'g'),
-                                       '^([0-9]{1,2})([0-9]{3})([0-9]{3})$', '\1.\2.\3');
+    -- Un lugar por pasajero, con su permiso digital (emitido ahora) o el número del propio.
+    for i in 0 .. v_cant - 1 loop
+        v_item := v_pas -> i;
+        if i = 0 then
+            v_nombre := trim(coalesce(v_titular.nombre, '') || ' ' || coalesce(v_titular.apellido, ''));
+            v_dni    := v_titular.dni;
+        else
+            v_nombre := trim(v_item ->> 'nombre');
+            v_dni    := v_item ->> 'dni';
         end if;
-        insert into public.reserva_lugar (id_reserva, id_lugar, fecha, turno, estado, pasajero_nombre, pasajero_dni)
-        values (v_reserva, p_lugares[i], p_fecha, v_turno, 'confirmada', v_nombre, v_dni);
+        v_dni := regexp_replace(regexp_replace(coalesce(v_dni, ''), '[^0-9]', '', 'g'),
+                                '^([0-9]{1,2})([0-9]{3})([0-9]{3})$', '\1.\2.\3');
+        v_propio  := nullif(trim(coalesce(v_item ->> 'permiso_propio', '')), '');
+        v_permiso := null;
+        if v_propio is null then
+            select array_agg(distinct x::uuid) into v_especies
+            from jsonb_array_elements_text(v_item -> 'especies') as x;
+            select sum(precio_permiso) into v_monto_p from public.especie where id = any (v_especies);
+            v_numero := public.generar_numero_permiso();
+            insert into public.permiso (id_reserva, id_usuario, titular_nombre, titular_dni, numero,
+                                        codigo_qr, monto, fecha_vencimiento, estado)
+            values (v_reserva, v_uid, v_nombre, v_dni, v_numero,
+                    v_numero || '|' || regexp_replace(v_dni, '[^0-9]', '', 'g') || '|' || p_fecha::text,
+                    v_monto_p, v_vence, 'vigente')
+            returning id into v_permiso;
+            insert into public.permiso_especie (id_permiso, id_especie, precio)
+            select v_permiso, s.id, s.precio_permiso from public.especie s where s.id = any (v_especies);
+            v_numeros := v_numeros || v_numero;
+        end if;
+        insert into public.reserva_lugar (id_reserva, id_lugar, fecha, turno, estado,
+                                          pasajero_nombre, pasajero_dni, id_permiso, permiso_propio)
+        values (v_reserva, p_lugares[i + 1], p_fecha, v_turno, 'confirmada',
+                case when i > 0 then v_nombre end, case when i > 0 then v_dni end, v_permiso, v_propio);
     end loop;
 
     v_comprobante := 'CMP-' || upper(substr(replace(v_reserva::text, '-', ''), 1, 10));
     insert into public.pago (id_reserva, monto, metodo, estado, comprobante, autorizacion)
     values (v_reserva, v_total, v_metodo, 'aprobado', v_comprobante, p_autorizacion);
 
-    if v_nuevo then
-        v_numero := public.generar_numero_permiso();
-        -- Vencimiento en hora de Salta (el diario vale hasta las 23:59 del día de la salida).
-        v_vence  := case v_tipo
-                        when 'anual'   then (p_fecha + interval '1 year')
-                        when 'semanal' then (p_fecha + interval '7 day')
-                        else (p_fecha + time '23:59')
-                    end at time zone 'America/Argentina/Salta';
-        v_codigo := v_numero || '|' || v_uid::text || '|' || p_fecha::text;
-
-        insert into public.permiso (id_reserva, id_usuario, id_especie, numero, tipo,
-                                    codigo_qr, fecha_vencimiento, estado)
-        values (v_reserva, v_uid, p_id_especie, v_numero, v_tipo, v_codigo, v_vence, 'vigente')
-        returning id into v_permiso;
-
-        update public.reserva set id_permiso = v_permiso where id = v_reserva;
-    end if;
-
     insert into public.notificacion (id_usuario, id_reserva, tipo, titulo, mensaje)
     values (v_uid, v_reserva, 'reserva', 'Reserva confirmada',
-            'Tu reserva ' || v_nro_reserva || ' para el ' || to_char(p_fecha, 'DD/MM/YYYY') ||
-            ' fue confirmada. Permiso ' || v_numero ||
-            case when v_nuevo then ' emitido.' else ' asociado.' end);
+            'Tu reserva ' || v_nro_reserva || ' para el ' || to_char(p_fecha, 'DD/MM/YYYY') || ' fue confirmada.' ||
+            case when cardinality(v_numeros) > 0
+                 then ' Permisos emitidos: ' || array_to_string(v_numeros, ', ') || '.' else '' end);
 
     return jsonb_build_object(
         'reserva_id',     v_reserva,
         'numero_reserva', v_nro_reserva,
-        'permiso_id',     v_permiso,
-        'numero_permiso', v_numero,
-        'permiso_nuevo',  v_nuevo,
         'monto_total',    v_total,
-        'monto_permiso',  v_tarifa,
-        'comprobante',    v_comprobante
+        'monto_permiso',  v_permisos,
+        'comprobante',    v_comprobante,
+        'permisos',       to_jsonb(v_numeros)
     );
 end;
 $$;
 
 -- ----------------------------------------------------------------------------
--- anular_reserva: cancela la reserva, libera los asientos y anula el permiso
--- emitido con ella, salvo que ampare otra reserva activa. Sólo reservas
--- confirmadas; el pescador, las suyas y de hoy en adelante.
+-- anular_reserva: cancela la reserva, libera los asientos y anula los permisos
+-- emitidos con ella, salvo el que otra reserva activa declaró como propio.
+-- Sólo reservas confirmadas; el pescador, las suyas y de hoy en adelante.
 -- ----------------------------------------------------------------------------
 create or replace function public.anular_reserva(p_id_reserva uuid)
 returns void
@@ -923,8 +921,9 @@ begin
     update public.reserva_lugar set estado = 'cancelada' where id_reserva = p_id_reserva;
     update public.permiso pe    set estado = 'anulado'
     where pe.id_reserva = p_id_reserva
-      and not exists (select 1 from public.reserva x
-                      where x.id_permiso = pe.id and x.id <> p_id_reserva
+      and not exists (select 1 from public.reserva_lugar rl
+                      join public.reserva x on x.id = rl.id_reserva
+                      where upper(rl.permiso_propio) = upper(pe.numero) and x.id <> p_id_reserva
                         and x.estado in ('confirmada', 'completada'));
 end;
 $$;
@@ -1153,12 +1152,13 @@ $$;
 -- ----------------------------------------------------------------------------
 -- lista_embarque (HU-003): pasajeros de una salida, uno por lugar: el titular
 -- de cada reserva (nombre, apellido y DNI de su perfil) y los acompañantes que
--- cargó al reservar. Un lugar de una reserva anterior sin acompañante cargado
--- sale sin nombre. Sólo el dueño del catamarán y la administración; no entrega
--- correo, teléfono, pago ni permiso.
+-- cargó al reservar, con el número de su permiso (el digital o el que declaró).
+-- Un lugar de una reserva anterior sin acompañante cargado sale sin nombre.
+-- Sólo el dueño del catamarán y la administración; no entrega correo,
+-- teléfono ni pago.
 -- ----------------------------------------------------------------------------
 create or replace function public.lista_embarque(p_id_catamaran uuid, p_fecha date, p_turno text)
-returns table (numero text, lugar integer, pasajero text, dni text, titular boolean)
+returns table (numero text, lugar integer, pasajero text, dni text, titular boolean, permiso text, permiso_digital boolean)
 language plpgsql
 stable
 security definer
@@ -1180,11 +1180,13 @@ begin
     with asientos as (
         select r.numero as nro, l.numero as nlugar, u.nombre as t_nombre, u.apellido as t_apellido, u.dni as t_dni,
                rl.pasajero_nombre as p_nombre, rl.pasajero_dni as p_dni,
+               pe.numero as p_digital, rl.permiso_propio as p_propio,
                row_number() over (partition by r.id, rl.pasajero_nombre is null order by l.numero) as orden
         from public.reserva r
         join public.usuario u        on u.id = r.id_usuario
         join public.reserva_lugar rl on rl.id_reserva = r.id
         join public.lugar l          on l.id = rl.id_lugar
+        left join public.permiso pe  on pe.id = rl.id_permiso
         where r.id_catamaran = p_id_catamaran and r.fecha = p_fecha and r.turno = p_turno
           and r.estado in ('confirmada', 'completada')
     )
@@ -1193,7 +1195,9 @@ begin
                 when a.orden = 1 then trim(both ', ' from coalesce(a.t_apellido, '') || ', ' || coalesce(a.t_nombre, '')) end,
            case when a.p_nombre is not null then a.p_dni
                 when a.orden = 1 then a.t_dni end,
-           (a.p_nombre is null and a.orden = 1)
+           (a.p_nombre is null and a.orden = 1),
+           coalesce(a.p_digital, a.p_propio),
+           a.p_digital is not null
     from asientos a
     order by a.nlugar;
 end;
@@ -1273,7 +1277,8 @@ select e.id,
        e.umbral_permisos,
        count(p.id) filter (where p.estado <> 'anulado') as permisos_emitidos
 from public.especie e
-left join public.permiso p on p.id_especie = e.id
+left join public.permiso_especie pe on pe.id_especie = e.id
+left join public.permiso p on p.id = pe.id_permiso
 group by e.id, e.nombre, e.umbral_permisos
 order by permisos_emitidos desc;
 
@@ -1312,11 +1317,11 @@ alter table public.lugar          enable row level security;
 alter table public.reserva        enable row level security;
 alter table public.reserva_lugar  enable row level security;
 alter table public.permiso        enable row level security;
+alter table public.permiso_especie enable row level security;
 alter table public.pago           enable row level security;
 alter table public.reporte        enable row level security;
 alter table public.notificacion   enable row level security;
 alter table public.alerta_fauna   enable row level security;
-alter table public.tarifa_permiso enable row level security;
 alter table public.aviso          enable row level security;
 alter table public.gasto          enable row level security;
 alter table public.suscripcion_push enable row level security;
@@ -1329,7 +1334,7 @@ create policy usuario_update_propio on public.usuario
     for update using (id = auth.uid() or public.es_admin());
 -- El alta la realiza el trigger handle_new_user (SECURITY DEFINER).
 
--- ----- ESPECIE  (catálogo público de lectura; escritura sólo admin) ---------
+-- ----- ESPECIE  (catálogo de lectura; altas y precios sólo la administración) --
 create policy especie_select on public.especie
     for select using (true);
 create policy especie_admin on public.especie
@@ -1389,8 +1394,12 @@ create policy reserva_lugar_select on public.reserva_lugar
     );
 
 -- ----- PERMISO --------------------------------------------------------------
+-- Quien lo compró (también los de sus acompañantes) y la administración.
 create policy permiso_select on public.permiso
     for select using (id_usuario = auth.uid() or public.es_admin());
+-- Las especies de un permiso las ve quien ve el permiso (RLS de permiso).
+create policy permiso_especie_select on public.permiso_especie
+    for select using (exists (select 1 from public.permiso p where p.id = permiso_especie.id_permiso));
 
 -- ----- PAGO -----------------------------------------------------------------
 create policy pago_select on public.pago
@@ -1409,12 +1418,6 @@ create policy notificacion_select on public.notificacion
     for select using (id_usuario = auth.uid());
 create policy notificacion_update on public.notificacion
     for update using (id_usuario = auth.uid());
-
--- ----- TARIFA_PERMISO  (lectura pública; escritura sólo admin) -------------
-create policy tarifa_permiso_select on public.tarifa_permiso
-    for select using (true);
-create policy tarifa_permiso_admin on public.tarifa_permiso
-    for all using (public.es_admin()) with check (public.es_admin());
 
 -- ----- AVISO  (lectura admin; se publica sólo con publicar_aviso) ------------
 create policy aviso_select on public.aviso
@@ -1439,7 +1442,11 @@ grant select, insert, update, delete on all tables in schema public to authentic
 revoke all on public.personal_autorizado from authenticated;
 
 -- Escrituras sólo mediante las funciones de negocio.
-revoke insert, update, delete on public.reserva, public.reserva_lugar, public.permiso, public.pago, public.aviso from authenticated;
+revoke insert, update, delete on public.reserva, public.reserva_lugar, public.permiso, public.permiso_especie,
+                                public.pago, public.aviso from authenticated;
+-- Especies: la administración las da de alta y cambia sus precios (RLS); no se
+-- borran porque tienen permisos emitidos: se desactivan.
+revoke delete on public.especie from authenticated;
 -- Notificaciones: sólo marcarlas como leídas.
 revoke insert, update, delete on public.notificacion from authenticated;
 grant  update (leida) on public.notificacion to authenticated;
@@ -1607,8 +1614,9 @@ end;
 $$;
 
 -- ---- 8.3 Alertas de fauna automáticas (HU-015) ---------------------------
--- Al emitirse un permiso, si los permisos del mes de esa especie alcanzan el
--- 80 % del umbral, se registra la alerta y se avisa a la administración municipal.
+-- Por cada especie de un permiso emitido: si los permisos del mes de esa
+-- especie alcanzan el 80 % del umbral, se registra la alerta y se avisa a la
+-- administración municipal.
 create or replace function public.actualizar_alerta_fauna()
 returns trigger
 language plpgsql
@@ -1616,16 +1624,15 @@ security definer
 set search_path = public
 as $$
 declare
-    v_periodo text := to_char(new.fecha_emision at time zone 'America/Argentina/Salta', 'YYYY-MM');
+    v_periodo text;
     v_umbral  integer;
     v_especie text;
     v_cant    integer;
     v_alerta  uuid;
     adm       record;
 begin
-    if new.id_especie is null then
-        return new;
-    end if;
+    select to_char(fecha_emision at time zone 'America/Argentina/Salta', 'YYYY-MM') into v_periodo
+    from public.permiso where id = new.id_permiso;
     select umbral_permisos, nombre into v_umbral, v_especie
     from public.especie where id = new.id_especie;
     if coalesce(v_umbral, 0) = 0 then
@@ -1633,8 +1640,9 @@ begin
     end if;
 
     select count(*) into v_cant
-    from public.permiso p
-    where p.id_especie = new.id_especie
+    from public.permiso_especie pe
+    join public.permiso p on p.id = pe.id_permiso
+    where pe.id_especie = new.id_especie
       and p.estado <> 'anulado'
       and to_char(p.fecha_emision at time zone 'America/Argentina/Salta', 'YYYY-MM') = v_periodo;
 
@@ -1661,9 +1669,8 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_permiso_alerta_fauna on public.permiso;
-create trigger trg_permiso_alerta_fauna
-    after insert on public.permiso
+create trigger trg_permiso_especie_alerta
+    after insert on public.permiso_especie
     for each row execute function public.actualizar_alerta_fauna();
 
 -- ---- 8.4 Avisos de la administración (HU-011) --------------------------------
@@ -1930,10 +1937,9 @@ end $$;
 -- ============================================================================
 revoke execute on all functions in schema public from public, anon, authenticated;
 grant execute on function
-    public.crear_reserva_completa(uuid, date, text, uuid[], text, text, uuid, text, text, jsonb),
+    public.crear_reserva_completa(uuid, date, text, uuid[], text, jsonb, text),
     public.registrar_push(text, text, text),
     public.borrar_push(text),
-    public.validar_permiso(text, date),
     public.anular_reserva(uuid),
     public.crear_catamaran(text, text, integer, numeric, text, text),
     public.cambiar_capacidad(uuid, integer),

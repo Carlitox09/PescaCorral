@@ -16,16 +16,20 @@ delete from public.catamaran;
 delete from public.especie;
 
 -- ----------------------------------------------------------------------------
--- Especies habilitadas (con umbral para alertas de presión pesquera).
+-- Especies habilitadas, con el precio de cada una en el permiso de pesca (el
+-- permiso suma las especies elegidas) y el umbral para las alertas de presión
+-- pesquera. Los precios los cambia el municipio desde la aplicación.
 -- ----------------------------------------------------------------------------
-insert into public.especie (id, nombre, nombre_cientifico, umbral_permisos, descripcion) values
-  ('11111111-1111-1111-1111-111111111101', 'Pejerrey', 'Odontesthes bonariensis', 400,
+insert into public.especie (id, nombre, nombre_cientifico, precio_permiso, umbral_permisos, descripcion) values
+  ('11111111-1111-1111-1111-111111111101', 'Pejerrey', 'Odontesthes bonariensis', 2000, 400,
      'Especie principal de pesca deportiva en el Dique Cabra Corral.'),
-  ('11111111-1111-1111-1111-111111111102', 'Dorado',   'Salminus brasiliensis',   150,
+  ('11111111-1111-1111-1111-111111111102', 'Dorado',   'Salminus brasiliensis',   2000, 150,
      'Especie de gran porte; pesca con devolución recomendada.'),
-  ('11111111-1111-1111-1111-111111111103', 'Bagre',    'Rhamdia quelen',          300,
+  ('11111111-1111-1111-1111-111111111105', 'Dentudo',  'Oligosarcus jenynsii',    1000, 300,
+     'Especie de pesca deportiva frecuente en el embalse.'),
+  ('11111111-1111-1111-1111-111111111103', 'Bagre',    'Rhamdia quelen',          1500, 300,
      'Captura frecuente en aguas del dique.'),
-  ('11111111-1111-1111-1111-111111111104', 'Carpa',    'Cyprinus carpio',         500,
+  ('11111111-1111-1111-1111-111111111104', 'Carpa',    'Cyprinus carpio',         1000, 500,
      'Especie de control poblacional.');
 
 -- ----------------------------------------------------------------------------
