@@ -893,8 +893,10 @@ export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo 
     const args = {
       p_id_catamaran: catamaranId, p_fecha: fecha, p_turno: turno,
       p_lugares: lugares, p_metodo_pago: metodo, p_tipo_permiso: tipoPermiso, p_id_especie: especieId,
-      p_numero_permiso: propio || null, p_autorizacion: autorizacion, p_acompanantes: acompanantes,
+      p_numero_permiso: propio || null, p_autorizacion: autorizacion,
     };
+    // Sin acompañantes no se envía: la función lo toma vacío por defecto.
+    if (acompanantes.length) args.p_acompanantes = acompanantes;
     const { data, error } = await sb.rpc("crear_reserva_completa", args);
     if (error) throw new Error(error.message);
     return data;
