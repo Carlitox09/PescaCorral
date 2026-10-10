@@ -81,9 +81,7 @@ PescaCorral/
     ├── schema.sql          # Esquema completo (tablas, funciones, vistas, RLS, pg_cron)
     ├── seed.sql            # Datos iniciales (especies, catamaranes y sus lugares)
     ├── verificar_base.sql  # Chequeo de sólo lectura: compara la base con schema.sql y revisa los datos
-    ├── pruebas_seguridad.sql     # Pruebas de acceso con cada perfil (no deja datos)
-    └── migrations/
-        └── 014_permisos_especies.sql # Para una base existente: permiso por especie y por pasajero, especies con precio
+    └── pruebas_seguridad.sql     # Pruebas de acceso con cada perfil (no deja datos)
 ```
 
 ---
@@ -106,7 +104,7 @@ Abrir `http://localhost:8080`.
 2. **SQL Editor → New query**: pegar y ejecutar `database/schema.sql` completo, y luego `database/seed.sql`. `schema.sql` crea la base desde cero y **borra los datos existentes**: no se usa sobre una base en producción.
 3. Para comprobar que la base coincide con el esquema y que los datos están al día, ejecutar `database/verificar_base.sql` (no modifica nada): devuelve una fila por cada diferencia, o "OK".
 4. Para probar la seguridad, ejecutar `database/pruebas_seguridad.sql`: crea cuentas y datos de prueba, intenta cada operación con la identidad de cada perfil (sin sesión, pescador, dueño, municipio, administrador y cuentas desactivadas), muestra el resultado de cada caso (OK / FALLA) y revierte todo.
-5. Si la base ya existía (sin borrar sus datos), aplicar las migraciones de `database/migrations/` en orden y después correr los pasos 3 y 4.
+5. Un cambio de esquema sobre una base en uso (sin borrar sus datos) se aplica con un script idempotente en `database/migrations/`, y después se corren los pasos 3 y 4. Los scripts ya aplicados se quitan del repositorio y quedan en su historial.
 6. (Opcional) **Database → Extensions**: habilitar `pg_cron` para que el reporte mensual y los recordatorios diarios se generen sin intervención. Si no está habilitado, la app los genera al ingresar a Reportes y a la pantalla principal.
 
 ### Avisos en el teléfono (Web Push)
@@ -116,7 +114,7 @@ Los avisos del municipio, los del dueño sobre una salida ("Estamos por zarpar",
 1. Generar un par de claves VAPID, por ejemplo con `npx web-push generate-vapid-keys`. La **pública** va en `VAPID_PUBLIC_KEY` de `config.js`; la **privada** nunca se publica ni se guarda en el repositorio.
 2. En Supabase, **Edge Functions → Secrets**: cargar `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` y `VAPID_CONTACTO` (una dirección `mailto:` o `https:` de contacto para el servicio de push).
 3. **Edge Functions → Deploy a new function**: nombre `enviar-push`, pegar el contenido de `supabase/functions/enviar-push/index.ts` y desplegar con **Verify JWT desactivado** (la llama la base de datos, sin sesión de usuario). Con la CLI: `supabase functions deploy enviar-push --no-verify-jwt`.
-4. La extensión `pg_net` la crean `schema.sql` y la migración 013. La dirección de la función está en `enviar_push()`: en otro proyecto de Supabase hay que cambiarla.
+4. La extensión `pg_net` la crea `schema.sql`. La dirección de la función está en `enviar_push()`: en otro proyecto de Supabase hay que cambiarla.
 
 Cada usuario los activa en **Perfil → Avisos en el teléfono → Activar** (también se ofrece después de reservar) y acepta el permiso de notificaciones del navegador. En iPhone (iOS 16.4 o posterior) primero hay que agregar la aplicación a la pantalla de inicio y abrirla desde ahí. Al cerrar sesión el teléfono deja de recibirlos.
 
@@ -292,7 +290,7 @@ Definido en `database/schema.sql`:
 * **Google muestra "Error 400: redirect_uri_mismatch"**: el URI de redireccionamiento del cliente de OAuth debe ser exactamente `https://<proyecto>.supabase.co/auth/v1/callback`.
 * **Después de elegir la cuenta vuelve a otra dirección**: agregar la dirección de la app en *Authentication → URL Configuration → Redirect URLs*.
 * **Solo pueden ingresar algunas cuentas**: la pantalla de consentimiento de Google sigue *En prueba*; publicarla.
-* **Al reservar falla con "function … does not exist" o no aparecen las especies con su precio**: falta aplicar `database/migrations/014_permisos_especies.sql` en la base.
+* **Una pantalla falla con "function … does not exist" o "column … does not exist"**: la base no está al día con `schema.sql`; `verificar_base.sql` muestra qué falta.
 * **Los avisos no llegan al teléfono**: revisar en Perfil que diga "Activados en este teléfono"; que la función `enviar-push` esté desplegada con *Verify JWT* desactivado y con sus tres secretos; y su registro en *Edge Functions → Logs*. En iPhone la aplicación tiene que estar instalada en la pantalla de inicio; en Android, el ahorro de batería puede demorarlos.
 * **Las fotos no se ven**: revisar que exista el depósito `catamaranes` (público) en *Storage* y que `index.html` admita imágenes de `https://*.supabase.co` en la política de seguridad de contenido.
 * **Una cuenta registrada como dueño ve sólo las opciones del pescador**: quedó guardada como *Pescador/Turista*; la administración la cambia a *Dueño de catamarán* en Usuarios.
