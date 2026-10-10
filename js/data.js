@@ -871,6 +871,8 @@ export function validarPasajeros(pasajeros, { dniTitular = "", especies = [] } =
 /* Reserva completa (HU-005, HU-006 y HU-007). `lugares`: el primero es el del
  * titular; `pasajeros`, uno por lugar en el mismo orden ({ nombre, dni } de los
  * acompañantes y { propio } o { especies } de cada permiso). */
+const LUGAR_YA_RESERVADO = "Uno de los lugares que elegiste ya fue reservado por otra persona y ya no está disponible. Elegí otro lugar.";
+
 export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo = "tarjeta", pasajeros = [], autorizacion = null }) {
   await ready();
   if (MODE === "supabase") {
@@ -882,7 +884,8 @@ export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo 
         ...(String(x.propio || "").trim() ? { permiso_propio: String(x.propio).trim() } : { especies: x.especies || [] }),
       })),
     });
-    if (error) throw new Error(error.message);
+    // Dos reservas simultáneas del mismo lugar: el índice único rechaza la segunda (Tabla 27).
+    if (error) throw new Error(error.code === "23505" || /uq_lugar_fecha_turno_activa/.test(error.message || "") ? LUGAR_YA_RESERVADO : error.message);
     return data;
   }
   // Demo: replica la lógica del RPC crear_reserva_completa.
@@ -903,7 +906,7 @@ export async function crearReserva({ catamaranId, fecha, turno, lugares, metodo 
   const pas = validarPasajeros(pasajeros, { dniTitular: u.dni, especies: DB.especies });
   for (const lid of lugares) {
     const ocupado = DB.reserva_lugar.some((rl) => rl.id_lugar === lid && rl.fecha === fecha && (rl.turno || "manana") === turno && rl.estado === "confirmada");
-    if (ocupado) throw new Error("Uno de los lugares ya fue reservado. Actualizá la grilla.");
+    if (ocupado) throw new Error(LUGAR_YA_RESERVADO);
   }
   const montoPermisos = pas.reduce((t, x) => t + (x.propio ? 0 : precioPermiso(x.especies, DB.especies)), 0);
   const monto = cat.precio * lugares.length + montoPermisos;
