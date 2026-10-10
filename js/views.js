@@ -1274,7 +1274,7 @@ export async function viewPerfil(ctx) {
       <div class="card card--flat">
         <label class="flex between items-center" style="cursor:pointer;gap:12px">
           <span><b>Recordatorios de salida</b><br><small class="muted">Aviso el día previo y el día de tu reserva.</small></span>
-          <input type="checkbox" id="pf-recordatorios" ${D.prefRecordatorios() ? "checked" : ""} style="width:22px;height:22px;accent-color:var(--blue-600)"/>
+          <input type="checkbox" id="pf-recordatorios" ${D.prefRecordatorios(p) ? "checked" : ""} style="width:22px;height:22px;accent-color:var(--granate-600)"/>
         </label>
         <div id="pf-push"></div>
         <div id="pf-app"></div>
@@ -1317,9 +1317,12 @@ export async function viewPerfil(ctx) {
       ctx.rerender();
     } catch (err) { U.toast(err.message, "err"); }
   });
-  U.$("#pf-recordatorios")?.addEventListener("change", (e) => {
-    D.setPrefRecordatorios(e.target.checked);
-    U.toast(e.target.checked ? "Recordatorios activados" : "Recordatorios desactivados", "ok");
+  U.$("#pf-recordatorios")?.addEventListener("change", async (e) => {
+    const on = e.target.checked;
+    try {
+      await D.setPrefRecordatorios(on);
+      U.toast(on ? "Recordatorios activados" : "Recordatorios desactivados", "ok");
+    } catch (err) { e.target.checked = !on; U.toast(err.message, "err"); }
   });
   U.$("[data-reset]")?.addEventListener("click", async () => {
     const ok = await U.confirmDialog({ title: "Reiniciar demo", message: "Se restauran los datos de ejemplo y se cierra la sesión. ¿Continuar?", okLabel: "Reiniciar" });

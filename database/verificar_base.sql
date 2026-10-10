@@ -122,6 +122,9 @@ hallazgos(tipo, objeto, detalle) as (
     union all select 'Tarea pg_cron sobrante', n, '' from real_cron where n not in (select n from esperado_cron)
     union all select 'Falta el depósito de fotos', 'catamaranes', 'público, hasta 2 MB, imágenes' where not exists (
         select 1 from storage.buckets where id = 'catamaranes' and public and file_size_limit <= 2097152)
+    union all select 'Falta columna', 'usuario.recordatorios', 'preferencia de recordatorios de salida (HU-011)' where not exists (
+        select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = 'usuario' and column_name = 'recordatorios')
     union all select 'Falta pg_net', 'net.http_post', 'avisos al teléfono: habilitar la extensión pg_net' where not exists (
         select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'net' and p.proname = 'http_post')
     union all select 'Falta política de fotos', n, 'storage.objects' from esperado_politica_fotos

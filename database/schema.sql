@@ -89,6 +89,7 @@ create table public.usuario (
                     check (rol in ('pescador','dueno','admin_municipal','admin_sistema')),
     activo      boolean     not null default true,
     perfil_completo boolean not null default false,   -- alta confirmada (HU-001)
+    recordatorios boolean   not null default true,    -- recibir recordatorios de salida (HU-011 · criterio 3)
     avatar_url  text,                                  -- foto de la cuenta de Google
     created_at  timestamptz not null default now(),
     updated_at  timestamptz not null default now()
@@ -595,9 +596,9 @@ begin
         if not public.es_admin() then
             raise exception 'No autorizado';
         end if;
-        if (new.nombre, new.apellido, new.telefono, new.dni, new.avatar_url, new.perfil_completo)
+        if (new.nombre, new.apellido, new.telefono, new.dni, new.avatar_url, new.perfil_completo, new.recordatorios)
            is distinct from
-           (old.nombre, old.apellido, old.telefono, old.dni, old.avatar_url, old.perfil_completo) then
+           (old.nombre, old.apellido, old.telefono, old.dni, old.avatar_url, old.perfil_completo, old.recordatorios) then
             raise exception 'La administración sólo puede cambiar el tipo de cuenta y el estado';
         end if;
         if old.rol in ('pescador', 'dueno') then
@@ -1594,7 +1595,9 @@ begin
         select res.id, res.id_usuario, res.fecha, res.turno, c.nombre as catamaran
         from public.reserva res
         join public.catamaran c on c.id = res.id_catamaran
+        join public.usuario u on u.id = res.id_usuario
         where res.estado = 'confirmada'
+          and u.recordatorios                          -- preferencia del usuario (HU-011 · criterio 3)
           and res.fecha between v_hoy and v_hoy + 1
           and (not p_solo_usuario or res.id_usuario = auth.uid())
           and not exists (select 1 from public.notificacion n

@@ -13,7 +13,6 @@ const HAS_SUPABASE = Boolean(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY);
 export const MODE = HAS_SUPABASE ? "supabase" : "demo";
 
 const DEMO_KEY = "pescacorral.demo.v1";
-const PREF_RECORDATORIOS = "pescacorral.pref.recordatorios";
 const ACCESO_KEY = "pescacorral.acceso";   // último acceso del personal (municipio | admin)
 const OFFLINE_KEY = "pescacorral.offline";  // sesión y datos para usar la app sin conexión
 const CUENTA_GOOGLE_KEY = "pescacorral.cuentaGoogle";   // última cuenta de Google usada en el dispositivo
@@ -710,6 +709,7 @@ function traducirDB(msg = "") {
   if (/tipo de cuenta|no está permitido/i.test(msg)) return msg;
   if (/duplicate key|unique/i.test(msg)) return "Ya existe un registro con esos datos.";
   if (/row-level security|permission denied/i.test(msg)) return "No tenés permisos para realizar esa operación.";
+  if (/schema cache|column .* does not exist/i.test(msg)) return "La base de datos todavía no tiene esta opción: falta aplicar su actualización.";
   return msg || "No se pudo guardar la información.";
 }
 
@@ -1214,12 +1214,11 @@ export async function marcarLeidas() {
 }
 
 /* Preferencia del usuario (HU-011 · criterio 3): recibir recordatorios de salida.
- * Se guarda en el dispositivo; por defecto activada. */
-export function prefRecordatorios() {
-  try { return localStorage.getItem(PREF_RECORDATORIOS) !== "0"; } catch { return true; }
-}
-export function setPrefRecordatorios(on) {
-  try { localStorage.setItem(PREF_RECORDATORIOS, on ? "1" : "0"); } catch {}
+ * Se guarda en el perfil (usuario.recordatorios, por defecto activada), así la
+ * respetan la app y la tarea diaria de la base (generar_recordatorios). */
+export const prefRecordatorios = (perfil) => perfil?.recordatorios !== false;
+export async function setPrefRecordatorios(on) {
+  return updateProfile({ recordatorios: Boolean(on) });
 }
 
 /* Recordatorios de salida (HU-011 · criterio 2): genera una notificación para
@@ -1229,7 +1228,6 @@ export function setPrefRecordatorios(on) {
  * diario para todos los usuarios. */
 export async function generarRecordatorios() {
   await ready();
-  if (!prefRecordatorios()) return 0;
   if (MODE === "supabase") {
     const { data, error } = await sb.rpc("generar_recordatorios", { p_solo_usuario: true });
     if (error) { console.warn("generar_recordatorios:", error.message); return 0; }
@@ -1239,11 +1237,12 @@ export async function generarRecordatorios() {
   const u = demoSessionUser();
   if (!u) return 0;
   const hoy = todayISO(), manana = dateISO(isoFromOffset(1));
+  const sinRecordatorios = !prefRecordatorios(u);
   // Igual que public.actualizar_estados: permisos vencidos y salidas ya realizadas.
   DB.permisos.forEach((x) => { if (x.estado === "vigente" && new Date(x.fecha_vencimiento).getTime() < Date.now()) x.estado = "vencido"; });
   DB.reservas.forEach((x) => { if (x.estado === "confirmada" && x.fecha < hoy) x.estado = "completada"; });
   let n = 0;
-  DB.reservas.filter((r) => r.id_usuario === u.id && r.estado === "confirmada" && (r.fecha === hoy || r.fecha === manana)).forEach((r) => {
+  DB.reservas.filter((r) => !sinRecordatorios && r.id_usuario === u.id && r.estado === "confirmada" && (r.fecha === hoy || r.fecha === manana)).forEach((r) => {
     if (DB.notificaciones.some((x) => x.tipo === "recordatorio" && x.id_reserva === r.id)) return;
     const cat = byId(DB.catamaranes, r.id_catamaran);
     DB.notificaciones.unshift({

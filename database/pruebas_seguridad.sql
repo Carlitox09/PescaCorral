@@ -14,8 +14,8 @@
 --
 --  Perfiles de prueba: sin sesión, pescadores A y B, dueño D (con su
 --  catamarán y sus gastos), municipio M, administrador del sistema S, pescador
---  desactivado X, municipio desactivado MX y el servicio de ingreso (altas de
---  cuentas). Especies de prueba: dos habilitadas (1.000 y 2.500) y una no.
+--  desactivado X, municipio desactivado MX, la tarea programada y el servicio de
+--  ingreso (altas de cuentas). B tiene desactivados los recordatorios de salida. Especies de prueba: dos habilitadas (1.000 y 2.500) y una no.
 -- ============================================================================
 
 create temp table if not exists _pruebas_seguridad (
@@ -136,6 +136,7 @@ begin
                        (s, 'admin_sistema', true, '90000005'), (x, 'pescador', false, '90000006'),
                        (mx, 'admin_municipal', false, '90000007')) v(id, rol, activo, dni)
          where u.id = v.id;
+        update public.usuario set recordatorios = false where id = b;   -- B desactivó los recordatorios
 
         insert into public.especie (id, nombre, precio_permiso, activa, umbral_permisos)
         values (esp1, 'Especie Prueba 1', 1000, true, 0), (esp2, 'Especie Prueba 2', 2500, true, 0),
@@ -268,6 +269,7 @@ begin
             ('Pescador A', a, 'Cambiar el texto de sus notificaciones', 'rechazo', format('update public.notificacion set mensaje = ''x'' where id_usuario = %L', a), 'cambio', null),
             ('Pescador A', a, 'Marcar sus notificaciones como leídas', 'permitido', format('update public.notificacion set leida = true where id_usuario = %L', a), 'cambio', null),
             ('Pescador A', a, 'Actualizar su teléfono', 'permitido', format('update public.usuario set telefono = ''3871111111'' where id = %L', a), 'cambio', null),
+            ('Pescador A', a, 'Desactivar sus recordatorios de salida', 'permitido', format('update public.usuario set recordatorios = false where id = %L', a), 'cambio', null),
             ('Pescador A', a, 'Cambiar su tipo de cuenta', 'rechazo', format('update public.usuario set rol = ''dueno'' where id = %L', a), 'cambio', null),
             ('Pescador A', a, 'Darse un rol administrativo', 'rechazo', format('update public.usuario set rol = ''admin_sistema'' where id = %L', a), 'cambio', null),
             ('Pescador A', a, 'Cambiar su correo', 'rechazo', format('update public.usuario set email = %L where id = %L', 'otro' || dom, a), 'cambio', null),
@@ -341,6 +343,7 @@ begin
             ('Municipio', m, 'Desactivar al administrador del sistema', 'rechazo', format('update public.usuario set activo = false where id = %L', s), 'cambio', null),
             ('Municipio', m, 'Cambiar el correo de un usuario', 'rechazo', format('update public.usuario set email = %L where id = %L', 'otro' || dom, b), 'cambio', null),
             ('Municipio', m, 'Cambiar el DNI de un usuario', 'rechazo', format('update public.usuario set dni = ''1'' where id = %L', b), 'cambio', null),
+            ('Municipio', m, 'Cambiar los recordatorios de un usuario', 'rechazo', format('update public.usuario set recordatorios = true where id = %L', b), 'cambio', null),
             ('Municipio', m, 'Desactivar una cuenta y cerrar sus sesiones' || case when con_sesion then '' else ' (sin sesión de prueba)' end,
                 'permitido', format('update public.usuario set activo = false where id = %L', b), 'cambio',
                 format('select count(*)::int from public.usuario u where u.id = %L and not u.activo and not exists (select 1 from auth.sessions x where x.user_id = u.id)', b)),
@@ -388,6 +391,10 @@ begin
             ('Municipio desactivado', mx, 'Enviar el reporte municipal', 'rechazo', 'select public.generar_reporte_municipal(''general'', ''manual'')', 'cambio', null),
             ('Municipio desactivado', mx, 'Asignar un catamarán', 'rechazo', format(asignar, cat_o, d), 'cambio', null),
             ('Municipio desactivado', mx, 'Pasar un pescador a dueño', 'rechazo', format('update public.usuario set rol = ''dueno'' where id = %L', a), 'cambio', null),
+
+            -- Tarea programada (pg_cron, sin usuario): respeta la preferencia de cada uno
+            ('Tarea programada', null, 'Recordatorios sólo a quien no los desactivó', 'permitido', 'select public.generar_recordatorios(false)', 'servicio',
+                format('select ((count(*) filter (where id_usuario = %L)) = 1 and (count(*) filter (where id_usuario = %L)) = 0)::int from public.notificacion where tipo = ''recordatorio''', a, b)),
 
             -- Servicio de ingreso: alta de una cuenta con contraseña
             ('Servicio de ingreso', null, 'Alta con contraseña sin autorización', 'rechazo',
