@@ -1497,6 +1497,9 @@ export const esRolPersonal = (rol) => rol === "admin_municipal" || rol === "admi
 
 export async function setRol(userId, rol) {
   await ready();
+  // HU-012 · criterio 2: un tipo de cuenta inexistente se rechaza con un aviso.
+  if (esRolPersonal(rol)) throw new Error("Los roles administrativos se asignan al dar de alta una cuenta del personal.");
+  if (rol !== "pescador" && rol !== "dueno") throw new Error("Ese tipo de cuenta no existe: elegí Pescador/Turista o Dueño de catamarán.");
   if (MODE === "supabase") {
     const { data, error } = await sb.from("usuario").update({ rol }).eq("id", userId).select("id");
     if (error) throw new Error(error.message);
@@ -1505,7 +1508,6 @@ export async function setRol(userId, rol) {
   }
   const u = byId(DB.usuarios, userId);
   if (u && esRolPersonal(u.rol)) throw new Error("El rol de una cuenta del personal no se modifica.");
-  if (u && esRolPersonal(rol)) throw new Error("Los roles administrativos se asignan al dar de alta una cuenta del personal.");
   if (u) u.rol = rol; persist();
   return true;
 }
