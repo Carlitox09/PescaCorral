@@ -18,7 +18,7 @@ esperado_tabla(n) as (values
     ('permiso'), ('permiso_especie'), ('personal_autorizado'), ('reporte'), ('reserva'), ('reserva_lugar'),
     ('suscripcion_push'), ('usuario')),
 esperado_vista(n) as (values
-    ('v_dashboard_resumen'), ('v_lugares_ocupados'), ('v_ocupacion_catamaran'),
+    ('v_dashboard_resumen'), ('v_lugares_ocupados'),
     ('v_permisos_por_especie'), ('v_reservas_por_dia')),
 esperado_funcion(n, args) as (values
     ('actualizar_alerta_fauna', 0), ('actualizar_estados', 0), ('anular_reserva', 1),

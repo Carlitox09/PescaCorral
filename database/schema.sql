@@ -1259,18 +1259,6 @@ where estado in ('confirmada','completada')
 group by fecha
 order by fecha;
 
--- Ocupación por catamarán (asientos vendidos vs capacidad total).
-create or replace view public.v_ocupacion_catamaran with (security_invoker = true) as
-select c.id,
-       c.nombre,
-       c.capacidad,
-       count(rl.id) filter (where rl.estado = 'confirmada') as lugares_ocupados
-from public.catamaran c
-left join public.reserva r  on r.id_catamaran = c.id
-left join public.reserva_lugar rl on rl.id_reserva = r.id
-group by c.id, c.nombre, c.capacidad
-order by c.nombre;
-
 -- Permisos emitidos por especie (HU-015).
 create or replace view public.v_permisos_por_especie with (security_invoker = true) as
 select e.id,
@@ -1514,10 +1502,39 @@ begin
                     else 'Reporte general de actividad pesquera'
                 end || ' · ' || v_periodo;
 
+    -- Los datos son los del período del reporte, no los acumulados: salidas e
+    -- ingresos por fecha de la salida; permisos por fecha de emisión (como las
+    -- alertas de fauna).
     select jsonb_build_object(
-        'resumen',               (select to_jsonb(d) from public.v_dashboard_resumen d),
-        'permisos_por_especie',  (select coalesce(jsonb_agg(to_jsonb(e)), '[]'::jsonb) from public.v_permisos_por_especie e),
-        'ocupacion_catamaranes', (select coalesce(jsonb_agg(to_jsonb(o)), '[]'::jsonb) from public.v_ocupacion_catamaran o),
+        'periodo', jsonb_build_object('desde', v_desde, 'hasta', v_hasta - 1),
+        'resumen', jsonb_build_object(
+            'reservas', (select count(*) from public.reserva
+                         where estado in ('confirmada','completada') and fecha >= v_desde and fecha < v_hasta),
+            'ingresos', (select coalesce(sum(monto_total), 0) from public.reserva
+                         where estado in ('confirmada','completada') and fecha >= v_desde and fecha < v_hasta),
+            'permisos', (select count(*) from public.permiso
+                         where estado <> 'anulado'
+                           and (fecha_emision at time zone 'America/Argentina/Salta')::date >= v_desde
+                           and (fecha_emision at time zone 'America/Argentina/Salta')::date < v_hasta)),
+        'permisos_por_especie', (select coalesce(jsonb_agg(jsonb_build_object('especie', e.nombre,
+                                          'umbral_permisos', e.umbral_permisos, 'permisos_emitidos', x.n)
+                                          order by x.n desc, e.nombre), '[]'::jsonb)
+                                  from public.especie e
+                                  cross join lateral (
+                                      select count(*) as n from public.permiso_especie pe
+                                      join public.permiso p on p.id = pe.id_permiso
+                                      where pe.id_especie = e.id and p.estado <> 'anulado'
+                                        and (p.fecha_emision at time zone 'America/Argentina/Salta')::date >= v_desde
+                                        and (p.fecha_emision at time zone 'America/Argentina/Salta')::date < v_hasta) x),
+        'ocupacion_catamaranes', (select coalesce(jsonb_agg(jsonb_build_object('catamaran', c.nombre,
+                                          'capacidad', c.capacidad, 'lugares_vendidos', x.n)
+                                          order by c.nombre), '[]'::jsonb)
+                                  from public.catamaran c
+                                  cross join lateral (
+                                      select count(*) as n from public.reserva_lugar rl
+                                      join public.lugar l on l.id = rl.id_lugar
+                                      where l.id_catamaran = c.id and rl.estado = 'confirmada'
+                                        and rl.fecha >= v_desde and rl.fecha < v_hasta) x),
         'reservas_por_dia',      (select coalesce(jsonb_agg(to_jsonb(r)), '[]'::jsonb) from public.v_reservas_por_dia r
                                    where r.fecha >= v_desde and r.fecha < v_hasta),
         'generado_en',           now()

@@ -696,7 +696,7 @@ export async function viewReserva(ctx) {
         <span class="pasajero__lugar" title="Lugar ${n}">${n}</span>
         <span class="grow">${i
           ? `<b>Acompañante ${i}</b><small class="muted d-block">Lugar ${n} · ${U.esc(D.ubicacionLugar(n, lugares.length))}</small>`
-          : `<b>${U.esc(titularNombre)}</b><small class="muted d-block">Vos, titular · DNI ${U.esc(p.dni || "—")}</small>`}</span>
+          : `<b>${U.esc(titularNombre)}</b><small class="muted d-block">Vos, titular · DNI ${U.esc(p.dni || "-")}</small>`}</span>
         <b class="pasajero-card__monto" data-monto="${i}"></b>
       </div>
       ${i ? `<div class="pasajero-card__datos">
@@ -963,11 +963,11 @@ function imagenComprobante(c) {
     ["Catamarán", c.catamaran],
     ["Salida", `${U.fmtDate(c.fecha)} · ${U.turnoLabel(c.turno)}`],
     ["Lugares", lugaresTexto(c.lugares)],
-    ["Titular", c.titular?.nombre || "—"],
-    ["Permisos digitales", c.permisos_emitidos ? `${c.permisos_emitidos} · ${U.fmtMoney(c.monto_permiso)}` : "—"],
-    ["Comprobante", c.pago?.comprobante || "—"],
-    ["Medio de pago", c.pago ? U.metodoPagoLabel(c.pago.metodo) : "—"],
-    ["Fecha de pago", c.pago ? U.fmtDateTime(c.pago.fecha_pago) : "—"],
+    ["Titular", c.titular?.nombre || "-"],
+    ["Permisos digitales", c.permisos_emitidos ? `${c.permisos_emitidos} · ${U.fmtMoney(c.monto_permiso)}` : "-"],
+    ["Comprobante", c.pago?.comprobante || "-"],
+    ["Medio de pago", c.pago ? U.metodoPagoLabel(c.pago.metodo) : "-"],
+    ["Fecha de pago", c.pago ? U.fmtDateTime(c.pago.fecha_pago) : "-"],
   ];
   return U.tarjetaImagen({
     banda: { texto: c.estado === "cancelada" ? "RESERVA CANCELADA" : "RESERVA CONFIRMADA", color: c.estado === "cancelada" ? "#B42318" : "#2E7D4F" },
@@ -1029,7 +1029,7 @@ export async function viewComprobante(ctx) {
           ${fila("Catamarán", U.esc(c.catamaran))}
           ${fila("Fecha de salida", U.fmtDate(c.fecha))}
           ${fila("Turno", U.turnoLabel(c.turno))}
-          ${fila("Titular", U.esc(c.titular?.nombre || "—"))}
+          ${fila("Titular", U.esc(c.titular?.nombre || "-"))}
           <div class="permit__row permit__row--col"><span>Lugares</span>${chipsLugares}</div>
           <div class="permit__row permit__row--col"><span>Pasajeros y permisos</span>
             <div class="pasajeros-lista">${c.pasajeros.map((x) => `<div>
@@ -1037,14 +1037,14 @@ export async function viewComprobante(ctx) {
               <span>${U.esc(x.nombre || "Sin registrar")}<small class="muted d-block">${x.titular ? "Titular" : "Acompañante"}${x.dni ? ` · DNI ${U.esc(x.dni)}` : ""}</small></span>
               <small class="pasajeros-lista__permiso">${x.permiso
                 ? `${U.esc(x.permiso.numero)}<span class="d-block">${U.esc(x.permiso.especie_nombre)}</span>`
-                : x.permiso_propio ? `Propio<span class="d-block">${U.esc(x.permiso_propio)}</span>` : "—"}</small>
+                : x.permiso_propio ? `Propio<span class="d-block">${U.esc(x.permiso_propio)}</span>` : "-"}</small>
             </div>`).join("")}</div></div>
         </div>
       </section>
 
       <section class="doc mt-16">
         <div class="doc__head">${U.icon("receipt", { size: 18 })}<span>Comprobante de pago</span>${c.pago ? `<span class="badge ${c.pago.estado === "aprobado" ? "badge--ok" : "badge--warn"}">${c.pago.estado === "aprobado" ? "Aprobado" : U.esc(c.pago.estado)}</span>` : ""}</div>
-        <div class="doc__numero"><small>N° de comprobante</small><b>${U.esc(c.pago?.comprobante || "—")}</b></div>
+        <div class="doc__numero"><small>N° de comprobante</small><b>${U.esc(c.pago?.comprobante || "-")}</b></div>
         <div class="permit__body">
           ${c.pago ? fila("Fecha y hora", U.fmtDateTime(c.pago.fecha_pago)) : ""}
           ${c.pago ? fila("Medio de pago", U.esc(U.metodoPagoLabel(c.pago.metodo))) : ""}
@@ -1059,7 +1059,7 @@ export async function viewComprobante(ctx) {
         <div class="doc__head">${U.icon("ticket", { size: 18 })}<span>Permisos de pesca emitidos</span></div>
         <div class="permit__body">
           ${emitidos.map((x) => { const b = U.estadoPermisoBadge(x.permiso.estado); return `<a class="permiso-fila" href="#/permiso/${x.permiso.id}">
-            <span class="grow"><b>${U.esc(x.permiso.numero)}</b><small class="muted d-block">${U.esc(x.nombre || "—")} · ${U.esc(x.permiso.especie_nombre)}</small></span>
+            <span class="grow"><b>${U.esc(x.permiso.numero)}</b><small class="muted d-block">${U.esc(x.nombre || "-")} · ${U.esc(x.permiso.especie_nombre)}</small></span>
             <span class="badge ${b.cls}">${b.label}</span>${U.icon("qr", { size: 20 })}</a>`; }).join("")}
           <p class="muted" style="font-size:.8rem;margin:10px 0 0">Válidos para la salida del ${U.fmtDate(c.fecha)}. Abrí cada permiso para ver su código QR y compartirlo con quien lo va a usar.</p>
         </div>
@@ -1084,7 +1084,7 @@ export async function viewComprobante(ctx) {
 /* ============================================================================
  *  PERMISO DIGITAL (uno por pasajero; vale para la fecha de la salida)
  * ========================================================================== */
-const especiesTexto = (permiso) => permiso.especies.map((e) => e.nombre).join(", ") || "—";
+const especiesTexto = (permiso) => permiso.especies.map((e) => e.nombre).join(", ") || "-";
 
 function textoPermiso(permiso) {
   return [
@@ -1106,7 +1106,7 @@ function imagenPermiso(permiso) {
     filas: [
       ["Titular", permiso.titular_nombre], ["DNI", permiso.titular_dni],
       ["Especies", especiesTexto(permiso)], ["Catamarán", permiso.catamaran_nombre],
-      ["Fecha de salida", permiso.fecha ? U.fmtDate(permiso.fecha) : "—"],
+      ["Fecha de salida", permiso.fecha ? U.fmtDate(permiso.fecha) : "-"],
       ["Vencimiento", U.fmtDate(permiso.fecha_vencimiento)],
     ],
     pie: "Presentá este permiso al personal de control.",
@@ -1134,10 +1134,10 @@ export async function viewPermiso(ctx) {
           ${permitRow("Titular", permiso.titular_nombre)}
           ${permitRow("DNI", permiso.titular_dni)}
           <div class="permit__row permit__row--col"><span>Especies</span>
-            <div class="chips">${permiso.especies.map((e) => `<span class="chip">${U.esc(e.nombre)}${e.cientifico ? ` <i class="muted">${U.esc(e.cientifico)}</i>` : ""}</span>`).join("") || "—"}</div></div>
+            <div class="chips">${permiso.especies.map((e) => `<span class="chip">${U.esc(e.nombre)}${e.cientifico ? ` <i class="muted">${U.esc(e.cientifico)}</i>` : ""}</span>`).join("") || "-"}</div></div>
           ${permitRow("Catamarán", permiso.catamaran_nombre)}
-          ${permitRow("Fecha de salida", permiso.fecha ? U.fmtDate(permiso.fecha) : "—")}
-          ${permitRow("Turno", permiso.turno ? U.turnoLabel(permiso.turno) : "—")}
+          ${permitRow("Fecha de salida", permiso.fecha ? U.fmtDate(permiso.fecha) : "-")}
+          ${permitRow("Turno", permiso.turno ? U.turnoLabel(permiso.turno) : "-")}
           ${permitRow("Emisión", U.fmtDate(permiso.fecha_emision))}
           ${permitRow("Vencimiento", U.fmtDate(permiso.fecha_vencimiento))}
           ${permiso.monto ? permitRow("Importe del permiso", U.fmtMoney(permiso.monto)) : ""}
@@ -1203,7 +1203,7 @@ export async function viewHistorial(ctx) {
     const b = U.estadoPermisoBadge(per.estado);
     return `<a class="permit-mini" href="#/permiso/${per.id}" style="margin-bottom:10px">
       <div class="permit-mini__badge ${cls}">${U.icon("ticket", { size: 22 })}</div>
-      <div class="grow"><h2>${U.esc(per.numero)}</h2><small>${U.esc(per.titular_nombre)} · ${U.esc(per.especie_nombre)} · ${per.fecha ? U.fmtDate(per.fecha) : "—"}</small></div>
+      <div class="grow"><h2>${U.esc(per.numero)}</h2><small>${U.esc(per.titular_nombre)} · ${U.esc(per.especie_nombre)} · ${per.fecha ? U.fmtDate(per.fecha) : "-"}</small></div>
       <span class="badge ${b.cls}">${b.label}</span>
     </a>`;
   }).join("") : emptyState("Sin permisos todavía", "Tus permisos digitales aparecerán acá.", "ticket");
@@ -1474,6 +1474,7 @@ export async function viewAdmin(ctx) {
         <div class="panel">
           <h2>Permisos por especie</h2>
           ${donutChart(especieData, { centerTop: String(resumen.permisos_total), centerSub: "permisos" })}
+          <p class="panel__foot">Un permiso puede incluir varias especies.</p>
         </div>
       </div>
       <div class="grid-2">
@@ -1494,7 +1495,7 @@ export async function viewAdmin(ctx) {
             <thead><tr><th>N°</th><th>Especie</th><th>Estado</th></tr></thead>
             <tbody>${ultimos.map((u) => {
               const b = U.estadoPermisoBadge(u.estado);
-              return `<tr><td><b>${U.esc(u.numero)}</b><br><small class="muted">${U.esc(u.titular)}</small></td>
+              return `<tr><td><b class="nowrap">${U.esc(u.numero)}</b><br><small class="muted">${U.esc(u.titular)}</small></td>
                 <td>${U.esc(u.especie)}</td><td><span class="badge ${b.cls}">${b.label}</span></td></tr>`;
             }).join("")}</tbody>
           </table>
@@ -1560,6 +1561,7 @@ export async function viewReportes(ctx) {
         <div class="panel">
           <h2>Distribución de permisos por especie</h2>
           ${donutChart(especieData, { centerTop: String(resumen.permisos_total), centerSub: "permisos" })}
+          <p class="panel__foot">Un permiso puede incluir varias especies.</p>
         </div>
       </div>
       <div class="panel">
@@ -1582,12 +1584,12 @@ export async function viewReportes(ctx) {
           <thead><tr><th>Fecha</th><th>Reporte</th><th>Destinatario</th><th>Origen</th></tr></thead>
           <tbody>${enviados.map((r) => `<tr>
             <td data-label="Fecha" style="white-space:nowrap">${U.fmtDateTime(r.created_at || r.fecha)}</td>
-            <td data-label="Reporte"><b>${U.esc(r.titulo)}</b><br><small class="muted">Permisos: ${r.datos?.resumen?.permisos_total ?? "—"} · Reservas: ${r.datos?.resumen?.reservas_total ?? "—"}</small></td>
+            <td data-label="Reporte"><b>${U.esc(r.titulo)}</b><br><small class="muted">Permisos: ${r.datos?.resumen?.permisos ?? r.datos?.resumen?.permisos_total ?? "-"} · Reservas: ${r.datos?.resumen?.reservas ?? r.datos?.resumen?.reservas_total ?? "-"}</small></td>
             <td data-label="Destinatario">${U.esc(r.destinatario)}</td>
             <td data-label="Origen"><span class="badge ${r.origen === "automatico" ? "badge--info" : "badge--ok"}">${r.origen === "automatico" ? "Automático" : "Manual"}</span></td>
           </tr>`).join("") || `<tr><td colspan="4" class="muted">Todavía no se enviaron reportes.</td></tr>`}</tbody>
         </table>
-        <p class="panel__foot">Cada envío queda registrado con fecha, destinatario y una instantánea de los indicadores. El cierre mensual se genera automáticamente.</p>
+        <p class="panel__foot">Cada envío queda registrado con fecha, destinatario y los indicadores de su período. El cierre mensual se genera automáticamente.</p>
       </div>
     `,
   }, ctx));
@@ -1625,8 +1627,8 @@ export async function viewUsuarios(ctx) {
     const buscar = [u.nombre, u.apellido, u.email, u.dni, u.telefono].filter(Boolean).join(" ").toLowerCase();
     return `<tr data-buscar="${U.esc(buscar)}" data-tipo="${personal ? "personal" : U.esc(u.rol)}" data-activa="${u.activo !== false}">
       <td data-label="Usuario"><b>${U.esc(u.nombre)} ${U.esc(u.apellido || "")}</b>${u.perfil_completo === false ? `<br><small class="muted">Alta sin completar</small>` : ""}</td>
-      <td data-label="Contacto"><small class="muted">${U.esc(u.email)}<br>${U.esc(u.telefono || "—")}</small></td>
-      <td data-label="DNI">${U.esc(u.dni || "—")}</td>
+      <td data-label="Contacto"><small class="muted">${U.esc(u.email)}<br>${U.esc(u.telefono || "-")}</small></td>
+      <td data-label="DNI">${U.esc(u.dni || "-")}</td>
       <td data-label="Tipo de cuenta"><span class="td-valor">${personal
         ? `<b>${U.esc(U.rolLabel(u.rol))}</b><small class="muted">Personal</small>`
         : `<select class="select select--sm" data-rol="${u.id}" data-nombre="${U.esc(u.nombre)}" data-actual="${U.esc(u.rol)}" aria-label="Tipo de cuenta de ${U.esc(u.nombre)}">
@@ -1755,7 +1757,7 @@ export async function viewAvisos(ctx) {
             <td style="white-space:nowrap">${U.fmtDateTime(a.created_at)}</td>
             <td><b>${U.esc(a.titulo)}</b><br><small class="muted">${U.esc(a.mensaje)}</small></td>
             <td>${destinoTxt(a)}<br><small class="muted">${a.destinatarios} ${a.destinatarios === 1 ? "persona" : "personas"}</small></td>
-            <td>${U.esc(`${a.autor?.nombre || ""} ${a.autor?.apellido || ""}`.trim() || "—")}</td>
+            <td>${U.esc(`${a.autor?.nombre || ""} ${a.autor?.apellido || ""}`.trim() || "-")}</td>
           </tr>`).join("") || `<tr><td colspan="4" class="muted">Todavía no se publicaron avisos.</td></tr>`}</tbody>
         </table>
         <p class="panel__foot">Cada aviso queda registrado con su fecha, quién lo publicó y cuántas personas lo recibieron.</p>
@@ -2347,8 +2349,8 @@ export async function viewEmbarque(ctx) {
             <td>${f.lugar}</td>
             <td>${f.pasajero ? `<b>${U.esc(f.pasajero)}</b>` : `<span class="muted">Acompañante sin registrar</span>`}
               <small class="muted d-block">${f.titular ? "Titular" : "Acompañante"} · <span class="nowrap">${U.esc(f.numero)}</span></small></td>
-            <td class="nowrap">${U.esc(f.dni || "—")}</td>
-            <td>${f.permiso ? `<span class="nowrap">${U.esc(f.permiso)}</span><small class="muted d-block">${f.permiso_digital ? "Digital" : "Propio"}</small>` : "—"}</td>
+            <td class="nowrap">${U.esc(f.dni || "-")}</td>
+            <td>${f.permiso ? `<span class="nowrap">${U.esc(f.permiso)}</span><small class="muted d-block">${f.permiso_digital ? "Digital" : "Propio"}</small>` : "-"}</td>
           </tr>`).join("")}</tbody>
         </table>
         <p class="embarque__firma">Firma del responsable: ______________________________</p>` : `<p class="muted center" style="padding:0 18px 18px">No hay reservas para esta salida.</p>`}

@@ -83,7 +83,8 @@ PescaCorral/
     ├── verificar_base.sql  # Chequeo de sólo lectura: compara la base con schema.sql y revisa los datos
     ├── pruebas_seguridad.sql     # Pruebas de acceso con cada perfil (no deja datos)
     └── migrations/
-        └── 015_recordatorios.sql # Para la base en uso: preferencia de recordatorios en el perfil
+        ├── 015_recordatorios.sql # Para la base en uso: preferencia de recordatorios en el perfil
+        └── 016_reportes_periodo.sql # Para la base en uso: reportes con los datos de su período
 ```
 
 ---
@@ -277,10 +278,10 @@ El plan gratuito de Supabase pausa el proyecto después de siete días sin uso. 
 Definido en `database/schema.sql`:
 
 * **usuario** (extiende `auth.users`; rol, perfil completo, foto de Google, preferencia de recordatorios), **especie** (con su precio en el permiso y si está habilitada), **catamaran** (con sus fotos en Supabase Storage), **lugar** (con su ubicación en el plano), **reserva** (número `RES-` e importe de los permisos), **reserva_lugar** (asiento por fecha y turno, con el nombre y el DNI del acompañante que lo ocupa y su permiso: el digital o el número del propio), **permiso** (uno por pasajero: a nombre de quien lo usa, con su importe; vale para la fecha de la salida), **permiso_especie** (especies de cada permiso, con su precio al emitirse), **pago** (con código de autorización), **reporte** (con destinatario, origen y estado de envío), **notificacion** (con `id_reserva` para recordatorios y la marca de envío al teléfono), **alerta_fauna**, **gasto** (gastos del dueño por catamarán o generales de la flota), **suscripcion_push** (teléfonos habilitados para recibir avisos).
-* Funciones: `crear_reserva_completa` (valida catamarán, asientos, fecha, turno, medio de pago, los pasajeros y el permiso de cada uno, y crea reserva + asientos + permisos + pago + notificación en una transacción), `ubicacion_lugar`, `actualizar_estados` (marca permisos vencidos y salidas realizadas; la llama `generar_recordatorios` a diario), `anular_reserva` (anula los permisos emitidos con la reserva, salvo el que otra reserva activa declaró como propio), `crear_catamaran` (alta con todos sus lugares), `cambiar_capacidad` (suma o quita lugares sin afectar reservas desde hoy), `asignar_propietario`, `avisar_pasajeros`, `lista_embarque`, `es_foto_propia` (fotos en Storage), `registrar_push` y `borrar_push` (teléfonos para los avisos), `generar_reporte_municipal` (el automático resume el mes que cerró), `generar_recordatorios` (omite a quien desactivó los recordatorios), `handle_new_user` (alta del perfil con los datos de Google) y `proteger_perfil` (protección de rol, correo y estado).
+* Funciones: `crear_reserva_completa` (valida catamarán, asientos, fecha, turno, medio de pago, los pasajeros y el permiso de cada uno, y crea reserva + asientos + permisos + pago + notificación en una transacción), `ubicacion_lugar`, `actualizar_estados` (marca permisos vencidos y salidas realizadas; la llama `generar_recordatorios` a diario), `anular_reserva` (anula los permisos emitidos con la reserva, salvo el que otra reserva activa declaró como propio), `crear_catamaran` (alta con todos sus lugares), `cambiar_capacidad` (suma o quita lugares sin afectar reservas desde hoy), `asignar_propietario`, `avisar_pasajeros`, `lista_embarque`, `es_foto_propia` (fotos en Storage), `registrar_push` y `borrar_push` (teléfonos para los avisos), `generar_reporte_municipal` (guarda los datos del período: el automático, el mes que cerró; el manual, el mes en curso), `generar_recordatorios` (omite a quien desactivó los recordatorios), `handle_new_user` (alta del perfil con los datos de Google) y `proteger_perfil` (protección de rol, correo y estado).
 * Disparador `trg_notificacion_push` (`enviar_push`): manda al teléfono los avisos, los avisos de una salida y los recordatorios, por medio de la Edge Function `enviar-push`.
 * Disparador `trg_permiso_especie_alerta` (`actualizar_alerta_fauna`): por cada especie de un permiso emitido, si los permisos del mes de esa especie alcanzan el 80 % del umbral, registra la alerta y avisa a la administración municipal.
-* Vistas: `v_dashboard_resumen`, `v_reservas_por_dia`, `v_ocupacion_catamaran`, `v_permisos_por_especie`, `v_lugares_ocupados`.
+* Vistas: `v_dashboard_resumen`, `v_reservas_por_dia`, `v_permisos_por_especie`, `v_lugares_ocupados`.
 
 ---
 

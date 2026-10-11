@@ -247,18 +247,18 @@ const todayISO = () => dateISO(new Date());
 
 function seedDemo() {
   DB = loadDB();
-  if (DB && DB.__v === 9) return;
+  if (DB && DB.__v === 10) return;
 
   const rnd = mulberry32(20260628);
   const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
 
   /* --- Especies (fauna) con el precio de cada una en el permiso --- */
   const especies = [
-    { id: uid(), nombre: "Pejerrey", nombre_cientifico: "Odontesthes bonariensis", precio_permiso: 2000, activa: true, umbral_permisos: 400, descripcion: "Especie emblemática del dique, principal objetivo de la pesca deportiva." },
-    { id: uid(), nombre: "Dorado", nombre_cientifico: "Salminus brasiliensis", precio_permiso: 2000, activa: true, umbral_permisos: 150, descripcion: "Pesca con devolución obligatoria en temporada de veda." },
-    { id: uid(), nombre: "Bagre", nombre_cientifico: "Rhamdia quelen", precio_permiso: 1500, activa: true, umbral_permisos: 300, descripcion: "Especie de fondo, abundante en zonas de menor corriente." },
-    { id: uid(), nombre: "Carpa", nombre_cientifico: "Cyprinus carpio", precio_permiso: 1000, activa: true, umbral_permisos: 500, descripcion: "Especie introducida, sin restricciones de captura." },
-    { id: uid(), nombre: "Dentudo", nombre_cientifico: "Oligosarcus jenynsii", precio_permiso: 1000, activa: true, umbral_permisos: 300, descripcion: "Especie de pesca deportiva frecuente en el embalse." },
+    { id: uid(), nombre: "Pejerrey", nombre_cientifico: "Odontesthes bonariensis", precio_permiso: 2000, activa: true, umbral_permisos: 30, descripcion: "Especie emblemática del dique, principal objetivo de la pesca deportiva." },
+    { id: uid(), nombre: "Dorado", nombre_cientifico: "Salminus brasiliensis", precio_permiso: 2000, activa: true, umbral_permisos: 20, descripcion: "Pesca con devolución obligatoria en temporada de veda." },
+    { id: uid(), nombre: "Bagre", nombre_cientifico: "Rhamdia quelen", precio_permiso: 1500, activa: true, umbral_permisos: 25, descripcion: "Especie de fondo, abundante en zonas de menor corriente." },
+    { id: uid(), nombre: "Carpa", nombre_cientifico: "Cyprinus carpio", precio_permiso: 1000, activa: true, umbral_permisos: 25, descripcion: "Especie introducida, sin restricciones de captura." },
+    { id: uid(), nombre: "Dentudo", nombre_cientifico: "Oligosarcus jenynsii", precio_permiso: 1000, activa: true, umbral_permisos: 20, descripcion: "Especie de pesca deportiva frecuente en el embalse." },
   ];
   const pejerrey = especies[0];
 
@@ -392,15 +392,27 @@ function seedDemo() {
   });
   notificaciones.push({ id: uid(), id_usuario: uPescador.id, tipo: "recordatorio", titulo: "Recordatorio de salida", mensaje: "Recordá presentar tu permiso digital al embarcar.", leida: false, created_at: isoFromOffset(-1, 9).toISOString() });
 
-  /* --- Alertas de fauna (HU-015) con números realistas para la demo --- */
-  const periodo = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })();
-  const alertas = [
-    { id: uid(), id_especie: pejerrey.id, periodo, permisos_emitidos: 372, umbral: 400, estado: "activa", created_at: isoFromOffset(-2).toISOString() },
-    { id: uid(), id_especie: especies[1].id, periodo, permisos_emitidos: 138, umbral: 150, estado: "activa", created_at: isoFromOffset(-3).toISOString() },
-    { id: uid(), id_especie: especies[2].id, periodo, permisos_emitidos: 210, umbral: 300, estado: "activa", created_at: isoFromOffset(-5).toISOString() },
-  ];
-
-  DB = { __v: 9, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, gastos, reportes: [], seq, seqReserva, session: null };
+  /* --- Alertas de fauna (HU-015): las que el disparador habría registrado con los
+   *     permisos sembrados, al llegar al 80 % del umbral mensual de cada especie
+   *     (los umbrales de la demo están a la escala de sus datos). --- */
+  const alertas = [];
+  const porMes = new Map();
+  permisos.filter((p) => p.estado !== "anulado").sort((a, b) => (a.fecha_emision < b.fecha_emision ? -1 : 1)).forEach((p) => {
+    const periodo = dateISO(new Date(p.fecha_emision)).slice(0, 7);
+    p.especies.forEach(({ id_especie }) => {
+      const esp = especies.find((e) => e.id === id_especie);
+      const cant = (porMes.get(id_especie + periodo) || 0) + 1;
+      porMes.set(id_especie + periodo, cant);
+      const alerta = alertas.find((a) => a.id_especie === id_especie && a.periodo === periodo);
+      if (alerta) { alerta.permisos_emitidos = cant; return; }
+      if (cant * 100 < esp.umbral_permisos * 80) return;
+      alertas.push({ id: uid(), id_especie, periodo, permisos_emitidos: cant, umbral: esp.umbral_permisos, estado: "activa", created_at: p.fecha_emision });
+      notificaciones.push({ id: uid(), id_usuario: uMuni.id, tipo: "sistema", titulo: "Alerta de fauna",
+        mensaje: `Los permisos de ${esp.nombre} del período ${periodo} llegaron a ${cant} sobre un umbral de ${esp.umbral_permisos}.`,
+        leida: false, created_at: p.fecha_emision });
+    });
+  });
+  DB = { __v: 10, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, gastos, reportes: [], seq, seqReserva, session: null };
   saveDB(DB);
 }
 
@@ -1095,18 +1107,18 @@ function armarPermiso(p, { reserva = null, especies = [] } = {}) {
   p = applyPermisoEstado(p);   // un permiso vencido se muestra así aunque la base aún no lo haya marcado
   return {
     ...p, especies,
-    especie_nombre: especies.map((e) => e.nombre).join(", ") || "—",
-    catamaran_nombre: r.catamaran?.nombre || "—",
+    especie_nombre: especies.map((e) => e.nombre).join(", ") || "-",
+    catamaran_nombre: r.catamaran?.nombre || "-",
     fecha: r.fecha || null, turno: r.turno || null, reserva_numero: r.numero || null, reserva_id: r.id || null,
-    titular_nombre: p.titular_nombre || "—", titular_dni: p.titular_dni || "—", monto: Number(p.monto || 0),
+    titular_nombre: p.titular_nombre || "-", titular_dni: p.titular_dni || "-", monto: Number(p.monto || 0),
     pago_comprobante: pago?.comprobante || "", pago_metodo: pago?.metodo || "",
   };
 }
 const especiesDePermisoSupabase = (p) => (p.permiso_especie || [])
-  .map((x) => ({ nombre: x.especie?.nombre || "—", cientifico: x.especie?.nombre_cientifico || "", precio: Number(x.precio || 0) }))
+  .map((x) => ({ nombre: x.especie?.nombre || "-", cientifico: x.especie?.nombre_cientifico || "", precio: Number(x.precio || 0) }))
   .sort((a, b) => a.nombre.localeCompare(b.nombre));
 const especiesDePermisoDemo = (p) => (p.especies || [])
-  .map((x) => { const e = byId(DB.especies, x.id_especie); return { nombre: e?.nombre || "—", cientifico: e?.nombre_cientifico || "", precio: Number(x.precio || 0) }; })
+  .map((x) => { const e = byId(DB.especies, x.id_especie); return { nombre: e?.nombre || "-", cientifico: e?.nombre_cientifico || "", precio: Number(x.precio || 0) }; })
   .sort((a, b) => a.nombre.localeCompare(b.nombre));
 const mapPermisoSupabase = (p) => armarPermiso(p, { reserva: p.reserva, especies: especiesDePermisoSupabase(p) });
 function enrichPermisoDemo(p) {
@@ -1145,10 +1157,10 @@ function armarComprobante(r, { cat, titular, filas, permisos = [], pago }) {
   }).sort((a, b) => Number(b.titular) - Number(a.titular) || a.lugar - b.lugar);
   return {
     id: r.id, id_usuario: r.id_usuario, numero: numeroReservaDe(r), fecha: r.fecha, turno: r.turno, estado: r.estado, created_at: r.created_at,
-    catamaran: cat?.nombre || "—", habilitacion: cat?.habilitacion || "", capacidad: Number(cat?.capacidad || 0),
+    catamaran: cat?.nombre || "-", habilitacion: cat?.habilitacion || "", capacidad: Number(cat?.capacidad || 0),
     lugares: orden.map((f) => f.lugar),
     pasajeros,
-    titular: titular ? { nombre: `${titular.nombre || ""} ${titular.apellido || ""}`.trim(), dni: titular.dni || "—", email: titular.email || "" } : null,
+    titular: titular ? { nombre: `${titular.nombre || ""} ${titular.apellido || ""}`.trim(), dni: titular.dni || "-", email: titular.email || "" } : null,
     monto_total: Number(r.monto_total || 0), monto_permiso: montoPermiso, monto_lugares: montoLugares,
     precio_lugar: r.cantidad_lugares ? montoLugares / r.cantidad_lugares : 0, cantidad_lugares: r.cantidad_lugares,
     permisos_emitidos: pasajeros.filter((x) => x.permiso).length,
@@ -1341,19 +1353,6 @@ export async function reservasPorDia({ from, to } = {}) {
   return [...map.values()].sort((a, b) => (a.fecha < b.fecha ? -1 : 1));
 }
 
-async function ocupacionCatamaranes() {
-  await ready();
-  if (MODE === "supabase") {
-    const { data, error } = await sb.from("v_ocupacion_catamaran").select("*");
-    if (error) throw error; return data;
-  }
-  return DB.catamaranes.map((c) => {
-    const ids = new Set(DB.lugares.filter((l) => l.id_catamaran === c.id).map((l) => l.id));
-    const ocup = DB.reserva_lugar.filter((rl) => rl.estado === "confirmada" && ids.has(rl.id_lugar)).length;
-    return { id: c.id, nombre: c.nombre, capacidad: c.capacidad, lugares_ocupados: ocup };
-  }).sort((a, b) => a.nombre.localeCompare(b.nombre));
-}
-
 export async function permisosPorEspecie() {
   await ready();
   if (MODE === "supabase") {
@@ -1372,10 +1371,10 @@ export async function alertasFauna() {
     const { data, error } = await sb.from("alerta_fauna")
       .select("*, especie(nombre)").eq("estado", "activa").order("created_at", { ascending: false });
     if (error) throw error;
-    return data.map((a) => ({ ...a, especie: a.especie?.nombre || "—" }));
+    return data.map((a) => ({ ...a, especie: a.especie?.nombre || "-" }));
   }
-  return DB.alertas.filter((a) => a.estado === "activa").map((a) => ({
-    ...a, especie: (byId(DB.especies, a.id_especie) || {}).nombre || "—",
+  return DB.alertas.filter((a) => a.estado === "activa").sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).map((a) => ({
+    ...a, especie: (byId(DB.especies, a.id_especie) || {}).nombre || "-",
   }));
 }
 
@@ -1387,22 +1386,22 @@ export async function ultimosPermisos(limit = 6) {
       .order("fecha_emision", { ascending: false }).limit(limit);
     if (error) throw error;
     return data.map((p) => ({
-      id: p.id, numero: p.numero, estado: p.estado, titular: p.titular_nombre || "—",
-      especie: (p.permiso_especie || []).map((x) => x.especie?.nombre).filter(Boolean).sort().join(", ") || "—", fecha: p.reserva?.fecha || null,
+      id: p.id, numero: p.numero, estado: p.estado, titular: p.titular_nombre || "-",
+      especie: (p.permiso_especie || []).map((x) => x.especie?.nombre).filter(Boolean).sort().join(", ") || "-", fecha: p.reserva?.fecha || null,
     }));
   }
   return DB.permisos.map(applyPermisoEstado).slice()
     .sort((a, b) => (a.fecha_emision < b.fecha_emision ? 1 : -1)).slice(0, limit)
     .map((p) => ({
-      id: p.id, numero: p.numero, estado: p.estado, titular: p.titular_nombre || "—",
-      especie: especiesDePermisoDemo(p).map((e) => e.nombre).join(", ") || "—", fecha: byId(DB.reservas, p.id_reserva)?.fecha || null,
+      id: p.id, numero: p.numero, estado: p.estado, titular: p.titular_nombre || "-",
+      especie: especiesDePermisoDemo(p).map((e) => e.nombre).join(", ") || "-", fecha: byId(DB.reservas, p.id_reserva)?.fecha || null,
     }));
 }
 
 /* ============================================================================
  *  REPORTES AL MUNICIPIO (HU-009)
  *  Cada envío queda registrado en la tabla "reporte" con fecha, destinatario,
- *  origen (manual / automático) y una instantánea de los indicadores. En
+ *  origen (manual / automático) y los indicadores del período. En
  *  Supabase lo realiza la función generar_reporte_municipal, que además
  *  notifica a los administradores municipales; pg_cron la ejecuta al cierre
  *  de cada mes.
@@ -1417,11 +1416,28 @@ const tituloReporte = (tipo, periodo) => ({
   fauna: "Reporte de presión pesquera por especie", ingresos: "Reporte de ingresos",
 }[tipo] || "Reporte general de actividad pesquera") + " · " + periodo;
 
+/* Datos del período del reporte (no acumulados), como generar_reporte_municipal:
+ * salidas e ingresos por fecha de la salida; permisos por fecha de emisión. */
 async function snapshotReporte(periodo) {
-  const [resumen, permisos_por_especie, ocupacion_catamaranes, reservas_por_dia] = await Promise.all([
-    dashboardResumen(), permisosPorEspecie(), ocupacionCatamaranes(), reservasPorDia({ from: periodo + "-01", to: finDeMes(periodo) }),
-  ]);
-  return { resumen, permisos_por_especie, ocupacion_catamaranes, reservas_por_dia, generado_en: new Date().toISOString() };
+  const desde = periodo + "-01", hasta = finDeMes(periodo);
+  const reservas = DB.reservas.filter((r) => (r.estado === "confirmada" || r.estado === "completada") && r.fecha >= desde && r.fecha <= hasta);
+  const permisos = DB.permisos.filter((p) => p.estado !== "anulado" && dateISO(new Date(p.fecha_emision)).slice(0, 7) === periodo);
+  const permisos_por_especie = DB.especies.map((e) => ({
+    especie: e.nombre, umbral_permisos: e.umbral_permisos,
+    permisos_emitidos: permisos.filter((p) => (p.especies || []).some((x) => x.id_especie === e.id)).length,
+  })).sort((a, b) => b.permisos_emitidos - a.permisos_emitidos || a.especie.localeCompare(b.especie));
+  const ocupacion_catamaranes = DB.catamaranes.map((c) => {
+    const ids = new Set(DB.lugares.filter((l) => l.id_catamaran === c.id).map((l) => l.id));
+    const vendidos = DB.reserva_lugar.filter((rl) => rl.estado === "confirmada" && ids.has(rl.id_lugar) && rl.fecha >= desde && rl.fecha <= hasta).length;
+    return { catamaran: c.nombre, capacidad: c.capacidad, lugares_vendidos: vendidos };
+  }).sort((a, b) => a.catamaran.localeCompare(b.catamaran));
+  return {
+    periodo: { desde, hasta },
+    resumen: { reservas: reservas.length, ingresos: reservas.reduce((t, r) => t + r.monto_total, 0), permisos: permisos.length },
+    permisos_por_especie, ocupacion_catamaranes,
+    reservas_por_dia: await reservasPorDia({ from: desde, to: hasta }),
+    generado_en: new Date().toISOString(),
+  };
 }
 
 export async function enviarReporteMunicipio(tipo = "general", origen = "manual") {
