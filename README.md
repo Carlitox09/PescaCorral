@@ -36,7 +36,7 @@ No hay servidor propio ni proceso de compilación: el repositorio se sirve tal c
 | HU-003 | **Mi flota** del dueño (puede tener varios catamaranes): alta y edición de catamaranes (descripción, **fotos**, cantidad de lugares, precio, habilitación y estado; no se pueden quitar lugares con reservas desde hoy), **salidas** con la ocupación de cada fecha y turno sobre el plano, **aviso a los pasajeros** de una salida y **lista de embarque** (nombre y DNI de cada pasajero), y **finanzas**: ingresos por lugares vendidos, gastos por categoría y resultado del mes (ganancia o pérdida) por catamarán, con CSV. La administración asigna el dueño de cada catamarán | `#/gestion`, `#/embarque` |
 | HU-004 | Disponibilidad por fecha y turno con **lugares libres por catamarán** (cada asiento se reserva por fecha y turno) | `#/catamaranes` |
 | HU-005 | Reserva sobre el **plano del catamarán** visto desde arriba (proa, popa, babor y estribor; numeración en sentido horario desde la proa); marca los lugares propios y avisa si ya hay una reserva en el otro turno; sin doble reserva (índice único por asiento, fecha y turno). Un lugar por persona: se cargan los **datos y el permiso de cada pasajero** (nombre y DNI de cada acompañante); los datos no se pierden al cambiar de opción, de lugares o de turno, ni si falla el pago | `#/reserva/:id` |
-| HU-006 | **Un permiso por pasajero**. **"Comprar permiso"**: se eligen **una o varias especies** (por ejemplo Dorado $ 2.000 + Pejerrey $ 2.000 + Dentudo $ 1.000) y se emite un permiso digital con QR, a nombre de esa persona, que vale para la fecha de la salida y cuesta la suma de las especies. **"Ya tengo permiso"**: se registra el número tal como se ingresa, sin validarlo en el sistema (se presenta al embarcar). Estado vigente / vencido / anulado; se comparte como imagen por WhatsApp u otras aplicaciones | `#/permiso/:id` |
+| HU-006 | **Un permiso por pasajero**. **"Comprar permiso"**: se eligen **una o varias especies** (por ejemplo Pejerrey $ 2.000 + Bagre blanco $ 1.500 + Bocacha $ 1.000) y se emite un permiso digital con QR, a nombre de esa persona, que vale para la fecha de la salida y cuesta la suma de las especies. **"Ya tengo permiso"**: se registra el número tal como se ingresa, sin validarlo en el sistema (se presenta al embarcar). Estado vigente / vencido / anulado; se comparte como imagen por WhatsApp u otras aplicaciones | `#/permiso/:id` |
 | HU-007 | **Pasarela de pago simulada** (tarjeta, Mercado Pago o efectivo en la boletería) con escenario de rechazo. Al pagar se muestra el **comprobante**: número de reserva, comprobante de pago y permiso | `#/comprobante/:id` |
 | HU-008 | Reportes con gráficos, exportación CSV (Excel) y PDF | `#/reportes` |
 | HU-009 | **Envío de reportes al municipio** (manual y cierre mensual automático) con registro de fecha, destinatario y origen | `#/reportes` |
@@ -84,7 +84,8 @@ PescaCorral/
     ├── pruebas_seguridad.sql     # Pruebas de acceso con cada perfil (no deja datos)
     └── migrations/
         ├── 015_recordatorios.sql # Para la base en uso: preferencia de recordatorios en el perfil
-        └── 016_reportes_periodo.sql # Para la base en uso: reportes con los datos de su período
+        ├── 016_reportes_periodo.sql # Para la base en uso: reportes con los datos de su período
+        └── 017_especies_cabra_corral.sql # Para la base en uso: especies del reglamento provincial
 ```
 
 ---
@@ -192,6 +193,8 @@ La administración (municipio y administrador del sistema) asigna el dueño de c
 ### Especies y precios
 
 La administración (municipio y administrador del sistema) carga en **Especies** (`#/especies`) cada especie con su nombre científico, su **precio en el permiso de pesca** y el umbral de permisos por mes que dispara la alerta de fauna. Al reservar, cada pasajero elige las especies de su permiso, que cuesta la suma de sus precios. Un cambio de precio rige para los permisos que se emiten desde ese momento: los emitidos conservan el precio pagado (`permiso_especie.precio`). Una especie no habilitada deja de ofrecerse; no se borra porque tiene permisos emitidos.
+
+Las especies cargadas son las que el reglamento provincial de pesca deportiva habilita en el embalse Cabra Corral (Resolución 567/2026 de la Secretaría de Ambiente y Desarrollo Sustentable de Salta, temporada 2026-2027, art. 26.3), cada una con su cupo por pescador y su medida mínima: pejerrey (*Odontesthes bonariensis*), bagre blanco o moncholo (*Pimelodus albicans*), bocacha (*Oligosarcus jenynsii* y *O. bolivianus*) y mojarras (*Astyanax* sp. y *Bryconamericus* sp.). El dorado no se ofrece: en toda la provincia sólo se pesca con devolución obligatoria (art. 18). La licencia de pesca la emite la Provincia (anual o diaria) y los municipios con convenio pueden venderla (art. 5): el permiso por especie de PescaCorral es una propuesta para el municipio, que requiere ese convenio; quien ya tiene la licencia provincial la registra con "Ya tengo permiso".
 
 ### Avisos a los usuarios
 

@@ -284,7 +284,7 @@ async function selectorCuentasDemo(ctx) {
       </div>
       <div class="hide" id="acct-nueva">
         <div class="field mt-12"><label for="an-nombre">Nombre y apellido</label><input class="input" id="an-nombre" placeholder="Ana Ruiz"/></div>
-        <div class="field"><label for="an-email">Correo de la cuenta de Google</label><input class="input" id="an-email" type="email" placeholder="ana.ruiz@gmail.com"/></div>
+        <div class="field"><label for="an-email">Correo de la cuenta de Google</label><input class="input" id="an-email" type="email" placeholder="nombre.apellido@gmail.com"/></div>
         <div class="field__error hide" id="an-err"></div>
         <button class="btn btn--primary btn--block" type="button" id="an-ok">Continuar</button>
       </div>`,
@@ -1806,7 +1806,7 @@ export async function viewEspecies(ctx) {
       <table class="table table--tarjetas">
         <thead><tr><th>Especie</th><th>Precio en el permiso</th><th>Umbral de alerta</th><th>Estado</th><th><span class="sr-only">Acciones</span></th></tr></thead>
         <tbody>${especies.map((e) => `<tr>
-          <td data-label="Especie"><b>${U.esc(e.nombre)}</b>${e.nombre_cientifico ? `<small class="muted d-block"><i>${U.esc(e.nombre_cientifico)}</i></small>` : ""}</td>
+          <td data-label="Especie"><b>${U.esc(e.nombre)}</b>${e.nombre_cientifico ? `<small class="muted d-block"><i>${U.esc(e.nombre_cientifico)}</i></small>` : ""}${e.descripcion ? `<small class="muted d-block">${U.esc(e.descripcion)}</small>` : ""}</td>
           <td data-label="Precio en el permiso"><b>${U.fmtMoney(e.precio_permiso)}</b></td>
           <td data-label="Umbral de alerta">${e.umbral_permisos} permisos por mes</td>
           <td data-label="Estado"><span class="badge ${e.activa !== false ? "badge--ok" : "badge--muted"}">${e.activa !== false ? "Habilitada" : "No habilitada"}</span></td>

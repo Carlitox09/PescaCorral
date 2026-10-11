@@ -247,18 +247,18 @@ const todayISO = () => dateISO(new Date());
 
 function seedDemo() {
   DB = loadDB();
-  if (DB && DB.__v === 10) return;
+  if (DB && DB.__v === 11) return;
 
   const rnd = mulberry32(20260628);
   const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
 
-  /* --- Especies (fauna) con el precio de cada una en el permiso --- */
+  /* --- Especies habilitadas en el Cabra Corral (Res. 567/2026 de la Provincia, art. 26.3),
+   *     con el precio de cada una en el permiso y su cupo y medida mínima --- */
   const especies = [
-    { id: uid(), nombre: "Pejerrey", nombre_cientifico: "Odontesthes bonariensis", precio_permiso: 2000, activa: true, umbral_permisos: 30, descripcion: "Especie emblemática del dique, principal objetivo de la pesca deportiva." },
-    { id: uid(), nombre: "Dorado", nombre_cientifico: "Salminus brasiliensis", precio_permiso: 2000, activa: true, umbral_permisos: 20, descripcion: "Pesca con devolución obligatoria en temporada de veda." },
-    { id: uid(), nombre: "Bagre", nombre_cientifico: "Rhamdia quelen", precio_permiso: 1500, activa: true, umbral_permisos: 25, descripcion: "Especie de fondo, abundante en zonas de menor corriente." },
-    { id: uid(), nombre: "Carpa", nombre_cientifico: "Cyprinus carpio", precio_permiso: 1000, activa: true, umbral_permisos: 25, descripcion: "Especie introducida, sin restricciones de captura." },
-    { id: uid(), nombre: "Dentudo", nombre_cientifico: "Oligosarcus jenynsii", precio_permiso: 1000, activa: true, umbral_permisos: 20, descripcion: "Especie de pesca deportiva frecuente en el embalse." },
+    { id: uid(), nombre: "Pejerrey", nombre_cientifico: "Odontesthes bonariensis", precio_permiso: 2000, activa: true, umbral_permisos: 30, descripcion: "Cupo: 20 por pescador y excursión. Medida mínima: 21 cm." },
+    { id: uid(), nombre: "Bagre blanco", nombre_cientifico: "Pimelodus albicans", precio_permiso: 1500, activa: true, umbral_permisos: 25, descripcion: "También llamado moncholo. Cupo: 5 por pescador y excursión. Medida mínima: 35 cm." },
+    { id: uid(), nombre: "Bocacha", nombre_cientifico: "Oligosarcus jenynsii y O. bolivianus", precio_permiso: 1000, activa: true, umbral_permisos: 20, descripcion: "Cupo: 10 por pescador y excursión. Sin medida mínima." },
+    { id: uid(), nombre: "Mojarras", nombre_cientifico: "Astyanax sp. y Bryconamericus sp.", precio_permiso: 1000, activa: true, umbral_permisos: 20, descripcion: "Cupo: 15 por pescador y excursión. Sin medida mínima." },
   ];
   const pejerrey = especies[0];
 
@@ -344,7 +344,7 @@ function seedDemo() {
   }
 
   // Histórico: ~38 reservas entre hace 30 días y hoy.
-  const especiePesos = [pejerrey, pejerrey, pejerrey, especies[2], especies[1], especies[3], especies[4]];
+  const especiePesos = [pejerrey, pejerrey, pejerrey, especies[1], especies[2], especies[3]];
   for (let i = 0; i < 38; i++) {
     const off = -Math.floor(rnd() * 30);
     const fecha = dateISO(isoFromOffset(off));
@@ -412,7 +412,7 @@ function seedDemo() {
         leida: false, created_at: p.fecha_emision });
     });
   });
-  DB = { __v: 10, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, gastos, reportes: [], seq, seqReserva, session: null };
+  DB = { __v: 11, usuarios, especies, catamaranes, lugares, reservas, reserva_lugar, pagos, permisos, notificaciones, alertas, gastos, reportes: [], seq, seqReserva, session: null };
   saveDB(DB);
 }
 

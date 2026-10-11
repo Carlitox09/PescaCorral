@@ -16,21 +16,23 @@ delete from public.catamaran;
 delete from public.especie;
 
 -- ----------------------------------------------------------------------------
--- Especies habilitadas, con el precio de cada una en el permiso de pesca (el
--- permiso suma las especies elegidas) y el umbral para las alertas de presión
--- pesquera. Los precios los cambia el municipio desde la aplicación.
+-- Especies habilitadas en el embalse Cabra Corral por el reglamento provincial
+-- de pesca deportiva (Res. 567/2026 de la Secretaría de Ambiente y Desarrollo
+-- Sustentable de Salta, art. 26.3), con su cupo y medida mínima. El dorado no
+-- se incluye: en toda la provincia sólo se pesca con devolución (art. 18).
+-- Cada especie lleva su precio en el permiso de pesca (el permiso suma las
+-- especies elegidas) y el umbral para las alertas de presión pesquera. Los
+-- precios los cambia el municipio desde la aplicación.
 -- ----------------------------------------------------------------------------
 insert into public.especie (id, nombre, nombre_cientifico, precio_permiso, umbral_permisos, descripcion) values
-  ('11111111-1111-1111-1111-111111111101', 'Pejerrey', 'Odontesthes bonariensis', 2000, 400,
-     'Especie principal de pesca deportiva en el Dique Cabra Corral.'),
-  ('11111111-1111-1111-1111-111111111102', 'Dorado',   'Salminus brasiliensis',   2000, 150,
-     'Especie de gran porte; pesca con devolución recomendada.'),
-  ('11111111-1111-1111-1111-111111111105', 'Dentudo',  'Oligosarcus jenynsii',    1000, 300,
-     'Especie de pesca deportiva frecuente en el embalse.'),
-  ('11111111-1111-1111-1111-111111111103', 'Bagre',    'Rhamdia quelen',          1500, 300,
-     'Captura frecuente en aguas del dique.'),
-  ('11111111-1111-1111-1111-111111111104', 'Carpa',    'Cyprinus carpio',         1000, 500,
-     'Especie de control poblacional.');
+  ('11111111-1111-1111-1111-111111111101', 'Pejerrey',     'Odontesthes bonariensis',              2000, 400,
+     'Cupo: 20 por pescador y excursión. Medida mínima: 21 cm.'),
+  ('11111111-1111-1111-1111-111111111103', 'Bagre blanco', 'Pimelodus albicans',                   1500, 150,
+     'También llamado moncholo. Cupo: 5 por pescador y excursión. Medida mínima: 35 cm.'),
+  ('11111111-1111-1111-1111-111111111105', 'Bocacha',      'Oligosarcus jenynsii y O. bolivianus', 1000, 300,
+     'Cupo: 10 por pescador y excursión. Sin medida mínima.'),
+  ('11111111-1111-1111-1111-111111111106', 'Mojarras',     'Astyanax sp. y Bryconamericus sp.',    1000, 300,
+     'Cupo: 15 por pescador y excursión. Sin medida mínima.');
 
 -- ----------------------------------------------------------------------------
 -- Catamaranes (mismos datos que los prototipos del TFG).
