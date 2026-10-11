@@ -28,17 +28,14 @@ create extension if not exists pgcrypto;
 -- ----------------------------------------------------------------------------
 drop view  if exists public.v_dashboard_resumen      cascade;
 drop view  if exists public.v_permisos_por_especie   cascade;
-drop view  if exists public.v_ocupacion_catamaran    cascade;
 drop view  if exists public.v_reservas_por_dia       cascade;
 drop view  if exists public.v_lugares_ocupados       cascade;
 
-drop table if exists public.intento_acceso cascade;
 drop table if exists public.personal_autorizado cascade;
 drop table if exists public.suscripcion_push cascade;
 drop table if exists public.aviso          cascade;
 drop table if exists public.gasto          cascade;
 drop table if exists public.alerta_fauna   cascade;
-drop table if exists public.tarifa_permiso cascade;
 drop table if exists public.notificacion   cascade;
 drop table if exists public.reporte        cascade;
 drop table if exists public.pago           cascade;
@@ -53,15 +50,6 @@ drop table if exists public.usuario        cascade;
 
 drop sequence if exists public.seq_numero_permiso cascade;
 drop sequence if exists public.seq_numero_reserva cascade;
-
--- Funciones de versiones anteriores (otra firma u objetos que ya no se usan).
-drop function if exists public.crear_reserva_completa(uuid, date, text, uuid[], text, text, uuid);
-drop function if exists public.crear_reserva_completa(uuid, date, text, uuid[], text, text, uuid, text, text);
-drop function if exists public.crear_reserva_completa(uuid, date, text, uuid[], text, text, uuid, text, text, jsonb);
-drop function if exists public.validar_permiso(text, date);
-drop function if exists public.lista_embarque(uuid, date, text);
-drop function if exists public.registrar_intento_acceso(text, boolean);
-drop function if exists public.acceso_bloqueado(text);
 
 -- ============================================================================
 -- 1. TABLAS

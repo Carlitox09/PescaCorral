@@ -81,11 +81,7 @@ PescaCorral/
     ├── schema.sql          # Esquema completo (tablas, funciones, vistas, RLS, pg_cron)
     ├── seed.sql            # Datos iniciales (especies, catamaranes y sus lugares)
     ├── verificar_base.sql  # Chequeo de sólo lectura: compara la base con schema.sql y revisa los datos
-    ├── pruebas_seguridad.sql     # Pruebas de acceso con cada perfil (no deja datos)
-    └── migrations/
-        ├── 015_recordatorios.sql # Para la base en uso: preferencia de recordatorios en el perfil
-        ├── 016_reportes_periodo.sql # Para la base en uso: reportes con los datos de su período
-        └── 017_especies_cabra_corral.sql # Para la base en uso: especies del reglamento provincial
+    └── pruebas_seguridad.sql     # Pruebas de acceso con cada perfil (no deja datos)
 ```
 
 ---
